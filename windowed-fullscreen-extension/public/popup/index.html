@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Windowed Fullscreen</title>
+    <style>
+      :root {
+        --wfs-text: #202124;
+        --wfs-muted: #5f6368;
+        --wfs-accent: #1a73e8;
+        --wfs-on: #188038;
+        --wfs-border: #e0e0e0;
+        --wfs-surface: #f8f9fa;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        width: 300px;
+        margin: 0;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        font-size: 13px;
+        line-height: 1.4;
+        color: var(--wfs-text);
+        background: #fff;
+      }
+      #app {
+        padding: 14px 16px 8px;
+      }
+      #settings {
+        padding: 0 16px 14px;
+      }
+
+      /* --- Title + status -------------------------------------------------- */
+      .wfs-popup__title {
+        margin: 0 0 12px;
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .wfs-popup__status {
+        margin: 0;
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 6px 12px;
+      }
+      .wfs-popup__status dt {
+        color: var(--wfs-muted);
+      }
+      .wfs-popup__status dd {
+        margin: 0;
+        font-weight: 600;
+        text-align: right;
+      }
+      .wfs-popup__status dd.is-on {
+        color: var(--wfs-on);
+      }
+      .wfs-popup__status dd.is-off {
+        color: var(--wfs-muted);
+      }
+
+      /* --- Toggle button --------------------------------------------------- */
+      .wfs-popup__toggle {
+        margin-top: 12px;
+        width: 100%;
+        padding: 9px 12px;
+        font: inherit;
+        font-weight: 600;
+        color: #fff;
+        background: var(--wfs-accent);
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      .wfs-popup__toggle:hover:not(:disabled) {
+        background: #1668d6;
+      }
+      .wfs-popup__toggle.is-active {
+        color: var(--wfs-accent);
+        background: #e8f0fe;
+      }
+      .wfs-popup__toggle.is-active:hover:not(:disabled) {
+        background: #d7e6fd;
+      }
+      .wfs-popup__toggle:disabled {
+        color: var(--wfs-muted);
+        background: var(--wfs-surface);
+        border: 1px solid var(--wfs-border);
+        cursor: default;
+      }
+
+      /* --- Settings sections (rendered by OptionsPage) --------------------- */
+      #settings section {
+        margin-top: 14px;
+        padding-top: 12px;
+        border-top: 1px solid var(--wfs-border);
+      }
+      #settings h2 {
+        margin: 0 0 8px;
+        font-size: 12px;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+        color: var(--wfs-muted);
+      }
+      #settings label {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        cursor: pointer;
+      }
+      #settings input[type="checkbox"] {
+        margin: 1px 0 0;
+        width: 15px;
+        height: 15px;
+        accent-color: var(--wfs-accent);
+        cursor: pointer;
+        flex: none;
+      }
+      #settings a {
+        color: var(--wfs-accent);
+        text-decoration: none;
+      }
+      #settings a:hover {
+        text-decoration: underline;
+      }
+      #settings p {
+        margin: 6px 0 0;
+        font-size: 12px;
+        color: var(--wfs-muted);
+      }
+
+      /* --- Status / error regions ------------------------------------------ */
+      [data-wfs-status],
+      [data-wfs-error] {
+        margin-top: 10px;
+        font-size: 12px;
+        min-height: 0;
+      }
+      [data-wfs-status]:not(:empty),
+      [data-wfs-error]:not(:empty) {
+        padding: 7px 9px;
+        border-radius: 6px;
+      }
+      [data-wfs-status]:not(:empty) {
+        color: var(--wfs-on);
+        background: #e6f4ea;
+      }
+      [data-wfs-error]:not(:empty) {
+        color: #c5221f;
+        background: #fce8e6;
+      }
+    </style>
+  </head>
+  <body>
+    <main id="app"></main>
+    <section id="settings"></section>
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>

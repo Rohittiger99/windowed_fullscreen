@@ -1,0 +1,23 @@
+{
+  "name": "windowed-fullscreen-extension",
+  "version": "0.1.0",
+  "description": "Chromium MV3 extension that adds a windowed-fullscreen viewing mode to video sites (YouTube v1).",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "build:watch": "node scripts/build.mjs --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/chrome": "0.0.287",
+    "@types/node": "22.10.2",
+    "esbuild": "0.24.2",
+    "fast-check": "3.23.2",
+    "jsdom": "25.0.1",
+    "typescript": "5.7.2",
+    "vitest": "2.1.8"
+  }
+}
