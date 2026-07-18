@@ -18,6 +18,13 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const outdir = resolve(root, "dist");
 const watch = process.argv.includes("--watch");
 
+// Source maps map the bundled output back to the original TypeScript. They are
+// invaluable while developing (readable stack traces in DevTools) but should
+// not ship in the published package: they bloat the upload and expose the full
+// source. So we emit them only for dev/watch builds and omit them from the
+// production bundle that gets zipped for the Web Store.
+const sourcemap = watch;
+
 /** ESM entry points -> output file (relative to dist). Paths must match manifest.json. */
 const esmEntryPoints = {
   "background/service-worker": resolve(root, "src/background/service-worker.ts"),
@@ -31,7 +38,7 @@ const commonOptions = {
   bundle: true,
   target: ["chrome116"],
   platform: "browser",
-  sourcemap: true,
+  sourcemap,
   logLevel: "info",
 };
 
