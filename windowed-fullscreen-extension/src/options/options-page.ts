@@ -33,6 +33,10 @@ import { DONATION_URL } from "../shared/donation.js";
 /** The browser page where custom keyboard shortcuts are configured (Req 5.2). */
 export const SHORTCUTS_URL = "chrome://extensions/shortcuts";
 
+/** The hosted privacy policy for this extension, surfaced in the UI for trust. */
+export const PRIVACY_POLICY_URL =
+  "https://rohittiger.vercel.app/product/windowedfullscreen/privacy";
+
 /** The external Donation_Link destination shown on the Options_Page (Req 8). */
 export { DONATION_URL };
 
@@ -46,6 +50,8 @@ export const ATTR = {
   shortcutLink: "data-wfs-shortcut-link",
   /** The Donation_Link (Req 8.1). */
   donationLink: "data-wfs-donation-link",
+  /** The privacy-policy link. */
+  privacyLink: "data-wfs-privacy-link",
   /** The saved-confirmation status region. */
   status: "data-wfs-status",
   /** The error region. */
@@ -136,6 +142,8 @@ export interface OptionsPageOptions {
   siteLabels?: Record<string, string>;
   /** Override the Donation_Link URL (defaults to {@link DONATION_URL}). */
   donationUrl?: string;
+  /** Override the privacy-policy URL (defaults to {@link PRIVACY_POLICY_URL}). */
+  privacyUrl?: string;
   /**
    * Whether to render the top-level page heading. Defaults to `true` for the
    * standalone Options_Page. The Popup embeds these controls beneath its own
@@ -176,6 +184,7 @@ export class OptionsPage {
   private readonly siteLabels: Record<string, string>;
   private readonly explicitRoot: Element | null;
   private readonly donationUrl: string;
+  private readonly privacyUrl: string;
   private readonly showHeading: boolean;
   private readonly openDonation: DonationOpener;
   private readonly openShortcuts: ShortcutOpener;
@@ -196,6 +205,7 @@ export class OptionsPage {
     this.siteLabels = options.siteLabels ?? {};
     this.explicitRoot = options.root ?? null;
     this.donationUrl = options.donationUrl ?? DONATION_URL;
+    this.privacyUrl = options.privacyUrl ?? PRIVACY_POLICY_URL;
     this.showHeading = options.showHeading ?? true;
     // Default opener reports failure so a misconfigured wiring surfaces an error
     // rather than silently doing nothing; `main.ts` injects the real opener.
@@ -276,6 +286,11 @@ export class OptionsPage {
   /** The rendered shortcut-configuration link element, or null if not rendered. */
   getShortcutLink(): HTMLAnchorElement | null {
     return this.root?.querySelector<HTMLAnchorElement>(`a[${ATTR.shortcutLink}]`) ?? null;
+  }
+
+  /** The rendered privacy-policy link element, or null if not rendered. */
+  getPrivacyLink(): HTMLAnchorElement | null {
+    return this.root?.querySelector<HTMLAnchorElement>(`a[${ATTR.privacyLink}]`) ?? null;
   }
 
   /**
@@ -451,6 +466,21 @@ export class OptionsPage {
     this.errorEl.setAttribute("role", "alert");
     this.errorEl.setAttribute("aria-live", "assertive");
     this.root.appendChild(this.errorEl);
+
+    // Small privacy-policy hyperlink in the bottom-right corner. Kept minimal
+    // (no heading or description) — just an unobtrusive footer link. Inline
+    // styles keep it right-aligned and subtle in both the Options_Page and the
+    // embedded Popup without relying on external CSS.
+    const footer = doc.createElement("div");
+    footer.style.cssText = "text-align:right;margin-top:12px;font-size:12px;";
+    const privacyLink = doc.createElement("a");
+    privacyLink.setAttribute(ATTR.privacyLink, "");
+    privacyLink.href = this.privacyUrl;
+    privacyLink.target = "_blank";
+    privacyLink.rel = "noopener noreferrer";
+    privacyLink.textContent = "Privacy policy";
+    footer.appendChild(privacyLink);
+    this.root.appendChild(footer);
   }
 
   /**

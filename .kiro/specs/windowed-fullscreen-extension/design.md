@@ -22,7 +22,7 @@ The design is built around a **Generic_Core** (site-independent logic) driven by
 | MutationObserver-driven injection rather than one-shot injection | YouTube is a SPA (Requirement 1.5, 7.4); controls mount/unmount and videos change without reloads. |
 | Generic_Core depends only on an adapter-supplied descriptor (player ref, native-control ref, chrome selectors) | Requirement 6.1/6.2 forbid site-specific knowledge in the core. |
 | `chrome.commands` API for the keyboard shortcut, relayed to the content script via messaging | MV3 registers shortcuts at the browser level (Requirement 3); the service worker brokers them. |
-| `chrome.storage.sync` with `local` fallback, namespaced per-site keys | Requirement 4 persistence and per-site isolation (4.6); sync gives cross-device continuity. |
+| `chrome.storage.local` (on-device only), namespaced per-site keys | Requirement 4 persistence and per-site isolation (4.6); local-only keeps the privacy promise "data sent off device: No" strictly true. The store's generic sync/local coordination remains available via an injected backend for tests. |
 | State captured as a restore snapshot before any mutation | Requirement 2.6/2.8 require restoration to the exact pre-entry layout. |
 
 ## Architecture
@@ -231,7 +231,7 @@ Player-loss handling: while active, a watcher detects removal of the player elem
 
 ### Shortcut Handler (Service Worker side)
 
-- Declares the toggle command and at least one spare unassigned command in the manifest `commands` block (Requirement 3.3).
+- Declares only the functional `toggle-windowed-fullscreen` command in the manifest `commands` block. No spare unassigned commands are shipped — an unassigned, non-functional command is a Chrome Web Store review red flag. The Options_Page instead links to the browser's shortcut page so the User can assign/reassign the shortcut (Requirement 3.3).
 - On command, resolves the active tab, checks it is a Supported_Site (via match patterns), and sends a `TOGGLE` message (Requirement 3.1, signal ≤ 500 ms).
 - Non-supported sites: command is ignored (Requirement 3.5).
 - If the content script does not respond (not injected / unreachable), it leaves mode unchanged and surfaces a failure indication (Requirement 3.6).
@@ -279,7 +279,6 @@ A thin diagnostic logger used across surfaces, writing structured entries (times
 ```ts
 interface GlobalPrefs {
   schemaVersion: number;          // for migrations
-  // Reserved spare action slot is browser-managed; no value stored here.
 }
 ```
 
@@ -529,7 +528,7 @@ Cross-surface plumbing and timing, run with 1–3 representative examples (not p
 ### Smoke / Configuration Tests
 
 Single-execution configuration checks:
-- Manifest declares the toggle command plus at least one spare unassigned command (3.3).
+- Manifest declares only the functional toggle command and no spare unassigned commands (3.3).
 - Exactly one adapter has `siteId === "youtube"` (6.5).
 - Generic_Core module imports no site-specific selectors (architectural boundary check for 6.1).
 

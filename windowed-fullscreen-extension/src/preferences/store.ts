@@ -2,9 +2,12 @@
  * Preference Store
  *
  * Wraps `chrome.storage` with per-site namespacing and documented defaults.
- * Backed by `chrome.storage.sync` with a `chrome.storage.local` fallback so
- * preferences sync across devices when possible and still persist when sync is
- * unavailable.
+ * In production it is backed by `chrome.storage.local` ONLY, so preferences are
+ * stored on the user's device and never leave it — keeping the privacy promise
+ * ("data sent off device: No") strictly true. The store still coordinates a
+ * `sync`-preferred / `local`-fallback pair generically, so an injected backend
+ * (e.g. in tests) may supply both; the ambient production backend supplies only
+ * `local`.
  *
  * Implements the `PreferenceStore` interface shape from the design:
  *
@@ -142,8 +145,14 @@ function getAmbientBackend(): StorageBackend {
   if (!storage) {
     return { sync: null, local: null };
   }
+  // Local-only by design: settings are stored on this device and never leave it,
+  // which keeps the published privacy policy ("data sent off device: No, runs
+  // locally") strictly true. `chrome.storage.sync` would replicate settings
+  // across the user's devices via their browser account, so it is intentionally
+  // NOT used here. (The store still supports a sync area for tests/other
+  // deployments via an injected backend.)
   return {
-    sync: storage.sync ? adaptChromeArea(storage.sync) : null,
+    sync: null,
     local: storage.local ? adaptChromeArea(storage.local) : null,
   };
 }
@@ -227,25 +236,46 @@ class ChromeStoragePreferenceStore implements PreferenceStore {
   // -------------------------------------------------------------------------
 
   /**
-   * Read a single key. Prefers `sync`; on a sync read error falls back to
-   * `local`. A successful-but-empty sync read is authoritative (value is
-   * `undefined`) and does not fall through to local. Returns `{ ok: false }`
-   * only when no area could be read at all.
+   * Read a single key across the coordinated areas (sync preferred, then local).
+   *
+   * A value present in `sync` wins. But a successful-but-EMPTY `sync` read must
+   * NOT shadow a value that exists in `local`: writes made while sync was
+   * temporarily unavailable land in `local`, and once sync recovers it returns
+   * empty until it re-replicates. Treating that empty sync read as
+   * authoritative would make a locally-persisted preference appear to vanish.
+   * So when sync reads successfully but has no value for the key, we fall
+   * through to `local` and adopt its value if present.
+   *
+   * Returns `{ ok: true, value }` when at least one area could be read (value is
+   * `undefined` only when every readable area lacked the key — the normal
+   * "use defaults" case). Returns `{ ok: false }` only when no area could be
+   * read at all (none exist, or every existing area threw).
    */
   private async readRaw(
     key: string,
   ): Promise<{ ok: true; value: unknown } | { ok: false }> {
     const areas = [this.backend.sync, this.backend.local];
+    let anyReadSucceeded = false;
     for (const area of areas) {
       if (!area) continue;
       try {
         const result = await area.get(key);
+        anyReadSucceeded = true;
         const value = isRecord(result) ? result[key] : undefined;
-        return { ok: true, value };
+        // Adopt the first defined value (sync takes precedence over local).
+        if (value !== undefined) {
+          return { ok: true, value };
+        }
+        // Empty here: fall through to the next area (local) to recover a value
+        // written during a sync outage, rather than shadowing it.
       } catch {
         // Try the next area (local fallback) on read failure.
         continue;
       }
+    }
+    // Every readable area lacked the key -> undefined (documented-default case).
+    if (anyReadSucceeded) {
+      return { ok: true, value: undefined };
     }
     // No area exists, or every existing area threw.
     return { ok: false };

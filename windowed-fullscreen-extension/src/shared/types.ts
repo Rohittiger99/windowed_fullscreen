@@ -53,6 +53,15 @@ export interface SiteAdapter {
   getActivePlayerClasses?(): string[];
 
   /**
+   * Optional site-specific active-mode CSS, injected once by the content script
+   * alongside the generic base stylesheet. Rules should be scoped under the
+   * `wfs-windowed` class (toggled on `<html>` by the Generic_Core) so they only
+   * take effect while the mode is active. This is the single place a site's CSS
+   * selectors live, keeping site DOM knowledge inside the adapter (Req 6.1).
+   */
+  getActiveModeCss?(): string;
+
+  /**
    * Optional hook to detect SPA video changes (e.g. URL/videoId change).
    * Returns a disposer. Default no-op.
    */

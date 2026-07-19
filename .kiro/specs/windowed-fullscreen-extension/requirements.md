@@ -66,8 +66,8 @@ The extension leaves each site's native fullscreen control untouched, persists u
 
 1. WHEN the User triggers the configured Keyboard_Shortcut on a Supported_Site, THE Service_Worker SHALL signal the Content_Script to toggle Windowed_Fullscreen_Mode within 500 milliseconds.
 2. WHERE the User has assigned a custom key combination to the Keyboard_Shortcut consisting of at least one modifier key and exactly one non-modifier key, THE Extension SHALL register the custom key combination as the active trigger for toggling Windowed_Fullscreen_Mode.
-3. THE Extension SHALL expose at least one additional unassigned configurable shortcut slot reserved for future actions.
-4. IF a requested Keyboard_Shortcut combination conflicts with a combination already reserved by the browser, THEN THE Extension SHALL retain the previous Keyboard_Shortcut assignment and display a message identifying the conflicting combination.
+3. THE Extension SHALL provide, from the Options_Page, a link to the browser's extension keyboard-shortcut configuration page so the User can view and reassign the Keyboard_Shortcut. (Chromium manages shortcut assignment centrally; the Extension does not ship additional unassigned command slots, which are a Web Store review red flag.)
+4. WHERE a requested Keyboard_Shortcut combination conflicts with a combination already reserved by the browser, THE browser's shortcut configuration SHALL reject the assignment and retain the previous binding. (Conflict detection is delegated to the browser's shortcut settings page, which the Extension does not override.)
 5. WHEN the User triggers the configured Keyboard_Shortcut on a site that is not a Supported_Site, THE Extension SHALL NOT toggle Windowed_Fullscreen_Mode.
 6. IF the Service_Worker cannot reach the Content_Script when the Keyboard_Shortcut is triggered, THEN THE Extension SHALL leave Windowed_Fullscreen_Mode unchanged and display a failure indication.
 

@@ -30,7 +30,7 @@ The implementation language is **TypeScript/JavaScript** (the natural language f
 
 - [x] 3. Implement the Preference Store
   - [x] 3.1 Implement the chrome.storage-backed Preference Store
-    - Add `src/preferences/store.ts` implementing `getGlobal`/`setGlobal`/`getSite`/`setSite` over `chrome.storage.sync` with `local` fallback, per-site namespaced keys (`site:<siteId>`), documented defaults on absence/corruption, and `WriteResult` failure handling that retains the prior value
+    - Add `src/preferences/store.ts` implementing `getGlobal`/`setGlobal`/`getSite`/`setSite` over `chrome.storage.local` (on-device only, so nothing leaves the device), per-site namespaced keys (`site:<siteId>`), documented defaults on absence/corruption, and `WriteResult` failure handling that retains the prior value. The store keeps a generic sync/local coordination path for injected test backends.
     - _Requirements: 4.1, 4.2, 4.3, 4.4, 4.6, 4.7_
 
   - [x] 3.2 Write property test for preference round-trip and per-site isolation
@@ -128,7 +128,7 @@ The implementation language is **TypeScript/JavaScript** (the natural language f
     - **Validates: Requirements 3.2**
 
   - [x] 9.3 Declare commands in the manifest and implement the service-worker command listener
-    - Add the toggle command plus at least one spare unassigned command to the manifest `commands` block; implement `src/background/service-worker.ts` to resolve the active tab, gate on Supported_Site, send a `TOGGLE` message within budget, ignore non-supported sites, and surface a failure indication when the content script is unreachable; route storage reads/writes for UI surfaces
+    - Declare only the functional `toggle-windowed-fullscreen` command in the manifest `commands` block (no spare unassigned commands — a Web Store review red flag); implement `src/background/service-worker.ts` to resolve the active tab, gate on Supported_Site, send a `TOGGLE` message within budget, ignore non-supported sites, and surface a failure indication when the content script is unreachable; route storage reads/writes for UI surfaces. Shortcut assignment and conflict handling are delegated to the browser's shortcuts page (linked from the Options_Page).
     - _Requirements: 3.1, 3.3, 3.4, 3.5, 3.6_
 
   - [x] 9.4 Write unit/integration tests for command routing

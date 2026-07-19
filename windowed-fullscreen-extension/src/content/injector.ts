@@ -512,7 +512,6 @@ export class ButtonInjectorImpl implements ButtonInjector {
       "margin:0",
       "background:transparent",
       "border:0",
-      "outline:0",
       "cursor:pointer",
       "opacity:0.9",
       "vertical-align:top",

@@ -180,10 +180,12 @@ export function bootstrapContentScript(
     return null;
   }
 
-  // Inject the active-mode stylesheet once. It is scoped under the
-  // `wfs-windowed` class (toggled by the controller) so it only takes effect
-  // while the mode is active, and forces the player/video to fill the viewport.
-  injectWindowedStyles(deps.document);
+  // Inject the active-mode stylesheet once: the generic base plus the active
+  // adapter's own site-specific CSS. Both are scoped under the `wfs-windowed`
+  // class (toggled by the controller) so they only take effect while the mode
+  // is active, and force the player/video to fill the viewport. Keeping the
+  // site CSS in the adapter preserves the site-independence of this module.
+  injectWindowedStyles(deps.document, adapter.getActiveModeCss?.() ?? "");
 
   // 2. Generic_Core controller. Escape handling is registered by the controller
   //    on enter(), so the bootstrap never registers it (avoids double-wiring,

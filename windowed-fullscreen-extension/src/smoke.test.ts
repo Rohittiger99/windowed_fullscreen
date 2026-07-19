@@ -130,4 +130,28 @@ describe("Generic_Core architectural boundary", () => {
       expect(controllerSrc).not.toContain(selector);
     }
   });
+
+  // Validates: Requirements 6.1
+  // The generic active-mode stylesheet must stay site-independent: all
+  // YouTube CSS selectors live in the adapter (via getActiveModeCss), not in
+  // windowed-styles.ts. This guards against the site-CSS drifting back out of
+  // the adapter.
+  it("keeps the generic windowed stylesheet free of YouTube selectors", () => {
+    const stylesSrc = readFileSync(
+      resolve(PROJECT_ROOT, "src/content/windowed-styles.ts"),
+      "utf8",
+    );
+    const siteSpecificSelectors = [
+      "ytp-",
+      "movie_player",
+      "#masthead",
+      "#secondary",
+      "#comments",
+      "html5-video",
+      "ytd-watch",
+    ];
+    for (const selector of siteSpecificSelectors) {
+      expect(stylesSrc).not.toContain(selector);
+    }
+  });
 });
