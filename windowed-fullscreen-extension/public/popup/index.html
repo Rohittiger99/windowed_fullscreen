@@ -6,149 +6,284 @@
     <title>Windowed Fullscreen</title>
     <style>
       :root {
-        --wfs-text: #202124;
-        --wfs-muted: #5f6368;
-        --wfs-accent: #1a73e8;
-        --wfs-on: #188038;
-        --wfs-border: #e0e0e0;
-        --wfs-surface: #f8f9fa;
-      }
-      * {
-        box-sizing: border-box;
-      }
-      body {
-        width: 300px;
-        margin: 0;
-        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-        font-size: 13px;
-        line-height: 1.4;
-        color: var(--wfs-text);
-        background: #fff;
-      }
-      #app {
-        padding: 14px 16px 8px;
-      }
-      #settings {
-        padding: 0 16px 14px;
+        color-scheme: dark light;
+
+        /* Dark theater palette — warm charcoal base with amber glow. */
+        --wfs-bg: #1a1a1e;
+        --wfs-surface: #242428;
+        --wfs-elevated: #2c2c31;
+        --wfs-text: #f0ece6;
+        --wfs-muted: #9e9a93;
+        --wfs-border: rgba(255, 255, 255, 0.07);
+
+        /* Warm amber accent — like a screen's glow in a dark room. */
+        --wfs-accent: #e8a838;
+        --wfs-accent-hover: #f0b848;
+        --wfs-accent-dim: rgba(232, 168, 56, 0.12);
+        --wfs-accent-dim-hover: rgba(232, 168, 56, 0.18);
+        --wfs-on: #6dd69c;
+        --wfs-on-bg: rgba(109, 214, 156, 0.1);
+        --wfs-danger: #f07068;
+        --wfs-danger-bg: rgba(240, 112, 104, 0.1);
+
+        --wfs-ring: 0 0 0 2px var(--wfs-bg), 0 0 0 4px rgba(232, 168, 56, 0.5);
+        --wfs-glow: 0 0 20px rgba(232, 168, 56, 0.08);
+
+        --wfs-font: system-ui, -apple-system, "Segoe UI", sans-serif;
       }
 
-      /* --- Title + status -------------------------------------------------- */
+      @media (prefers-color-scheme: light) {
+        :root {
+          --wfs-bg: #faf8f5;
+          --wfs-surface: #ffffff;
+          --wfs-elevated: #ffffff;
+          --wfs-text: #1c1917;
+          --wfs-muted: #78716c;
+          --wfs-border: rgba(0, 0, 0, 0.08);
+
+          --wfs-accent: #c47f0a;
+          --wfs-accent-hover: #a86d08;
+          --wfs-accent-dim: rgba(196, 127, 10, 0.08);
+          --wfs-accent-dim-hover: rgba(196, 127, 10, 0.14);
+          --wfs-on: #16803c;
+          --wfs-on-bg: rgba(22, 128, 60, 0.08);
+          --wfs-danger: #dc2626;
+          --wfs-danger-bg: rgba(220, 38, 38, 0.06);
+
+          --wfs-ring: 0 0 0 2px var(--wfs-bg), 0 0 0 4px rgba(196, 127, 10, 0.4);
+          --wfs-glow: 0 0 24px rgba(196, 127, 10, 0.06);
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+        margin: 0;
+      }
+
+      body {
+        width: 320px;
+        font-family: var(--wfs-font);
+        font-size: 13px;
+        line-height: 1.5;
+        color: var(--wfs-text);
+        background: var(--wfs-bg);
+        -webkit-font-smoothing: antialiased;
+      }
+
+      #app {
+        padding: 20px 18px 12px;
+      }
+
+      #settings {
+        padding: 0 18px 20px;
+      }
+
+      /* --- Header ---------------------------------------------------------- */
       .wfs-popup__title {
-        margin: 0 0 12px;
-        font-size: 15px;
-        font-weight: 600;
+        font-size: 14px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+        color: var(--wfs-accent);
+        margin-bottom: 16px;
       }
+
+      /* --- Status card ------------------------------------------------------ */
       .wfs-popup__status {
-        margin: 0;
         display: grid;
-        grid-template-columns: auto 1fr;
-        gap: 6px 12px;
+        grid-template-columns: 1fr auto;
+        gap: 6px 16px;
+        padding: 12px 14px;
+        background: var(--wfs-surface);
+        border: 1px solid var(--wfs-border);
+        border-radius: 12px;
       }
+
       .wfs-popup__status dt {
+        font-size: 12px;
         color: var(--wfs-muted);
+        font-weight: 500;
       }
+
       .wfs-popup__status dd {
-        margin: 0;
+        font-size: 12px;
         font-weight: 600;
         text-align: right;
+        font-variant-numeric: tabular-nums;
       }
+
       .wfs-popup__status dd.is-on {
         color: var(--wfs-on);
       }
+
       .wfs-popup__status dd.is-off {
         color: var(--wfs-muted);
       }
 
-      /* --- Toggle button --------------------------------------------------- */
+      /* --- Main toggle ------------------------------------------------------ */
       .wfs-popup__toggle {
-        margin-top: 12px;
+        margin-top: 14px;
         width: 100%;
-        padding: 9px 12px;
+        padding: 12px 16px;
         font: inherit;
-        font-weight: 600;
-        color: #fff;
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        color: var(--wfs-bg);
         background: var(--wfs-accent);
         border: none;
-        border-radius: 8px;
+        border-radius: 10px;
         cursor: pointer;
+        box-shadow: var(--wfs-glow);
+        transition: background 160ms ease, transform 100ms ease,
+          box-shadow 160ms ease;
       }
+
       .wfs-popup__toggle:hover:not(:disabled) {
-        background: #1668d6;
+        background: var(--wfs-accent-hover);
+        box-shadow: 0 0 28px rgba(232, 168, 56, 0.18);
       }
+
+      .wfs-popup__toggle:active:not(:disabled) {
+        transform: scale(0.97);
+        box-shadow: none;
+      }
+
+      .wfs-popup__toggle:focus-visible {
+        outline: none;
+        box-shadow: var(--wfs-ring);
+      }
+
       .wfs-popup__toggle.is-active {
         color: var(--wfs-accent);
-        background: #e8f0fe;
+        background: var(--wfs-accent-dim);
+        box-shadow: none;
+        border: 1px solid rgba(232, 168, 56, 0.25);
       }
+
       .wfs-popup__toggle.is-active:hover:not(:disabled) {
-        background: #d7e6fd;
+        background: var(--wfs-accent-dim-hover);
       }
+
+      .wfs-popup__toggle.is-active:active:not(:disabled) {
+        transform: scale(0.97);
+      }
+
       .wfs-popup__toggle:disabled {
         color: var(--wfs-muted);
         background: var(--wfs-surface);
         border: 1px solid var(--wfs-border);
-        cursor: default;
+        box-shadow: none;
+        cursor: not-allowed;
+        opacity: 0.7;
       }
 
-      /* --- Settings sections (rendered by OptionsPage) --------------------- */
+      /* --- Settings --------------------------------------------------------- */
       #settings section {
         margin-top: 14px;
-        padding-top: 12px;
+        padding-top: 14px;
         border-top: 1px solid var(--wfs-border);
       }
+
       #settings h2 {
-        margin: 0 0 8px;
-        font-size: 12px;
-        font-weight: 600;
+        font-size: 10px;
+        font-weight: 700;
         text-transform: uppercase;
-        letter-spacing: 0.04em;
+        letter-spacing: 0.1em;
         color: var(--wfs-muted);
+        margin-bottom: 10px;
       }
+
       #settings label {
         display: flex;
         align-items: flex-start;
-        gap: 8px;
+        gap: 10px;
         cursor: pointer;
+        font-size: 12.5px;
+        line-height: 1.45;
+        padding: 6px 8px;
+        border-radius: 8px;
+        margin: -6px -8px;
+        transition: background 140ms ease;
       }
+
+      #settings label:hover {
+        background: var(--wfs-accent-dim);
+      }
+
       #settings input[type="checkbox"] {
-        margin: 1px 0 0;
+        margin-top: 2px;
         width: 15px;
         height: 15px;
         accent-color: var(--wfs-accent);
         cursor: pointer;
         flex: none;
       }
+
+      #settings input[type="checkbox"]:focus-visible {
+        outline: none;
+        box-shadow: var(--wfs-ring);
+        border-radius: 3px;
+      }
+
       #settings a {
         color: var(--wfs-accent);
         text-decoration: none;
-      }
-      #settings a:hover {
-        text-decoration: underline;
-      }
-      #settings p {
-        margin: 6px 0 0;
-        font-size: 12px;
-        color: var(--wfs-muted);
+        font-weight: 600;
+        font-size: 12.5px;
+        padding: 4px 8px;
+        margin: -4px -8px;
+        border-radius: 6px;
+        transition: background 140ms ease, color 140ms ease;
       }
 
-      /* --- Status / error regions ------------------------------------------ */
+      #settings a:hover {
+        background: var(--wfs-accent-dim);
+        color: var(--wfs-accent-hover);
+      }
+
+      #settings a:focus-visible {
+        outline: none;
+        box-shadow: var(--wfs-ring);
+      }
+
+      #settings p {
+        margin: 6px 0 0;
+        font-size: 11.5px;
+        color: var(--wfs-muted);
+        line-height: 1.5;
+      }
+
+      /* --- Feedback regions ------------------------------------------------- */
       [data-wfs-status],
       [data-wfs-error] {
-        margin-top: 10px;
+        margin-top: 12px;
         font-size: 12px;
         min-height: 0;
+        border-radius: 8px;
       }
+
       [data-wfs-status]:not(:empty),
       [data-wfs-error]:not(:empty) {
-        padding: 7px 9px;
-        border-radius: 6px;
+        padding: 9px 12px;
+        font-weight: 500;
       }
+
       [data-wfs-status]:not(:empty) {
         color: var(--wfs-on);
-        background: #e6f4ea;
+        background: var(--wfs-on-bg);
       }
+
       [data-wfs-error]:not(:empty) {
-        color: #c5221f;
-        background: #fce8e6;
+        color: var(--wfs-danger);
+        background: var(--wfs-danger-bg);
+      }
+
+      /* --- Motion respect --------------------------------------------------- */
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          transition: none !important;
+        }
       }
     </style>
   </head>

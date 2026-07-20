@@ -6,93 +6,188 @@
     <title>Windowed Fullscreen - Options</title>
     <style>
       :root {
-        --wfs-text: #202124;
-        --wfs-muted: #5f6368;
-        --wfs-accent: #1a73e8;
-        --wfs-on: #188038;
-        --wfs-border: #e0e0e0;
+        color-scheme: dark light;
+
+        /* Dark theater palette — warm charcoal base with amber glow. */
+        --wfs-bg: #1a1a1e;
+        --wfs-surface: #242428;
+        --wfs-elevated: #2c2c31;
+        --wfs-text: #f0ece6;
+        --wfs-muted: #9e9a93;
+        --wfs-border: rgba(255, 255, 255, 0.07);
+
+        /* Warm amber accent. */
+        --wfs-accent: #e8a838;
+        --wfs-accent-hover: #f0b848;
+        --wfs-accent-dim: rgba(232, 168, 56, 0.12);
+        --wfs-accent-dim-hover: rgba(232, 168, 56, 0.18);
+        --wfs-on: #6dd69c;
+        --wfs-on-bg: rgba(109, 214, 156, 0.1);
+        --wfs-danger: #f07068;
+        --wfs-danger-bg: rgba(240, 112, 104, 0.1);
+
+        --wfs-ring: 0 0 0 2px var(--wfs-bg), 0 0 0 4px rgba(232, 168, 56, 0.5);
+        --wfs-glow: 0 4px 24px rgba(232, 168, 56, 0.06);
+
+        --wfs-font: system-ui, -apple-system, "Segoe UI", sans-serif;
       }
+
+      @media (prefers-color-scheme: light) {
+        :root {
+          --wfs-bg: #faf8f5;
+          --wfs-surface: #ffffff;
+          --wfs-elevated: #ffffff;
+          --wfs-text: #1c1917;
+          --wfs-muted: #78716c;
+          --wfs-border: rgba(0, 0, 0, 0.08);
+
+          --wfs-accent: #c47f0a;
+          --wfs-accent-hover: #a86d08;
+          --wfs-accent-dim: rgba(196, 127, 10, 0.08);
+          --wfs-accent-dim-hover: rgba(196, 127, 10, 0.14);
+          --wfs-on: #16803c;
+          --wfs-on-bg: rgba(22, 128, 60, 0.08);
+          --wfs-danger: #dc2626;
+          --wfs-danger-bg: rgba(220, 38, 38, 0.06);
+
+          --wfs-ring: 0 0 0 2px var(--wfs-bg), 0 0 0 4px rgba(196, 127, 10, 0.4);
+          --wfs-glow: 0 4px 30px rgba(196, 127, 10, 0.04);
+        }
+      }
+
       * {
         box-sizing: border-box;
-      }
-      body {
         margin: 0;
-        padding: 32px 16px;
-        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+      }
+
+      body {
+        font-family: var(--wfs-font);
         font-size: 14px;
-        line-height: 1.5;
+        line-height: 1.55;
         color: var(--wfs-text);
-        background: #f1f3f4;
+        background: var(--wfs-bg);
+        padding: 48px 20px;
+        -webkit-font-smoothing: antialiased;
       }
+
       #app {
-        max-width: 560px;
+        max-width: 520px;
         margin: 0 auto;
-        padding: 28px 32px;
-        background: #fff;
-        border-radius: 12px;
-        box-shadow: 0 1px 3px rgba(60, 64, 67, 0.15);
+        padding: 32px 36px 40px;
+        background: var(--wfs-surface);
+        border: 1px solid var(--wfs-border);
+        border-radius: 16px;
+        box-shadow: var(--wfs-glow);
       }
+
       #app h1 {
-        margin: 0 0 8px;
-        font-size: 20px;
-        font-weight: 600;
+        font-size: 16px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        text-transform: uppercase;
+        color: var(--wfs-accent);
+        margin-bottom: 8px;
       }
+
       #app section {
-        margin-top: 24px;
-        padding-top: 20px;
+        margin-top: 28px;
+        padding-top: 24px;
         border-top: 1px solid var(--wfs-border);
       }
+
       #app h2 {
-        margin: 0 0 10px;
-        font-size: 13px;
-        font-weight: 600;
+        font-size: 11px;
+        font-weight: 700;
         text-transform: uppercase;
-        letter-spacing: 0.04em;
+        letter-spacing: 0.1em;
         color: var(--wfs-muted);
+        margin-bottom: 12px;
       }
+
       #app label {
         display: flex;
         align-items: flex-start;
-        gap: 10px;
+        gap: 12px;
         cursor: pointer;
+        padding: 8px 10px;
+        margin: -8px -10px;
+        border-radius: 10px;
+        transition: background 140ms ease;
       }
+
+      #app label:hover {
+        background: var(--wfs-accent-dim);
+      }
+
       #app input[type="checkbox"] {
-        margin: 2px 0 0;
+        margin-top: 3px;
         width: 16px;
         height: 16px;
         accent-color: var(--wfs-accent);
         cursor: pointer;
         flex: none;
       }
+
+      #app input[type="checkbox"]:focus-visible {
+        outline: none;
+        box-shadow: var(--wfs-ring);
+        border-radius: 4px;
+      }
+
       #app a {
         color: var(--wfs-accent);
         text-decoration: none;
+        font-weight: 600;
+        padding: 4px 8px;
+        margin: -4px -8px;
+        border-radius: 6px;
+        transition: background 140ms ease, color 140ms ease;
       }
+
       #app a:hover {
-        text-decoration: underline;
+        background: var(--wfs-accent-dim);
+        color: var(--wfs-accent-hover);
       }
+
+      #app a:focus-visible {
+        outline: none;
+        box-shadow: var(--wfs-ring);
+      }
+
       #app p {
         margin: 8px 0 0;
         font-size: 13px;
         color: var(--wfs-muted);
+        max-width: 58ch;
       }
+
       [data-wfs-status],
       [data-wfs-error] {
-        margin-top: 16px;
+        margin-top: 20px;
         font-size: 13px;
+        border-radius: 10px;
       }
+
       [data-wfs-status]:not(:empty),
       [data-wfs-error]:not(:empty) {
-        padding: 9px 12px;
-        border-radius: 6px;
+        padding: 11px 14px;
+        font-weight: 500;
       }
+
       [data-wfs-status]:not(:empty) {
         color: var(--wfs-on);
-        background: #e6f4ea;
+        background: var(--wfs-on-bg);
       }
+
       [data-wfs-error]:not(:empty) {
-        color: #c5221f;
-        background: #fce8e6;
+        color: var(--wfs-danger);
+        background: var(--wfs-danger-bg);
+      }
+
+      @media (prefers-reduced-motion: reduce) {
+        * {
+          transition: none !important;
+        }
       }
     </style>
   </head>
