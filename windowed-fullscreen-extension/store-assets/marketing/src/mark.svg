@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Windowed Fullscreen brand mark — full detail, used for the 128px icon and both
+  promo tiles.
+
+  A browser window drawn as a sticker with a heavy black keyline: a tab strip
+  across the top (one tall active tab in deep navy carrying a white title pill,
+  plus two shorter dormant tabs), a saturated red viewport with a white four-way
+  expand glyph on a darker plate, and a light grey bar along the bottom that stays
+  visible — the product in one picture.
+
+  GEOMETRY IS MEASURED, NOT EYEBALLED. Every coordinate below was read off the
+  reference render by sampling pixel runs along its centre lines, then shifted so
+  the artwork's own bounding box is the origin. The reference's mark occupied
+  x 306..947, y 368..893 of a 1254x1254 canvas, so this viewBox is 642x526 —
+  1 unit here is 1 pixel there, and any number in this file can be checked against
+  the reference directly.
+
+  Two consequences worth knowing:
+
+  - The viewBox is the artwork, with no built-in margin. Padding is the caller's
+    job (`icons.mjs` applies it per size), which is what stops the icon from
+    rendering small inside its own canvas.
+  - The aspect is 1.2205, not square. `icons.mjs` and the promo tiles size by
+    width and let the height follow; setting both to the same number just
+    letterboxes it and wastes the canvas.
+
+  Palette, also measured: keyline #000000, tab navy #032578, title pill #ffffff,
+  dormant tabs #555454 and #1f1f1f, viewport #e9191e, plate 16% black over the
+  viewport, bar #878686, bar glyphs #050505.
+-->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 642 526"
+  width="642"
+  height="526"
+>
+  <defs>
+    <!-- Everything inside the frame is clipped to its inner radius, so the tab
+         strip, viewport and bar can be plain rectangles that still turn the
+         corner cleanly. The bottom keyline is a little thicker than the sides,
+         as it is in the reference. -->
+    <clipPath id="wfsWindow">
+      <rect x="8" y="8" width="626" height="505" rx="22" />
+    </clipPath>
+  </defs>
+
+  <!-- The keyline. A filled shape underneath rather than a stroke, so it holds an
+       even weight on every edge at every render size. -->
+  <rect width="642" height="526" rx="30" fill="#000000" />
+
+  <g clip-path="url(#wfsWindow)">
+    <!-- Tab strip. The row's background is the keyline black showing through. -->
+
+    <!-- Dormant tabs: shorter than the active one and floating clear of the
+         strip below, which is what makes the active tab read as active without
+         needing any highlight. -->
+    <rect x="279" y="20" width="113" height="29" rx="10" fill="#555454" />
+    <rect x="395" y="20" width="229" height="29" rx="10" fill="#1f1f1f" />
+
+    <!-- Active tab, running the full depth of the strip so it joins the band
+         beneath it, plus its title pill. -->
+    <rect x="34" y="8" width="232" height="66" rx="14" fill="#032578" />
+    <rect x="8" y="63" width="626" height="12" fill="#032578" />
+    <rect x="74" y="25" width="151" height="12" rx="6" fill="#ffffff" />
+
+    <!-- The viewport. -->
+    <rect x="8" y="75" width="626" height="388" fill="#e9191e" />
+
+    <!-- A darker plate behind the glyph. Keeps the white arrows contrasty when
+         the promo tiles are shown at half size. -->
+    <rect x="191" y="140" width="259" height="248" fill="#000000" opacity="0.16" />
+
+    <!--
+      Four-way expand: the action the extension performs.
+
+      Centred on the plate at (321, 264) with a half-extent of 108, so the block
+      is 216x216. The stroke is 42 — 19% of the block, matching the reference and
+      deliberately chunky: this is the detail most likely to turn to mush once the
+      icon is rasterized small, and weight is the only thing that saves it.
+    -->
+    <g
+      fill="none"
+      stroke="#ffffff"
+      stroke-width="42"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <!-- Toward the top-left. -->
+      <path d="M295 238 L213 156" />
+      <path d="M213 214 L213 156 L271 156" />
+      <!-- Toward the top-right. -->
+      <path d="M347 238 L429 156" />
+      <path d="M371 156 L429 156 L429 214" />
+      <!-- Toward the bottom-left. -->
+      <path d="M295 290 L213 372" />
+      <path d="M213 314 L213 372 L271 372" />
+      <!-- Toward the bottom-right. -->
+      <path d="M347 290 L429 372" />
+      <path d="M371 372 L429 372 L429 314" />
+    </g>
+
+    <!-- The bar that stays, separated from the viewport by the keyline colour so
+         it reads as its own surface rather than part of the video. -->
+    <rect x="8" y="463" width="626" height="13" fill="#000000" />
+    <rect x="8" y="476" width="626" height="37" fill="#878686" />
+
+    <!-- Bar glyphs, on the reference's centre line at y 494. Deliberately generic
+         shapes: a launcher dot, an open-window outline, an overflow chevron, a
+         signal arc and an account circle. Conventions, not anyone's trademark —
+         see the branding note in README.md. -->
+    <g fill="none" stroke="#050505" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+      <circle cx="31" cy="494" r="6" fill="#050505" stroke="none" />
+      <rect x="68" y="482" width="24" height="24" rx="5" />
+      <path d="M68 490 L92 490" />
+
+      <path d="M515 498 L522 490 L529 498" />
+      <path d="M552 493 A 13 13 0 0 1 569 493" />
+      <circle cx="560.5" cy="501" r="3" fill="#050505" stroke="none" />
+      <circle cx="603.5" cy="489" r="5" />
+      <path d="M597 503 A 8 8 0 0 1 610 503" />
+    </g>
+  </g>
+</svg>

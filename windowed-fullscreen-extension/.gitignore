@@ -1,4 +1,13 @@
 node_modules/
-dist/
+
+# Build output: the loadable unpacked extension and the store upload zip.
+extension/
+release/
+*.zip
+
 *.log
 .DS_Store
+
+# Throwaway Chrome profile and temp files used by the store-asset renderer.
+store-assets/marketing/.chrome-profile/
+store-assets/marketing/.tmp-icons/

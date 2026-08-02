@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="asset-size" content="440x280" />
+    <title>Windowed Fullscreen — small promo tile</title>
+    <link rel="stylesheet" href="./_base.css" />
+    <style>
+      /**
+       * Built to the store's promo-image guidance rather than as a mini web page:
+       * communicate the brand not the UI, no screenshot, minimal text, saturated
+       * colour, fill the whole region with well-defined edges, and stay legible
+       * at half size (220x140).
+       *
+       * The field is near-black, which is what the mark was drawn against: its
+       * viewport is a saturated red and its tab band a royal blue, so any
+       * saturated field would either clash with the red or swallow the blue. The
+       * saturation the guidance asks for is supplied by a red bloom behind the
+       * mark instead of by the backdrop, which also lets the mark's own black
+       * keyline read as intentional rather than as a stray outline.
+       */
+      body {
+        background: #0c0d10;
+      }
+
+      .stage {
+        display: flex;
+        align-items: center;
+        gap: 20px;
+        padding: 0 26px;
+        background:
+          radial-gradient(58% 92% at 20% 50%, rgba(237, 28, 36, 0.42) 0%, transparent 68%),
+          radial-gradient(120% 130% at 88% 108%, #1c2540 0%, transparent 62%),
+          linear-gradient(150deg, #1b1d24 0%, #0c0d10 62%, #07080a 100%);
+      }
+
+      /* Faint concentric rings echo the "expanding to fill" idea. */
+      .stage::before {
+        content: "";
+        position: absolute;
+        left: 74px;
+        top: 50%;
+        width: 640px;
+        height: 640px;
+        transform: translateY(-50%);
+        border-radius: 50%;
+        background: radial-gradient(
+          circle,
+          transparent 0 29%,
+          rgba(255, 255, 255, 0.1) 29% 29.7%,
+          transparent 29.7% 43%,
+          rgba(255, 255, 255, 0.07) 43% 43.6%,
+          transparent 43.6%
+        );
+      }
+
+      /* Sized to dominate the tile — at half size this is still the largest thing
+         on it, and a tile this small has no room for the mark to be a polite
+         accent. The mark is landscape (642x526), so only the width is set and the
+         height follows; setting both letterboxes the SVG and shrinks it. */
+      .mark {
+        flex: none;
+        width: 206px;
+        height: auto;
+        filter: drop-shadow(0 14px 30px rgba(0, 0, 0, 0.7))
+          drop-shadow(0 0 24px rgba(233, 25, 30, 0.32));
+      }
+
+      .name {
+        font-size: 30px;
+        font-weight: 700;
+        line-height: 1.06;
+        letter-spacing: -1.1px;
+        color: #ffffff;
+        text-shadow: 0 2px 14px rgba(0, 0, 0, 0.6);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stage">
+      <img class="mark" src="./mark.svg" alt="" data-must-fit />
+      <div class="name">
+        <span data-no-wrap>Windowed</span><br />
+        <span data-no-wrap>Fullscreen</span>
+      </div>
+    </div>
+  </body>
+</html>

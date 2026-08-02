@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="asset-size" content="1280x800" />
+    <title>Windowed Fullscreen — three ways to switch</title>
+    <link rel="stylesheet" href="./_base.css" />
+    <style>
+      .stage {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 40px 56px 0;
+        text-align: center;
+      }
+
+      h1 {
+        margin-top: 12px;
+        font-size: 46px;
+      }
+
+      .sub {
+        margin-top: 12px;
+      }
+
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 26px;
+        width: 100%;
+        margin-top: 30px;
+      }
+
+      .card {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 26px 22px 24px;
+        min-height: 296px;
+      }
+
+      .num {
+        display: grid;
+        place-items: center;
+        width: 34px;
+        height: 34px;
+        font-size: 18px;
+        font-weight: 700;
+        color: var(--accent);
+        background: var(--accent-soft);
+        border-radius: 50%;
+      }
+
+      .card h2 {
+        margin-top: 15px;
+        font-size: 27px;
+        font-weight: 700;
+        letter-spacing: -0.4px;
+      }
+
+      .card p {
+        margin-top: 9px;
+        font-size: 20px;
+        line-height: 1.35;
+        color: var(--secondary);
+      }
+
+      /* Visual sample sits at the bottom of every card on a shared baseline. */
+      .sample {
+        display: grid;
+        place-items: center;
+        width: 100%;
+        margin-top: auto;
+        padding-top: 24px;
+      }
+
+      .sample .shot {
+        border-radius: 9px;
+        border: 1px solid var(--border-strong);
+        box-shadow: 0 12px 30px -12px rgba(0, 0, 0, 0.8);
+      }
+
+      .escape {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        margin-top: 28px;
+        padding: 18px 30px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+      }
+
+      .escape .copy {
+        font-size: 23px;
+        color: var(--text);
+      }
+
+      .escape .copy span {
+        color: var(--secondary);
+      }
+
+      footer {
+        margin-top: 24px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stage">
+      <div class="eyebrow"><span class="dot"></span>Three ways in, one way out</div>
+      <h1>Switch however suits you.</h1>
+      <p class="sub">The player, the toolbar, or the keyboard.</p>
+
+      <div class="cards">
+        <section class="card">
+          <span class="num">1</span>
+          <h2>The player button</h2>
+          <p>Next to YouTube's own fullscreen button.</p>
+          <div class="sample">
+            <!-- Crop: the injected button and its neighbour, magnified. -->
+            <div
+              class="shot"
+              style="--w: 268px; --cx: 0.925; --cy: 0.879; --cw: 0.075; --ch: 0.07"
+            >
+              <img src="../raw/after-windowed.png" alt="" />
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <span class="num">2</span>
+          <h2>The toolbar button</h2>
+          <p>One click, wherever you are on the page.</p>
+          <div class="sample">
+            <!-- Crop: the popup's primary action button. -->
+            <div
+              class="shot"
+              style="--w: 290px; --cx: 0.6885; --cy: 0.2535; --cw: 0.2002; --ch: 0.0454"
+            >
+              <img src="../raw/before-popup.png" alt="" />
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <span class="num">3</span>
+          <h2>The keyboard</h2>
+          <p>A shortcut you can change to anything.</p>
+          <div class="sample">
+            <div class="keys">
+              <span class="key">Alt</span>
+              <span class="plus">+</span>
+              <span class="key">Shift</span>
+              <span class="plus">+</span>
+              <span class="key">F</span>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="escape">
+        <span class="key">Esc</span>
+        <span class="copy">Exits and puts the page back <span>exactly as it was</span></span>
+      </div>
+
+      <footer>
+        <div class="trust">
+          <span>No accounts</span>
+          <span class="sep"></span>
+          <span>No tracking</span>
+          <span class="sep"></span>
+          <span>Nothing leaves your computer</span>
+        </div>
+      </footer>
+    </div>
+  </body>
+</html>

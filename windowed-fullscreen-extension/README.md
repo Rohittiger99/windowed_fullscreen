@@ -1,72 +1,63 @@
 # Windowed Fullscreen
 
-A Manifest V3 Chromium extension that adds a **windowed-fullscreen** viewing mode next to a video site's native fullscreen control. The video fills your entire browser window (and screen) while your taskbar stays visible — so you can keep an eye on the clock, notifications, and other windows without leaving "fullscreen".
-
-Version 1 supports **YouTube**.
+A Manifest V3 Chromium extension that adds a **windowed-fullscreen** mode next to YouTube's own fullscreen button. The player fills the browser window — the whole screen once the window is maximized — but the browser Fullscreen API is never called, so the tab strip, clock, and taskbar stay visible.
 
 ## Features
 
-- Adds a dedicated windowed-fullscreen button right next to YouTube's native fullscreen control.
-- Expands the player to fill the viewport without calling the browser Fullscreen API, so the taskbar stays visible.
-- Toggle via the button, the toolbar popup, or a keyboard shortcut (`Alt+Shift+F` by default).
-- Press `Escape` to exit.
-- Optional per-site **auto-apply**: enter windowed fullscreen automatically when a video loads.
-- Survives YouTube's single-page navigations (moving between videos) without a reload.
-- Restores the page to its exact previous state on exit.
+- A dedicated button beside YouTube's native fullscreen control.
+- Toggle from the button, the toolbar popup, or `Alt+Shift+F` (rebindable at `chrome://extensions/shortcuts`).
+- `Escape` exits and restores the page to its exact previous state.
+- Optional per-site auto-apply: enter the mode automatically when a video loads.
+- Survives YouTube's in-app navigations without a reload.
+
+## Layout
+
+```
+manifest.json                Extension identity and entry points
+src/windowed-fullscreen.ts   ALL extension code, in one sectioned file
+public/                      Static shipped assets (icons, popup + options HTML)
+scripts/build.mjs            Bundles the source once per MV3 surface
+scripts/package.mjs          Zips the build for the Web Store
+extension/                   Build output: the loadable unpacked extension
+release/                     Exactly one file: the zip to upload
+store-assets/                Not shipped — listing copy, screenshots, promo tiles
+```
 
 ## Architecture
 
-The code is deliberately split so the mode logic never knows about any specific site:
+All the code lives in `src/windowed-fullscreen.ts`, split into numbered sections. `scripts/build.mjs` bundles that file four times, synthesizing a one-line entry point per surface (`startContentScript`, `startServiceWorker`, `startOptionsPage`, `startPopup`) and letting esbuild tree-shake away whatever that surface does not reach. The file has no top-level side effects, which is what makes the tree-shaking safe.
 
-- **Generic core** (`src/core`) — a site-independent engine that expands the player and hides page chrome using only a `SiteDescriptor` handed to it. It never references site-specific selectors and never calls the Fullscreen API.
-- **Site adapters** (`src/adapters`) — the one place that holds site-specific DOM knowledge. `youtube.ts` is the only adapter in v1; supporting another site means adding one adapter file.
-- **Content script** (`src/content`) — injects and maintains the button, and wires everything together per tab.
-- **Background service worker** (`src/background`) — handles the keyboard command and cross-surface messaging.
-- **Options & popup** (`src/options`, `src/popup`) — the settings and toolbar UIs.
-- **Preferences** (`src/preferences`) — reads/writes settings via `chrome.storage` with sensible defaults.
+The rule worth preserving: **site-specific DOM knowledge lives only in a site adapter** (§3). The controller and injector work from a `SiteDescriptor` and never reference a site selector, so supporting another video site means adding one adapter to the `ADAPTERS` array and changing nothing else.
 
-## Getting started
-
-Install dependencies:
+## Commands
 
 ```bash
 npm install
+npm run build         # emits extension/ — load this via Load unpacked
+npm run build:watch   # rebuild on change, with source maps
+npm run typecheck
+npm run package       # build + write release/windowed-fullscreen-v<version>.zip
 ```
 
-### Build
+Load the unpacked build at `chrome://extensions` → **Developer mode** → **Load unpacked** → select `extension/`.
 
-```bash
-npm run build
-```
+`npm run store:assets` re-renders the listing screenshots and promo tiles; `npm run store:icons` regenerates the packaged icons in `public/icons/`.
 
-This bundles the extension into the `dist/` folder. Load it in Chrome via `chrome://extensions` → enable **Developer mode** → **Load unpacked** → select the `dist/` folder.
+## Packaging
 
-For an auto-rebuilding dev build (with source maps):
+`npm run package` writes an upload-ready zip to `release/`, which deliberately holds nothing else. Upload that file as-is.
 
-```bash
-npm run build:watch
-```
-
-### Type-check and test
-
-```bash
-npm run typecheck   # TypeScript, no emit
-npm test            # Vitest (unit + property-based tests)
-```
-
-## Packaging for the Chrome Web Store
-
-1. Run `npm run build` to produce a clean, source-map-free `dist/`.
-2. Zip the **contents** of `dist/` (the `manifest.json` must be at the root of the zip, not inside a subfolder).
-3. Upload the zip in the Chrome Web Store Developer Dashboard.
-
-> A privacy policy is still required by the Web Store because the extension uses the `storage` permission. Add one before submitting.
+Do **not** zip the build by hand with Windows tooling. `Compress-Archive` and .NET's `ZipFile.CreateFromDirectory` write backslash path separators, but the ZIP spec requires forward slashes — Chrome then reads `content\index.js` as one top-level filename instead of a nested path, so the content script silently goes missing. `scripts/package.mjs` normalizes the entry names and puts `manifest.json` at the archive root.
 
 ## Permissions
 
-- `storage` — persists your per-site settings (e.g. auto-apply).
-- `*://*.youtube.com/*` — required to inject the button and run the mode on YouTube.
+- `storage` — one boolean per site (auto-apply), written to `chrome.storage.local` only. `chrome.storage.sync` is deliberately unused, so settings never leave the device.
+- `*://*.youtube.com/*` — to inject the button, apply the CSS that expands the player, and read the active tab's URL so the popup can report whether the page is supported.
 
-## License
+No other permissions. No runtime dependencies, no network requests, no remote code, no analytics or telemetry.
 
-Released under the [MIT License](./LICENSE).
+Store listing copy and Developer Dashboard answers: `store-assets/LISTING.md`.
+
+## Copyright
+
+Copyright (c) 2026 Rohit Tiger. All rights reserved. No licence file is included on purpose: no licence means no rights are granted, and copyright stays reserved in full. This is not open-source software. Use of the published extension is governed by the [Terms of Use](https://rohittiger.vercel.app/legal/terms).

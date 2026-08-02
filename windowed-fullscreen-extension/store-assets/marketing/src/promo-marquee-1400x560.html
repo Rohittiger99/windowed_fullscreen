@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="asset-size" content="1400x560" />
+    <title>Windowed Fullscreen — marquee promo tile</title>
+    <link rel="stylesheet" href="./_base.css" />
+    <style>
+      /**
+       * Built to the store's promo-image guidance: communicate the brand not the
+       * UI, no screenshot, minimal text, saturated colour, fill the region with
+       * well-defined edges, and still work at half size (700x280).
+       *
+       * The mark is the hero here, rendered from `mark.svg` at 430px rather than
+       * redrawn in CSS. An earlier version rebuilt the mark's parts by hand as
+       * positioned divs, which drifted from the real thing the moment either side
+       * changed — it lost the three tabs and the bar glyphs, and its centre plate
+       * was taller than the viewport it sat in, so it bled through as a stripe.
+       * Pointing at the vector means the tile cannot disagree with the icons.
+       *
+       * The field is near-black because that is what the mark was drawn against:
+       * its viewport is a saturated red and its tab band a royal blue, so any
+       * saturated backdrop either clashes with the red or swallows the blue. The
+       * saturation the guidance asks for comes from a red bloom behind the mark.
+       */
+      body {
+        background: #0c0d10;
+      }
+
+      .stage {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 56px;
+        padding: 0 92px;
+        background:
+          radial-gradient(42% 94% at 74% 50%, rgba(237, 28, 36, 0.34) 0%, transparent 66%),
+          radial-gradient(70% 120% at 4% 0%, #232a45 0%, transparent 60%),
+          linear-gradient(140deg, #1b1d24 0%, #0c0d10 58%, #07080a 100%);
+      }
+
+      .copy {
+        max-width: 700px;
+      }
+
+      /* The name as type, not as a miniature of the mark sitting beside it. A
+         64px badge next to a 430px one is just the same shape twice, once too
+         small to read. */
+      .wordmark {
+        display: block;
+        margin-bottom: 22px;
+        font-size: 30px;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: #ffffff;
+        opacity: 0.72;
+      }
+
+      h1 {
+        font-size: 58px;
+        line-height: 1.08;
+        letter-spacing: -1.8px;
+        color: #ffffff;
+        text-shadow: 0 3px 18px rgba(0, 0, 0, 0.55);
+      }
+
+      /* Both survive, so both are named. Calling out only the taskbar undersold
+         it and contradicted screenshot 01, which says "tabs and taskbar". */
+      h1 .stay {
+        color: #ff6b62;
+      }
+
+      /* The mark is landscape (642x526), so only the width is set and the height
+         follows. Setting both to the same number letterboxes the SVG inside the
+         box and renders it smaller than asked. */
+      .mark {
+        flex: none;
+        width: 472px;
+        height: auto;
+        filter: drop-shadow(0 26px 56px rgba(0, 0, 0, 0.72))
+          drop-shadow(0 0 44px rgba(233, 25, 30, 0.26));
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stage">
+      <div class="copy">
+        <span class="wordmark" data-no-wrap>Windowed Fullscreen</span>
+        <h1>
+          <span data-no-wrap>Fullscreen video.</span><br />
+          <span class="stay" data-no-wrap>Tabs and taskbar stay.</span>
+        </h1>
+      </div>
+
+      <img class="mark" src="./mark.svg" alt="" data-must-fit />
+    </div>
+  </body>
+</html>

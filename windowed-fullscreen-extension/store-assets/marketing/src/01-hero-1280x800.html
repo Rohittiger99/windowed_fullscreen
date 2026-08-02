@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="asset-size" content="1280x800" />
+    <title>Windowed Fullscreen — hero</title>
+    <link rel="stylesheet" href="./_base.css" />
+    <style>
+      .stage {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 40px 60px 0;
+      }
+
+      header {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+        text-align: center;
+      }
+
+      h1 {
+        font-size: 48px;
+        letter-spacing: -1.3px;
+      }
+
+      figure {
+        margin-top: 24px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stage">
+      <header>
+        <h1 data-no-wrap>
+          Fullscreen video. <span class="hl">Tabs and taskbar still there.</span>
+        </h1>
+        <p class="sub">Nothing on your screen disappears.</p>
+      </header>
+
+      <figure>
+        <!-- Uncropped capture: overlay percentages map straight to the source. -->
+        <div class="shot framed" style="--w: 1046px">
+          <img src="../raw/after-windowed.png" alt="" />
+
+          <!-- Browser chrome band: tab strip + address bar. -->
+          <div class="band" style="top: 0.4%; height: 9.4%"></div>
+          <span class="tag" style="top: 12.2%; left: 16px">Tabs and address bar</span>
+
+          <!-- Windows taskbar band. -->
+          <div class="band" style="top: 94.6%; height: 5.1%"></div>
+          <span class="tag" style="bottom: 7.4%; right: 16px">Taskbar and clock</span>
+        </div>
+      </figure>
+    </div>
+  </body>
+</html>

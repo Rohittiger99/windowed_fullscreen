@@ -6,52 +6,66 @@
     <title>Windowed Fullscreen</title>
     <style>
       :root {
-        color-scheme: dark light;
+        color-scheme: light dark;
 
-        /* Dark theater palette — warm charcoal base with amber glow. */
-        --wfs-bg: #1a1a1e;
-        --wfs-surface: #242428;
-        --wfs-elevated: #2c2c31;
-        --wfs-text: #f0ece6;
-        --wfs-muted: #9e9a93;
-        --wfs-border: rgba(255, 255, 255, 0.07);
+        /* Notion — warm minimalism. Pure white canvas, warm-neutral scale. */
+        --wfs-bg: #ffffff;
+        --wfs-surface: #ffffff;
+        --wfs-alt: #f6f5f4; /* warm white section fill */
+        --wfs-elevated: #ffffff;
+        --wfs-text: rgba(0, 0, 0, 0.95); /* warm near-black, not pure */
+        --wfs-secondary: #615d59; /* warm gray 500 */
+        --wfs-muted: #a39e98; /* warm gray 300 */
+        --wfs-border: rgba(0, 0, 0, 0.1); /* whisper border */
 
-        /* Warm amber accent — like a screen's glow in a dark room. */
-        --wfs-accent: #e8a838;
-        --wfs-accent-hover: #f0b848;
-        --wfs-accent-dim: rgba(232, 168, 56, 0.12);
-        --wfs-accent-dim-hover: rgba(232, 168, 56, 0.18);
-        --wfs-on: #6dd69c;
-        --wfs-on-bg: rgba(109, 214, 156, 0.1);
-        --wfs-danger: #f07068;
-        --wfs-danger-bg: rgba(240, 112, 104, 0.1);
+        /* Notion Blue — the sole saturated accent, used sparingly. */
+        --wfs-accent: #0075de;
+        --wfs-accent-hover: #005bab; /* active/pressed blue */
+        --wfs-accent-dim: #f2f9ff; /* tinted blue badge surface */
+        --wfs-accent-dim-hover: #e6f2ff;
+        --wfs-accent-text: #097fe8; /* badge/focus blue */
+        --wfs-on: #1aae39; /* green — confirmation */
+        --wfs-on-bg: rgba(26, 174, 57, 0.08);
+        --wfs-danger: #dd5b00; /* orange — warning */
+        --wfs-danger-bg: rgba(221, 91, 0, 0.07);
 
-        --wfs-ring: 0 0 0 2px var(--wfs-bg), 0 0 0 4px rgba(232, 168, 56, 0.5);
-        --wfs-glow: 0 0 20px rgba(232, 168, 56, 0.08);
+        --wfs-ring: 0 0 0 2px #ffffff, 0 0 0 4px rgba(9, 127, 232, 0.5);
 
-        --wfs-font: system-ui, -apple-system, "Segoe UI", sans-serif;
+        /* Soft 4-layer card shadow (max opacity 0.04). */
+        --wfs-shadow: rgba(0, 0, 0, 0.04) 0px 4px 18px,
+          rgba(0, 0, 0, 0.027) 0px 2.025px 7.84688px,
+          rgba(0, 0, 0, 0.02) 0px 0.8px 2.925px,
+          rgba(0, 0, 0, 0.01) 0px 0.175px 1.04062px;
+
+        --wfs-font: "Inter", -apple-system, system-ui, "Segoe UI", Helvetica,
+          Arial, sans-serif;
       }
 
-      @media (prefers-color-scheme: light) {
+      @media (prefers-color-scheme: dark) {
         :root {
-          --wfs-bg: #faf8f5;
-          --wfs-surface: #ffffff;
-          --wfs-elevated: #ffffff;
-          --wfs-text: #1c1917;
-          --wfs-muted: #78716c;
-          --wfs-border: rgba(0, 0, 0, 0.08);
+          /* Warm dark variant keeping Notion's warm-neutral character. */
+          --wfs-bg: #191918;
+          --wfs-surface: #252420;
+          --wfs-alt: #211f1c;
+          --wfs-elevated: #2b2925;
+          --wfs-text: rgba(255, 255, 255, 0.92);
+          --wfs-secondary: #a39e98;
+          --wfs-muted: #6f6a64;
+          --wfs-border: rgba(255, 255, 255, 0.1);
 
-          --wfs-accent: #c47f0a;
-          --wfs-accent-hover: #a86d08;
-          --wfs-accent-dim: rgba(196, 127, 10, 0.08);
-          --wfs-accent-dim-hover: rgba(196, 127, 10, 0.14);
-          --wfs-on: #16803c;
-          --wfs-on-bg: rgba(22, 128, 60, 0.08);
-          --wfs-danger: #dc2626;
-          --wfs-danger-bg: rgba(220, 38, 38, 0.06);
+          --wfs-accent: #2b8fee;
+          --wfs-accent-hover: #4aa3f5;
+          --wfs-accent-dim: rgba(43, 143, 238, 0.14);
+          --wfs-accent-dim-hover: rgba(43, 143, 238, 0.2);
+          --wfs-accent-text: #62aef0;
+          --wfs-on: #4cc16a;
+          --wfs-on-bg: rgba(76, 193, 106, 0.12);
+          --wfs-danger: #f0803a;
+          --wfs-danger-bg: rgba(240, 128, 58, 0.12);
 
-          --wfs-ring: 0 0 0 2px var(--wfs-bg), 0 0 0 4px rgba(196, 127, 10, 0.4);
-          --wfs-glow: 0 0 24px rgba(196, 127, 10, 0.06);
+          --wfs-ring: 0 0 0 2px var(--wfs-bg), 0 0 0 4px rgba(98, 174, 240, 0.5);
+          --wfs-shadow: rgba(0, 0, 0, 0.3) 0px 4px 18px,
+            rgba(0, 0, 0, 0.2) 0px 0.8px 2.925px;
         }
       }
 
@@ -63,10 +77,11 @@
       body {
         width: 320px;
         font-family: var(--wfs-font);
-        font-size: 13px;
+        font-size: 14px;
         line-height: 1.5;
         color: var(--wfs-text);
         background: var(--wfs-bg);
+        font-feature-settings: "lnum", "locl";
         -webkit-font-smoothing: antialiased;
       }
 
@@ -80,11 +95,10 @@
 
       /* --- Header ---------------------------------------------------------- */
       .wfs-popup__title {
-        font-size: 14px;
+        font-size: 22px;
         font-weight: 700;
-        letter-spacing: 0.02em;
-        text-transform: uppercase;
-        color: var(--wfs-accent);
+        letter-spacing: -0.25px;
+        color: var(--wfs-text);
         margin-bottom: 16px;
       }
 
@@ -92,21 +106,21 @@
       .wfs-popup__status {
         display: grid;
         grid-template-columns: 1fr auto;
-        gap: 6px 16px;
-        padding: 12px 14px;
-        background: var(--wfs-surface);
+        gap: 8px 16px;
+        padding: 14px 16px;
+        background: var(--wfs-alt);
         border: 1px solid var(--wfs-border);
         border-radius: 12px;
       }
 
       .wfs-popup__status dt {
-        font-size: 12px;
-        color: var(--wfs-muted);
-        font-weight: 500;
+        font-size: 14px;
+        color: var(--wfs-secondary);
+        font-weight: 400;
       }
 
       .wfs-popup__status dd {
-        font-size: 12px;
+        font-size: 14px;
         font-weight: 600;
         text-align: right;
         font-variant-numeric: tabular-nums;
@@ -121,32 +135,28 @@
       }
 
       /* --- Main toggle ------------------------------------------------------ */
+      /* Primary Notion Blue button: 4px radius, subtle scale on press. */
       .wfs-popup__toggle {
-        margin-top: 14px;
+        margin-top: 16px;
         width: 100%;
-        padding: 12px 16px;
+        padding: 10px 16px;
         font: inherit;
-        font-size: 13px;
-        font-weight: 700;
-        letter-spacing: 0.02em;
-        color: var(--wfs-bg);
+        font-size: 15px;
+        font-weight: 600;
+        color: #ffffff;
         background: var(--wfs-accent);
-        border: none;
-        border-radius: 10px;
+        border: 1px solid transparent;
+        border-radius: 4px;
         cursor: pointer;
-        box-shadow: var(--wfs-glow);
-        transition: background 160ms ease, transform 100ms ease,
-          box-shadow 160ms ease;
+        transition: background 160ms ease, transform 100ms ease;
       }
 
       .wfs-popup__toggle:hover:not(:disabled) {
         background: var(--wfs-accent-hover);
-        box-shadow: 0 0 28px rgba(232, 168, 56, 0.18);
       }
 
       .wfs-popup__toggle:active:not(:disabled) {
         transform: scale(0.97);
-        box-shadow: none;
       }
 
       .wfs-popup__toggle:focus-visible {
@@ -154,11 +164,11 @@
         box-shadow: var(--wfs-ring);
       }
 
+      /* Active state reads as a secondary (translucent) button. */
       .wfs-popup__toggle.is-active {
-        color: var(--wfs-accent);
+        color: var(--wfs-accent-text);
         background: var(--wfs-accent-dim);
-        box-shadow: none;
-        border: 1px solid rgba(232, 168, 56, 0.25);
+        border: 1px solid var(--wfs-border);
       }
 
       .wfs-popup__toggle.is-active:hover:not(:disabled) {
@@ -171,11 +181,9 @@
 
       .wfs-popup__toggle:disabled {
         color: var(--wfs-muted);
-        background: var(--wfs-surface);
-        border: 1px solid var(--wfs-border);
-        box-shadow: none;
+        background: rgba(0, 0, 0, 0.05);
+        border: 1px solid transparent;
         cursor: not-allowed;
-        opacity: 0.7;
       }
 
       /* --- Settings --------------------------------------------------------- */
@@ -186,11 +194,10 @@
       }
 
       #settings h2 {
-        font-size: 10px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
-        color: var(--wfs-muted);
+        font-size: 12px;
+        font-weight: 600;
+        letter-spacing: 0.125px;
+        color: var(--wfs-secondary);
         margin-bottom: 10px;
       }
 
@@ -199,20 +206,20 @@
         align-items: flex-start;
         gap: 10px;
         cursor: pointer;
-        font-size: 12.5px;
-        line-height: 1.45;
+        font-size: 14px;
+        line-height: 1.5;
         padding: 6px 8px;
-        border-radius: 8px;
+        border-radius: 5px;
         margin: -6px -8px;
         transition: background 140ms ease;
       }
 
       #settings label:hover {
-        background: var(--wfs-accent-dim);
+        background: var(--wfs-alt);
       }
 
       #settings input[type="checkbox"] {
-        margin-top: 2px;
+        margin-top: 3px;
         width: 15px;
         height: 15px;
         accent-color: var(--wfs-accent);
@@ -226,19 +233,20 @@
         border-radius: 3px;
       }
 
+      /* Notion links: near-accent color, underline on hover. */
       #settings a {
         color: var(--wfs-accent);
         text-decoration: none;
-        font-weight: 600;
-        font-size: 12.5px;
+        font-weight: 500;
+        font-size: 14px;
         padding: 4px 8px;
         margin: -4px -8px;
-        border-radius: 6px;
+        border-radius: 5px;
         transition: background 140ms ease, color 140ms ease;
       }
 
       #settings a:hover {
-        background: var(--wfs-accent-dim);
+        text-decoration: underline;
         color: var(--wfs-accent-hover);
       }
 
@@ -249,9 +257,9 @@
 
       #settings p {
         margin: 6px 0 0;
-        font-size: 11.5px;
-        color: var(--wfs-muted);
-        line-height: 1.5;
+        font-size: 12px;
+        color: var(--wfs-secondary);
+        line-height: 1.43;
       }
 
       /* --- Feedback regions ------------------------------------------------- */
@@ -267,6 +275,7 @@
       [data-wfs-error]:not(:empty) {
         padding: 9px 12px;
         font-weight: 500;
+        border: 1px solid var(--wfs-border);
       }
 
       [data-wfs-status]:not(:empty) {

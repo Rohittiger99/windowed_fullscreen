@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="asset-size" content="1280x800" />
+    <title>Windowed Fullscreen — the button</title>
+    <link rel="stylesheet" href="./_base.css" />
+    <style>
+      .stage {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 40px 60px 0;
+        text-align: center;
+      }
+
+      h1 {
+        margin-top: 12px;
+        font-size: 46px;
+      }
+
+      .sub {
+        margin-top: 12px;
+      }
+
+      /**
+       * The strip and its pointers share one fixed-width group, so a pointer's
+       * `left: %` is a percentage of the strip itself. Letting either stretch to
+       * the stage width would silently shift every label.
+       */
+      .zoomgroup {
+        width: 1120px;
+        margin-top: 28px;
+      }
+
+      .zoom {
+        position: relative;
+        width: 100%;
+        border-radius: 14px;
+        border: 1px solid var(--border-strong);
+        box-shadow: 0 24px 60px -18px rgba(0, 0, 0, 0.8);
+        overflow: hidden;
+      }
+
+      .pointers {
+        position: relative;
+        width: 100%;
+        height: 62px;
+        margin-top: 4px;
+        text-align: left;
+      }
+
+      .pointer {
+        position: absolute;
+        top: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+        transform: translateX(-50%);
+      }
+
+      .pointer .stem {
+        width: 3px;
+        height: 20px;
+        background: var(--secondary);
+      }
+
+      .pointer.is-ours .stem {
+        background: var(--amber);
+      }
+
+      .pointer .name {
+        font-size: 22px;
+        font-weight: 700;
+        white-space: nowrap;
+      }
+
+      .pointer.is-ours .name {
+        color: var(--amber);
+      }
+
+      .facts {
+        display: flex;
+        gap: 46px;
+        margin-top: 34px;
+        text-align: left;
+      }
+
+      .facts .check {
+        max-width: 30ch;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stage">
+      <div class="eyebrow"><span class="dot"></span>Built into the player</div>
+      <h1>Right where you already look.</h1>
+      <p class="sub">One extra button, in YouTube's own style.</p>
+
+      <div class="zoomgroup">
+        <!-- Crop: right end of the control bar, magnified ~3.7x. -->
+        <div class="zoom">
+          <div
+            class="shot"
+            style="--w: 1120px; --cx: 0.84; --cy: 0.878; --cw: 0.16; --ch: 0.072"
+          >
+            <img src="../raw/after-windowed.png" alt="" />
+          </div>
+        </div>
+
+        <div class="pointers">
+          <div class="pointer" style="left: 65.25%">
+            <span class="stem"></span>
+            <span class="name">YouTube's fullscreen</span>
+          </div>
+          <div class="pointer is-ours" style="left: 84.75%">
+            <span class="stem"></span>
+            <span class="name">Windowed fullscreen</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="facts">
+        <div class="check">
+          <svg class="mark" viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="10" cy="10" r="9" fill="rgba(43,143,238,0.16)" />
+            <path
+              d="M5.6 10.3l2.9 2.9L14.4 7.3"
+              fill="none"
+              stroke="#2b8fee"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          <span>Still there on the next video</span>
+        </div>
+        <div class="check">
+          <svg class="mark" viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="10" cy="10" r="9" fill="rgba(43,143,238,0.16)" />
+            <path
+              d="M5.6 10.3l2.9 2.9L14.4 7.3"
+              fill="none"
+              stroke="#2b8fee"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          <span>The blue line means it's on</span>
+        </div>
+        <div class="check">
+          <svg class="mark" viewBox="0 0 20 20" aria-hidden="true">
+            <circle cx="10" cy="10" r="9" fill="rgba(43,143,238,0.16)" />
+            <path
+              d="M5.6 10.3l2.9 2.9L14.4 7.3"
+              fill="none"
+              stroke="#2b8fee"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            />
+          </svg>
+          <span>Press again to go back</span>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

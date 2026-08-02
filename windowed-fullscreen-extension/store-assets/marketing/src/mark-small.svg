@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Windowed Fullscreen brand mark — small variant for the 48px, 32px and 16px
+  icons.
+
+  Same identity and the same measured palette as mark.svg, with everything that
+  cannot survive rasterization removed and everything that remains scaled up to
+  compensate.
+
+  What goes, and why, at a 16px canvas:
+    - three tabs -> one navy band. Each tab would be under a pixel wide.
+    - the title pill -> gone. 12/526 of the height is a sixth of a pixel.
+    - the five bar glyphs -> gone. They would land on a strip 1.9px tall.
+    - four arrows -> two. Four heads inside a 16px square turn to mush.
+
+  It is also deliberately less landscape than mark.svg: 560x526 (aspect 1.065)
+  against the full mark's 642x526 (1.2205). A square canvas is filled by the
+  shorter side, so trimming the width buys real pixels of height — at 16px this
+  renders 16x15 where the full mark's aspect would give 16x13. The small icon is
+  not a scaled copy of the large one; optical sizing like this is normal practice.
+-->
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  viewBox="0 0 560 526"
+  width="560"
+  height="526"
+>
+  <defs>
+    <clipPath id="wfsWindowSmall">
+      <rect x="16" y="16" width="528" height="494" rx="30" />
+    </clipPath>
+  </defs>
+
+  <!-- A heavier keyline than the full mark carries: at these sizes it is the only
+       thing separating the icon from the toolbar behind it, in either theme. -->
+  <rect width="560" height="526" rx="44" fill="#000000" />
+
+  <g clip-path="url(#wfsWindowSmall)">
+    <!-- The tab strip, reduced to the band it reads as at this size and given
+         enough depth to survive a 16px render. -->
+    <rect x="16" y="16" width="528" height="74" fill="#032578" />
+
+    <!-- The viewport. -->
+    <rect x="16" y="90" width="528" height="340" fill="#e9191e" />
+
+    <!--
+      One diagonal expand gesture, centred at (280, 260) with a half-extent of
+      130. The stroke is 62 — 24% of the block, heavier again than the full mark's
+      19%, because at a 16px canvas this resolves to under two pixels and anything
+      thinner stops registering at all.
+    -->
+    <g
+      fill="none"
+      stroke="#ffffff"
+      stroke-width="62"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+    >
+      <!-- Toward the top-left. -->
+      <path d="M246 226 L150 130" />
+      <path d="M150 200 L150 130 L220 130" />
+      <!-- Toward the bottom-right. -->
+      <path d="M314 294 L410 390" />
+      <path d="M340 390 L410 390 L410 320" />
+    </g>
+
+    <!-- The bar that stays. -->
+    <rect x="16" y="430" width="528" height="14" fill="#000000" />
+    <rect x="16" y="444" width="528" height="66" fill="#878686" />
+  </g>
+</svg>
