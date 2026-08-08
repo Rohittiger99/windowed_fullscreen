@@ -14,7 +14,7 @@
 // - The service worker is declared `"type": "module"`, and the options/popup
 //   pages load their bundles with `<script type="module">`, so those are ESM.
 import { build, context } from "esbuild";
-import { cp, mkdir, rm } from "node:fs/promises";
+import { cp, mkdir, readFile, rm } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -62,7 +62,27 @@ async function copyStatic() {
   await cp(resolve(root, "public"), outdir, { recursive: true });
 }
 
+/**
+ * `manifest.json` is the single source of truth for the version — it is what
+ * Chrome reads and what `scripts/package.mjs` names the upload zip from. Two
+ * files carrying the number means they can drift, so a mismatch fails the build
+ * rather than shipping a zip labelled with the wrong release.
+ */
+async function assertVersionsAgree() {
+  const [manifest, pkg] = await Promise.all([
+    readFile(resolve(root, "manifest.json"), "utf8").then(JSON.parse),
+    readFile(resolve(root, "package.json"), "utf8").then(JSON.parse),
+  ]);
+  if (manifest.version !== pkg.version) {
+    throw new Error(
+      `version mismatch: manifest.json is ${manifest.version}, package.json is ${pkg.version}. ` +
+        `manifest.json is authoritative — copy its version into package.json.`,
+    );
+  }
+}
+
 async function run() {
+  await assertVersionsAgree();
   await rm(outdir, { recursive: true, force: true });
   await mkdir(outdir, { recursive: true });
 

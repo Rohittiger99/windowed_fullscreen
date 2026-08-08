@@ -1,6 +1,7 @@
 {
   "name": "windowed-fullscreen-extension",
-  "version": "1.0.0",
+  "//version": "Mirrors manifest.json, which is authoritative. scripts/build.mjs fails if they drift.",
+  "version": "1.1.0",
   "description": "Chromium MV3 extension that adds a windowed-fullscreen viewing mode to YouTube.",
   "private": true,
   "type": "module",
@@ -9,6 +10,9 @@
     "build:watch": "node scripts/build.mjs --watch",
     "package": "node scripts/build.mjs && node scripts/package.mjs",
     "typecheck": "tsc --noEmit",
+    "test": "node --test \"tests/*.test.ts\"",
+    "verify:live": "node scripts/verify-live.mjs",
+    "check": "npm run typecheck && npm test && npm run build",
     "store:assets": "node store-assets/marketing/render.mjs && node store-assets/marketing/verify.mjs",
     "store:icons": "node store-assets/marketing/icons.mjs"
   },

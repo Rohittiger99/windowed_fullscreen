@@ -16,13 +16,31 @@
  *
  * ARCHITECTURE
  * The one rule worth preserving: site-specific DOM knowledge lives ONLY in a
- * site adapter (§3). The controller (§6) and injector (§7) drive the mode using
+ * site adapter (§3). The controller (§7) and injector (§8) drive the mode using
  * nothing but a `SiteDescriptor`, so supporting another video site means adding
  * one adapter to `ADAPTERS` — no changes anywhere else.
  *
  * The mode never calls the browser Fullscreen API. It expands the player with
  * CSS instead, which is the whole point: the window stays an ordinary maximized
  * window, so the tab strip and taskbar remain visible.
+ *
+ * INVARIANTS
+ * These are load-bearing. Each one is here because breaking it produced a real
+ * bug; `AGENTS.md` records the symptom alongside each.
+ *
+ *  1. No top-level side effects. The four `start*` entry points are the only
+ *     way anything runs, which is what makes the per-surface tree-shaking safe.
+ *  2. Site selectors and site CSS live only in §3. Nothing in §5–§12 may name a
+ *     YouTube element.
+ *  3. `enter()` captures a restore record BEFORE its first mutation, and
+ *     `exit()` reproduces the pre-entry state exactly, including properties
+ *     that were never set.
+ *  4. Windowed mode and browser fullscreen are alternatives, never layers.
+ *     Exactly one is active at a time; the handoff lives in §9.
+ *  5. Every retry loop and every contest with the site is bounded, and gives up
+ *     with a diagnostic rather than spinning.
+ *  6. Nothing leaves the device. No network calls, no `chrome.storage.sync`,
+ *     no analytics.
  *
  * SECTIONS
  *   §1  Types
@@ -78,6 +96,13 @@ export interface SiteAdapter {
 
   /** Locate the player root to expand. Null until it exists. */
   findPlayer(doc: Document): Element | null;
+  /**
+   * Locate the block holding everything the page shows below the video —
+   * channel row, subscribe, like, description, comments — so it can be docked
+   * beside the player instead. Null when the site has no such block, or it has
+   * not rendered yet, which simply leaves the side panel unavailable.
+   */
+  findSideContent(doc: Document): Element | null;
   /** Locate the control cluster holding the native fullscreen button. */
   findControlsContainer(doc: Document): Element | null;
   /** Locate the site's own fullscreen button; we inject ours next to it. */
@@ -91,6 +116,12 @@ export interface SiteAdapter {
   getSiteChromeSelectors(mode: WindowedMode): string[];
   /** Classes added to the player while active, removed on exit. */
   getActivePlayerClasses(): string[];
+  /**
+   * Whether the site strips those classes off the player again, so the core
+   * should watch and re-apply them. Sites that leave them alone say false and
+   * pay for no observer.
+   */
+  keepsActivePlayerClasses(): boolean;
   /** Site CSS, scoped under `html.wfs-windowed`, injected once. */
   getActiveModeCss(): string;
   /** Watch for in-page video changes. Returns a disposer. */
@@ -101,12 +132,19 @@ export interface SiteAdapter {
 export interface SiteDescriptor {
   player: Element;
   nativeFullscreenButton: Element;
+  /**
+   * The below-video block the side panel docks, or null when the site has none.
+   * Null only disables the panel; the mode itself does not depend on it.
+   */
+  sideContent: Element | null;
   /** Chrome elements that resolved; may be empty. */
   siteChromeElements: Element[];
   /** Selectors that matched nothing, recorded for diagnostics. */
   missingChromeSelectors: string[];
   /** Classes to add to the player while active. */
   activePlayerClasses: string[];
+  /** Whether those classes need re-applying when the site strips them. */
+  keepPlayerClasses: boolean;
 }
 
 /**
@@ -162,6 +200,7 @@ const DIAGNOSTIC = {
   absentChrome: "absent-chrome",
   reRenderAbandoned: "re-render-abandoned",
   playerLost: "player-lost",
+  playerClassContested: "player-class-contested",
   toggleUnreachable: "toggle-unreachable",
 } as const;
 
@@ -189,6 +228,16 @@ const YT = {
   controls: ".ytp-right-controls",
   /** YouTube's own fullscreen control. */
   nativeFullscreen: ".ytp-fullscreen-button",
+  /**
+   * The below-video block the side panel docks: title, channel row with
+   * subscribe and likes, description, and comments all live inside `#below`.
+   *
+   * Deliberately has no fallback. The panel is laid out by the CSS below, which
+   * names this same element; a JS fallback the stylesheet did not know about
+   * would find a panel host it could not style. If YouTube ever renames it, the
+   * panel button simply stops appearing, which is a clean way to fail.
+   */
+  sideContent: "ytd-watch-flexy #below",
   /**
    * Page chrome hidden in every mode. Both masthead forms are listed so a
    * missing one is simply tolerated. The masthead is fixed to the top of the
@@ -292,9 +341,15 @@ html.wfs-windowed #secondary-inner {
    functional without leaving windowed mode.
 
    The technique: translate the masthead up by its own height, make it
-   transparent, and reverse both on :hover. A transparent trigger zone (the
-   ::before of the container) extends the hover target down a few px so the
-   transition begins the moment the cursor touches the top edge.
+   transparent, and reverse both when the controller reports the pointer near
+   the top edge by adding .wfs-reveal-chrome to the html element.
+
+   That proximity is tracked in JS rather than with a CSS hover zone on purpose.
+   A transparent trigger element covering the top strip has to accept pointer
+   events to detect the hover, and anything that accepts pointer events also
+   swallows clicks meant for what is underneath — which on a watch page is the
+   top of YouTube's guide drawer, i.e. Home and Shorts. There is no CSS state
+   that both senses the cursor and lets clicks through.
    ------------------------------------------------------------------------- */
 html.wfs-windowed #masthead-container {
   position: fixed !important;
@@ -311,28 +366,12 @@ html.wfs-windowed #masthead-container {
   transition: transform 0.08s ease-out, opacity 0.08s ease-out !important;
 }
 
-/* Invisible trigger zone: extends the hover target below the translated-away
-   masthead. 80px — well into the video area — so the cursor doesn't need to
-   reach the very top edge to activate. pointer-events is auto so it detects
-   the hover, but once the masthead is revealed the zone becomes pass-through
-   so it doesn't block clicks on content beneath (like the sidebar's Home and
-   Shorts links). */
-html.wfs-windowed #masthead-container::before {
-  content: "" !important;
-  position: absolute !important;
-  top: 100% !important;
-  left: 0 !important;
-  right: 0 !important;
-  height: 80px !important;
-  pointer-events: auto !important;
-}
-
-/* Once revealed, the trigger zone's job is done — stop intercepting clicks. */
-html.wfs-windowed #masthead-container:hover::before,
-html.wfs-windowed #masthead-container:focus-within::before {
-  pointer-events: none !important;
-}
-
+/* Revealed. .wfs-reveal-chrome is the controller's pointer-proximity signal;
+   :hover keeps the bar out while the cursor is on it even if a pointermove is
+   missed (an iframe under the cursor, say), and :focus-within covers tabbing in
+   from the keyboard. Nothing here overlays the page, so the guide drawer's
+   links stay clickable at every point in the transition. */
+html.wfs-windowed.wfs-reveal-chrome #masthead-container,
 html.wfs-windowed #masthead-container:hover,
 html.wfs-windowed #masthead-container:focus-within {
   transform: translateY(0) !important;
@@ -349,6 +388,7 @@ html.wfs-windowed #masthead {
 }
 
 /* A subtle dark scrim behind the masthead so it reads over bright video. */
+html.wfs-windowed.wfs-reveal-chrome #masthead-container #masthead,
 html.wfs-windowed #masthead-container:hover #masthead,
 html.wfs-windowed #masthead-container:focus-within #masthead {
   background: rgba(15, 15, 15, 0.92) !important;
@@ -363,10 +403,11 @@ html.wfs-windowed #masthead-container:focus-within #masthead {
 /* Cover mode also hides the page's own content: nothing below the player is
    reachable while the player owns the viewport, so leaving it rendered only
    risks it showing through. Scrollable mode keeps all of it — that is the
-   entire feature. */
-html.wfs-windowed:not(.wfs-scrollable) ytd-watch-metadata,
-html.wfs-windowed:not(.wfs-scrollable) #above-the-fold,
-html.wfs-windowed:not(.wfs-scrollable) #comments {
+   entire feature. The side panel is the third case: it puts this same content
+   beside the video, so when it is open cover mode must stop hiding it. */
+html.wfs-windowed:not(.wfs-scrollable):not(.wfs-side-panel) ytd-watch-metadata,
+html.wfs-windowed:not(.wfs-scrollable):not(.wfs-side-panel) #above-the-fold,
+html.wfs-windowed:not(.wfs-scrollable):not(.wfs-side-panel) #comments {
   display: none !important;
 }
 
@@ -460,22 +501,168 @@ html.wfs-windowed.wfs-scrollable ytd-watch-flexy #below {
 
 /* #below's own children carry YouTube's column width, sized for the narrow
    watch-page layout. Without releasing them the section stretches but the
-   metadata and comments inside stay in a centred column. */
-html.wfs-windowed.wfs-scrollable ytd-watch-flexy #below > *,
-html.wfs-windowed.wfs-scrollable ytd-watch-metadata,
-html.wfs-windowed.wfs-scrollable #above-the-fold,
-html.wfs-windowed.wfs-scrollable #bottom-row,
-html.wfs-windowed.wfs-scrollable #description,
-html.wfs-windowed.wfs-scrollable #comments,
-html.wfs-windowed.wfs-scrollable #comments > #sections,
-html.wfs-windowed.wfs-scrollable ytd-comments,
-html.wfs-windowed.wfs-scrollable ytd-item-section-renderer#sections {
+   metadata and comments inside stay in a centred column.
+
+   The side panel needs the same release for the opposite reason: that column is
+   far wider than the panel, so left alone the text would overflow it. One list
+   serves both via :is(), whose specificity is that of a single class either
+   way. */
+html.wfs-windowed:is(.wfs-scrollable, .wfs-side-panel) ytd-watch-flexy #below > *,
+html.wfs-windowed:is(.wfs-scrollable, .wfs-side-panel) ytd-watch-metadata,
+html.wfs-windowed:is(.wfs-scrollable, .wfs-side-panel) #above-the-fold,
+html.wfs-windowed:is(.wfs-scrollable, .wfs-side-panel) #bottom-row,
+html.wfs-windowed:is(.wfs-scrollable, .wfs-side-panel) #description,
+html.wfs-windowed:is(.wfs-scrollable, .wfs-side-panel) #comments,
+html.wfs-windowed:is(.wfs-scrollable, .wfs-side-panel) #comments > #sections,
+html.wfs-windowed:is(.wfs-scrollable, .wfs-side-panel) ytd-comments,
+html.wfs-windowed:is(.wfs-scrollable, .wfs-side-panel) ytd-item-section-renderer#sections {
   width: auto !important;
   min-width: 0 !important;
   max-width: none !important;
   margin-left: 0 !important;
   margin-right: 0 !important;
 }
+
+/* -------------------------------------------------------------------------
+   Side panel.
+
+   The comment button docks everything that normally sits below the video —
+   channel row, subscribe, like, description, comments — into a column beside
+   the player, in both modes. Beside, never above: the panel takes width away
+   from the video rather than overlaying it, so nothing covers the picture.
+
+   The panel IS the page's own #below element, positioned rather than moved.
+   Re-parenting it into the player would be the other way to do this, and it is
+   the reason live-stream chat is out of scope for now: #chat lives in a
+   different container (#secondary). Leaving #below where YouTube put it means
+   Polymer keeps owning it — the like button, subscribe, comment sorting, and
+   lazy comment continuations all keep working, and exit needs to undo nothing
+   but a class.
+
+   position: fixed rather than a flex column next to the player, because in
+   cover mode the player is itself fixed to the viewport, and because
+   #primary-inner has other children (merch shelves, donation shelves) that
+   would join a flex row uninvited.
+   ------------------------------------------------------------------------- */
+html.wfs-windowed.wfs-side-panel {
+  /* Wide enough for a comment thread, capped so the video keeps the stage. This
+     is a border-box width: the panel's own padding comes out of it, which is
+     what keeps it flush with the space the player gives back. */
+  --wfs-panel-width: clamp(320px, 26vw, 440px);
+  --wfs-panel-pad: 16px;
+}
+
+/* Browser fullscreen belongs to YouTube: it sets display:none on #columns, the
+   two-column container the panel lives inside, so the panel cannot render there
+   at all — and YouTube ships its own fullscreen comments drawer anyway.
+
+   The mode stands down completely when fullscreen begins, which is a JS job
+   (§9) since it has inline styles to restore. This rule covers the few frames
+   before that runs: the site measures its fullscreen layout during exactly that
+   window, and a player still holding a panel-sized gap is how it ends up
+   picking its smallest control bar. Reserving no width keeps that measurement
+   honest. Matches whether the site fullscreens the document element (YouTube
+   does today) or an element inside it. */
+html.wfs-windowed.wfs-side-panel:is(:fullscreen, :has(:fullscreen)) {
+  --wfs-panel-width: 0px;
+  /* Padding too, or a zero-width panel is still a padding-wide strip. */
+  --wfs-panel-pad: 0px;
+}
+
+/* Cover mode: the player is already fixed, so the panel's width is given back on
+   the right edge and the two insets size it.
+
+   Deliberately NOT width: calc(100vw - var(--wfs-panel-width)). 100vw includes
+   the vertical scrollbar; the panel is positioned against the viewport's inner
+   edge, which excludes it. Whenever the page had a scrollbar the two disagreed
+   by exactly its width, and the panel sat on top of the right end of the control
+   bar. Sizing from left/right instead means both boxes are measured against the
+   same edge, so they cannot drift apart. */
+html.wfs-windowed.wfs-side-panel:not(.wfs-scrollable) #movie_player,
+html.wfs-windowed.wfs-side-panel:not(.wfs-scrollable) .html5-video-player {
+  left: 0 !important;
+  right: var(--wfs-panel-width) !important;
+  width: auto !important;
+  max-width: none !important;
+}
+
+/* Scrollable mode: the player is a block in normal flow, so it is narrowed
+   instead. Percentages, not vw — this mode keeps a vertical scrollbar. */
+html.wfs-windowed.wfs-side-panel.wfs-scrollable #movie_player,
+html.wfs-windowed.wfs-side-panel.wfs-scrollable .html5-video-player {
+  width: calc(100% - var(--wfs-panel-width)) !important;
+  max-width: calc(100% - var(--wfs-panel-width)) !important;
+}
+
+/* The dock itself. Both modes get identical geometry; the selector is written
+   twice so it outranks the scrollable-mode rules for #below regardless of the
+   order they appear in. */
+html.wfs-windowed.wfs-side-panel:not(.wfs-scrollable) ytd-watch-flexy #below,
+html.wfs-windowed.wfs-side-panel.wfs-scrollable ytd-watch-flexy #below {
+  display: block !important;
+  /* #below is content-box on YouTube, so without this the padding is ADDED to
+     the width and the panel ends up 32px wider than the strip the player gave
+     back — overhanging the video and swallowing the right end of the control
+     bar, which is where the fullscreen and extension buttons live. */
+  box-sizing: border-box !important;
+  position: fixed !important;
+  top: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  left: auto !important;
+  width: var(--wfs-panel-width) !important;
+  min-width: 0 !important;
+  max-width: var(--wfs-panel-width) !important;
+  height: auto !important;
+  margin: 0 !important;
+  padding: var(--wfs-panel-pad) var(--wfs-panel-pad) 96px !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+  /* Keep a flick at the end of the comment list from scrolling the page. */
+  overscroll-behavior: contain !important;
+  /* Above the player, which reaches the maximum z-index in cover mode. */
+  z-index: 2147483647 !important;
+  background: var(--yt-spec-base-background, #0f0f0f) !important;
+  box-shadow: -1px 0 0 0 rgba(255, 255, 255, 0.12) !important;
+}
+
+/* Cover mode hides #comments with an inline style, and the metadata block is
+   hidden by the rule above; both have to come back for the panel. */
+html.wfs-windowed.wfs-side-panel ytd-watch-metadata,
+html.wfs-windowed.wfs-side-panel #above-the-fold,
+html.wfs-windowed.wfs-side-panel #comments {
+  display: block !important;
+  visibility: visible !important;
+}
+
+/* A fixed element anchors to the nearest ancestor with a transform, filter, or
+   paint containment rather than to the viewport. YouTube sets none of these
+   today, but the panel silently landing in the wrong place is a bad failure, so
+   the chain between <html> and #below is neutralised. */
+html.wfs-windowed.wfs-side-panel ytd-app,
+html.wfs-windowed.wfs-side-panel #content,
+html.wfs-windowed.wfs-side-panel #page-manager,
+html.wfs-windowed.wfs-side-panel ytd-watch-flexy,
+html.wfs-windowed.wfs-side-panel ytd-watch-flexy #columns,
+html.wfs-windowed.wfs-side-panel ytd-watch-flexy #primary,
+html.wfs-windowed.wfs-side-panel ytd-watch-flexy #primary-inner {
+  transform: none !important;
+  filter: none !important;
+  perspective: none !important;
+  contain: none !important;
+  content-visibility: visible !important;
+}
+
+/* The comment box's own sticky header would otherwise stick to the viewport
+   top, behind the masthead, instead of to the panel. */
+html.wfs-windowed.wfs-side-panel #comments #header {
+  position: static !important;
+}
+
+/* The masthead reveals over the top of the panel on hover, the same way it
+   reveals over the top of the video. Nudging the panel's padding to compensate
+   would shift the text mid-read, so it does not: the bar is transient, and the
+   panel scrolls under it. */
 `;
 
 /**
@@ -534,6 +721,10 @@ const youtubeAdapter: SiteAdapter = {
     return doc.querySelector(YT.player) ?? doc.querySelector(YT.playerFallback);
   },
 
+  findSideContent(doc) {
+    return doc.querySelector(YT.sideContent);
+  },
+
   findControlsContainer(doc) {
     return doc.querySelector(YT.controls);
   },
@@ -557,6 +748,18 @@ const youtubeAdapter: SiteAdapter = {
    */
   getActivePlayerClasses() {
     return ["ytp-big-mode"];
+  },
+
+  /**
+   * YouTube removes `ytp-big-mode` again whenever it recomputes its own player
+   * layout — reliably on entering or leaving native fullscreen, and whenever it
+   * decides the player is not fullscreen-sized (which, once the side panel has
+   * narrowed it, it is not). Losing the class shrinks the control bar from 72px
+   * to 59px, the buttons from 48px to 40px, and the timestamp from 16px to 14px
+   * mid-session, so the core re-applies it.
+   */
+  keepsActivePlayerClasses() {
+    return true;
   },
 
   getActiveModeCss() {
@@ -764,6 +967,36 @@ const WINDOWED_CLASS = "wfs-windowed";
  */
 const SCROLLABLE_CLASS = "wfs-scrollable";
 
+/**
+ * Added to `<html>` while the pointer sits near the top edge of the viewport, so
+ * an adapter can reveal the site's top chrome (on YouTube, the masthead) without
+ * the extension knowing what that chrome is.
+ *
+ * Tracked in JS because the CSS alternative — a transparent hover zone laid over
+ * the top strip — must accept pointer events to sense the cursor, and therefore
+ * eats clicks aimed at whatever is beneath it.
+ */
+const REVEAL_CLASS = "wfs-reveal-chrome";
+
+/**
+ * Reveal below this many CSS px from the top, hide past
+ * {@link REVEAL_HIDE_ZONE_PX}. The gap is hysteresis: a single threshold makes
+ * the bar flutter when the cursor rests on the boundary. The hide band is deep
+ * enough to clear a revealed masthead, so travelling from the top edge into the
+ * page never re-triggers.
+ */
+const REVEAL_ZONE_PX = 80;
+const REVEAL_HIDE_ZONE_PX = 120;
+
+/**
+ * Added to `<html>` while the side panel is docked, so the adapter's stylesheet
+ * narrows the player and positions the site's below-video content beside it.
+ *
+ * Only ever set while the mode is active: the panel layout is expressed entirely
+ * in rules nested under {@link WINDOWED_CLASS}.
+ */
+const PANEL_CLASS = "wfs-side-panel";
+
 /** Attribute marking our injected button. */
 const BUTTON_MARKER_ATTR = "data-wfs-button";
 
@@ -844,6 +1077,14 @@ const MAX_Z_INDEX = "2147483647";
  * site's own debounced layout settling.
  */
 const REFLOW_NUDGE_DELAYS_MS = [0, 60, 250, 600] as const;
+
+/**
+ * How many times one session will re-apply a player class the site removed.
+ * Generous enough for the handful of removals a real session produces (each
+ * fullscreen transition costs one), small enough that a site determined to strip
+ * them cannot be fought indefinitely.
+ */
+const MAX_CLASS_REASSERTIONS = 50;
 
 /**
  * Inline player properties the controller mutates. Kebab-case so
@@ -953,9 +1194,22 @@ export class WindowedFullscreenController {
   private descriptor: SiteDescriptor | null = null;
   private snapshot: LayoutSnapshot | null = null;
   private button: Element | null = null;
+  private panelButton: Element | null = null;
+  /**
+   * Whether the side panel is docked. Session state, not a preference: entering
+   * the mode always starts with the video alone, and exiting closes the panel.
+   */
+  private panelOpen = false;
 
   private escapeHandler: ((e: KeyboardEvent) => void) | null = null;
+  private pointerHandler: ((e: PointerEvent) => void) | null = null;
+  private pointerOutHandler: ((e: PointerEvent) => void) | null = null;
+  /** Mirrors {@link REVEAL_CLASS}, so a move only touches the DOM on a change. */
+  private revealing = false;
   private playerWatcher: MutationObserver | null = null;
+  private playerClassWatcher: MutationObserver | null = null;
+  /** Bounds the re-apply loop if the site insists on removing the classes. */
+  private classReassertions = 0;
   /** Only the classes we actually added, so exit removes exactly those. */
   private addedPlayerClasses: string[] = [];
   private reflowTimers: number[] = [];
@@ -983,6 +1237,42 @@ export class WindowedFullscreenController {
   setButton(button: Element | null): void {
     this.button = button;
     this.applyButtonState(this.active);
+  }
+
+  /** Same contract as {@link setButton}, for the side-panel toggle. */
+  setPanelButton(button: Element | null): void {
+    this.panelButton = button;
+    this.applyPanelButtonState(this.panelOpen);
+  }
+
+  /** Whether the side panel is currently docked. */
+  get isPanelOpen(): boolean {
+    return this.active && this.panelOpen;
+  }
+
+  /**
+   * Dock or undock the side panel. Refused — silently, changing nothing — while
+   * the mode is off or when the site had no below-video content to dock, since
+   * every panel rule is nested under the active-mode class.
+   */
+  setPanelOpen(open: boolean): boolean {
+    if (!this.active) return false;
+    if (open && !this.descriptor?.sideContent) return false;
+
+    if (open === this.panelOpen) return true;
+
+    this.panelOpen = open;
+    this.doc.documentElement.classList.toggle(PANEL_CLASS, open);
+    this.applyPanelButtonState(open);
+    // The player just changed width, and YouTube derives its control-bar
+    // geometry from that in JS — the same reason entry and exit nudge it.
+    this.scheduleReflowNudge();
+    return true;
+  }
+
+  /** Flip the side panel. */
+  togglePanel(): boolean {
+    return this.setPanelOpen(!this.panelOpen);
   }
 
   /** Enter the mode. Returns false when it refused, having changed nothing. */
@@ -1043,7 +1333,11 @@ export class WindowedFullscreenController {
     this.active = true;
     this.applyButtonState(true);
     this.registerEscape();
+    this.startRevealTracking();
     this.startPlayerWatcher(descriptor.player);
+    if (descriptor.keepPlayerClasses && this.addedPlayerClasses.length > 0) {
+      this.startPlayerClassWatcher(descriptor.player);
+    }
 
     // 7. In scrollable mode the player only fills the screen when the page is at
     //    the top, so start there however far down the reader had scrolled. Exit
@@ -1058,6 +1352,10 @@ export class WindowedFullscreenController {
   /** Exit the mode, restoring the captured pre-entry state. No-op when inactive. */
   exit(): void {
     if (!this.active) return;
+
+    // Stop watching before restoring: the class watcher's whole job is to undo
+    // removals of the classes the next few lines deliberately remove.
+    this.stopPlayerWatcher();
 
     const { snapshot, descriptor } = this;
     if (snapshot && descriptor) {
@@ -1086,7 +1384,13 @@ export class WindowedFullscreenController {
     }
 
     this.unregisterEscape();
-    this.stopPlayerWatcher();
+    this.stopRevealTracking();
+
+    // The panel's layout is nested under the active-mode class, so it cannot
+    // outlive the session; undock it rather than leaving a stale class behind.
+    this.panelOpen = false;
+    this.doc.documentElement.classList.remove(PANEL_CLASS);
+    this.applyPanelButtonState(false);
 
     this.active = false;
     this.descriptor = null;
@@ -1117,11 +1421,23 @@ export class WindowedFullscreenController {
     this.button.classList.toggle(BUTTON_ACTIVE_CLASS, engaged);
   }
 
+  /** Reflect the panel state on the panel button. */
+  private applyPanelButtonState(engaged: boolean): void {
+    if (!this.panelButton) return;
+    this.panelButton.setAttribute("aria-pressed", engaged ? "true" : "false");
+    this.panelButton.classList.toggle(BUTTON_ACTIVE_CLASS, engaged);
+  }
+
   /** Exit on Escape. Capturing, so the site cannot swallow the key first. */
   private registerEscape(): void {
     if (this.escapeHandler) return;
     this.escapeHandler = (e: KeyboardEvent): void => {
-      if (e.key === "Escape" && this.active) this.exit();
+      if (e.key !== "Escape" || !this.active) return;
+      // Dismiss one layer at a time: the panel first, the mode second. Escaping
+      // straight out of both would take the video with the comments the reader
+      // was only trying to close.
+      if (this.panelOpen) this.setPanelOpen(false);
+      else this.exit();
     };
     this.doc.addEventListener("keydown", this.escapeHandler as EventListener, true);
   }
@@ -1130,6 +1446,57 @@ export class WindowedFullscreenController {
     if (!this.escapeHandler) return;
     this.doc.removeEventListener("keydown", this.escapeHandler as EventListener, true);
     this.escapeHandler = null;
+  }
+
+  /**
+   * Toggle {@link REVEAL_CLASS} from the pointer's distance to the top edge, so
+   * the adapter's stylesheet can slide the site's top chrome into view.
+   *
+   * Listeners are passive and non-capturing, and the handler does no layout
+   * reads — it compares `clientY` against two constants and writes a class only
+   * when the state actually flips — so this costs nothing the page can feel.
+   */
+  private startRevealTracking(): void {
+    if (this.pointerHandler) return;
+
+    this.pointerHandler = (e: PointerEvent): void => {
+      if (!this.active) return;
+      // Ignore touch: there is no hover to sense, and a tap near the top edge
+      // would otherwise leave the bar stuck open.
+      if (e.pointerType === "touch") return;
+      const y = e.clientY;
+      this.setRevealing(this.revealing ? y <= REVEAL_HIDE_ZONE_PX : y <= REVEAL_ZONE_PX);
+    };
+    // The pointer leaving the document (into browser chrome, another window)
+    // produces no further moves, so hide explicitly rather than staying open.
+    this.pointerOutHandler = (e: PointerEvent): void => {
+      if (e.relatedTarget === null) this.setRevealing(false);
+    };
+
+    this.doc.addEventListener("pointermove", this.pointerHandler as EventListener, {
+      passive: true,
+    });
+    this.doc.addEventListener("pointerout", this.pointerOutHandler as EventListener, {
+      passive: true,
+    });
+  }
+
+  private stopRevealTracking(): void {
+    if (this.pointerHandler) {
+      this.doc.removeEventListener("pointermove", this.pointerHandler as EventListener);
+      this.pointerHandler = null;
+    }
+    if (this.pointerOutHandler) {
+      this.doc.removeEventListener("pointerout", this.pointerOutHandler as EventListener);
+      this.pointerOutHandler = null;
+    }
+    this.setRevealing(false);
+  }
+
+  private setRevealing(revealing: boolean): void {
+    if (revealing === this.revealing) return;
+    this.revealing = revealing;
+    this.doc.documentElement.classList.toggle(REVEAL_CLASS, revealing);
   }
 
   /**
@@ -1157,9 +1524,47 @@ export class WindowedFullscreenController {
     this.playerWatcher.observe(root, { childList: true });
   }
 
+  /**
+   * Re-apply the classes we added whenever the site strips them off the player.
+   *
+   * The site owns that attribute too, so this is a contest rather than a fix:
+   * bounded at {@link MAX_CLASS_REASSERTIONS} re-applications per session, after
+   * which the mode gives up and says so, rather than trading class writes with
+   * the page forever.
+   *
+   * Re-adding cannot recurse: the observer fires again on our own write, sees
+   * nothing missing, and does nothing.
+   */
+  private startPlayerClassWatcher(player: Element): void {
+    if (this.playerClassWatcher || typeof MutationObserver === "undefined") return;
+
+    this.classReassertions = 0;
+    this.playerClassWatcher = new MutationObserver(() => {
+      if (!this.active) return;
+      const missing = this.addedPlayerClasses.filter((cls) => !player.classList.contains(cls));
+      if (missing.length === 0) return;
+
+      if (this.classReassertions >= MAX_CLASS_REASSERTIONS) {
+        this.playerClassWatcher?.disconnect();
+        this.playerClassWatcher = null;
+        warn(DIAGNOSTIC.playerClassContested, "Site keeps removing our player classes; giving up.", {
+          classes: missing,
+          reassertions: this.classReassertions,
+        });
+        return;
+      }
+
+      this.classReassertions += 1;
+      player.classList.add(...missing);
+    });
+    this.playerClassWatcher.observe(player, { attributes: true, attributeFilter: ["class"] });
+  }
+
   private stopPlayerWatcher(): void {
     this.playerWatcher?.disconnect();
     this.playerWatcher = null;
+    this.playerClassWatcher?.disconnect();
+    this.playerClassWatcher = null;
   }
 
   /**
@@ -1199,6 +1604,37 @@ const BUTTON_LABEL = "Windowed fullscreen";
 /** Used only if the native control somehow already carries {@link BUTTON_LABEL}. */
 const BUTTON_LABEL_FALLBACK = "Windowed fullscreen (extension)";
 
+/** Accessible name for the side-panel toggle. */
+const PANEL_BUTTON_LABEL = "Comments and video info";
+
+/**
+ * The controls we inject, in on-screen order starting immediately to the right
+ * of the site's own fullscreen button. The value doubles as the marker
+ * attribute's value, which is how a re-render is de-duplicated per control.
+ */
+const BUTTON_ROLES = ["mode", "panel"] as const;
+
+type ButtonRole = (typeof BUTTON_ROLES)[number];
+
+/** Everything the injector needs to render and wire one control. */
+interface ButtonSpec {
+  readonly role: ButtonRole;
+  /** Accessible name and tooltip. */
+  readonly label: string;
+  /** Used instead of `label` if the native control already carries that name. */
+  readonly fallbackLabel?: string;
+  /** Build the glyph. Called once per injected element. */
+  buildIcon(doc: Document): Element;
+  /** Invoked on click. */
+  onActivate(): void;
+  /**
+   * Whether the control applies to this page at all. A control that reports
+   * false is not injected, and is removed if it was — the side-panel toggle uses
+   * this so it never appears on a page with nothing to dock.
+   */
+  isAvailable?(): boolean;
+}
+
 /** Debounce applied to mutation-driven re-verification. */
 const DEBOUNCE_MS = 100;
 
@@ -1216,6 +1652,119 @@ const RE_RENDER_TIMEOUT_MS = 30_000;
 /** Outcome of one {@link ButtonInjector.ensureButton} call. */
 type EnsureResult = "injected" | "present" | "no-target";
 
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/**
+ * An empty 36×36 icon canvas, matching the coordinate system video control bars
+ * conventionally use. Built with DOM calls rather than `innerHTML` so pages
+ * enforcing Trusted Types (YouTube does) cannot block it.
+ */
+function createIconSvg(doc: Document): Element {
+  const svg = doc.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("viewBox", "0 0 36 36");
+  svg.setAttribute("width", "24");
+  svg.setAttribute("height", "24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  return svg;
+}
+
+/** Append one SVG shape with the given attributes. */
+function appendShape(
+  doc: Document,
+  svg: Element,
+  tag: string,
+  attrs: Record<string, string>,
+): void {
+  const shape = doc.createElementNS(SVG_NS, tag);
+  for (const [name, value] of Object.entries(attrs)) shape.setAttribute(name, value);
+  svg.appendChild(shape);
+}
+
+/** A framed rectangle suggesting a video filling a window. */
+function buildModeIcon(doc: Document): Element {
+  const svg = createIconSvg(doc);
+  appendShape(doc, svg, "rect", {
+    x: "7",
+    y: "9",
+    width: "22",
+    height: "18",
+    rx: "1.5",
+    fill: "none",
+    stroke: "#ffffff",
+    "stroke-width": "2",
+  });
+  appendShape(doc, svg, "rect", {
+    x: "10",
+    y: "12.5",
+    width: "16",
+    height: "11",
+    rx: "1",
+    fill: "#ffffff",
+  });
+  return svg;
+}
+
+/** A speech bubble with two lines of text: comments and video info. */
+function buildPanelIcon(doc: Document): Element {
+  const svg = createIconSvg(doc);
+  appendShape(doc, svg, "rect", {
+    x: "7",
+    y: "8",
+    width: "22",
+    height: "16",
+    rx: "3",
+    fill: "none",
+    stroke: "#ffffff",
+    "stroke-width": "2",
+  });
+  // The tail, drawn from the bubble's lower edge down and back up.
+  appendShape(doc, svg, "path", {
+    d: "M13 23v6l6-6",
+    fill: "none",
+    stroke: "#ffffff",
+    "stroke-width": "2",
+    "stroke-linejoin": "round",
+  });
+  appendShape(doc, svg, "rect", {
+    x: "11",
+    y: "12.5",
+    width: "14",
+    height: "2",
+    rx: "1",
+    fill: "#ffffff",
+  });
+  appendShape(doc, svg, "rect", {
+    x: "11",
+    y: "17",
+    width: "9",
+    height: "2",
+    rx: "1",
+    fill: "#ffffff",
+  });
+  return svg;
+}
+
+/**
+ * The direct child of `container` that contains `el`, or `el` itself when it is
+ * already a direct child (or not inside `container` at all).
+ *
+ * Used to place our controls AFTER the cluster the site's own control sits in,
+ * rather than inside it. YouTube groups its right-hand buttons in
+ * `.ytp-right-controls-right`, a flex box sized to exactly three 48px slots.
+ * Injecting into that cluster does not widen it — it makes YouTube drop one of
+ * its own controls (the cast button was the casualty) and squeeze the rest.
+ * Anchoring outside the cluster lets the container grow instead, which is what
+ * it is already styled to do.
+ */
+function outermostChildOf(container: Element, el: Element): Element {
+  let current: Element = el;
+  while (current.parentElement && current.parentElement !== container) {
+    current = current.parentElement;
+  }
+  return current.parentElement === container ? current : el;
+}
+
 /** Attributes an element uses to advertise its accessible name. */
 function accessibleName(el: Element): string {
   const label = el.getAttribute("aria-label")?.trim();
@@ -1226,13 +1775,13 @@ function accessibleName(el: Element): string {
 }
 
 /**
- * Keeps exactly one windowed-fullscreen button next to the site's native
- * fullscreen control, and keeps it there as the site re-renders.
+ * Keeps exactly one of each injected control next to the site's native
+ * fullscreen control, and keeps them there as the site re-renders.
  *
  * Two bounded loops guard against the site never cooperating, so neither can
  * spin forever:
  *
- *  - **Initial detection.** Retries `ensureButton` up to
+ *  - **Initial detection.** Retries `ensureButtons` up to
  *    {@link MAX_DETECTION_ATTEMPTS} times. If the player or native control never
  *    appear, it logs which one was missing and stops, leaving the page untouched.
  *  - **Re-render after removal.** If the site deletes our button while the mode
@@ -1243,12 +1792,12 @@ function accessibleName(el: Element): string {
 export class ButtonInjector {
   private readonly adapter: SiteAdapter;
   private readonly doc: Document;
-  private readonly onToggle: () => void;
-  private readonly onButtonChange: (button: Element | null) => void;
+  private readonly specs: readonly ButtonSpec[];
+  private readonly onButtonChange: (role: ButtonRole, button: Element | null) => void;
   private readonly isModeActive: () => boolean;
 
-  /** The button we own, or null when none is injected. */
-  private current: Element | null = null;
+  /** The buttons we own, keyed by role. A role is absent while not injected. */
+  private readonly buttons = new Map<ButtonRole, Element>();
   /** Buttons already click-wired, so we never double-wire an adopted element. */
   private readonly wired = new WeakSet<Element>();
   private readonly clickHandler: (e: Event) => void;
@@ -1272,21 +1821,24 @@ export class ButtonInjector {
   constructor(options: {
     adapter: SiteAdapter;
     document: Document;
-    /** Invoked when the button is clicked. */
-    onToggle: () => void;
-    /** Invoked whenever the owned button element changes, so state can follow it. */
-    onButtonChange: (button: Element | null) => void;
+    /** The controls to keep injected, in on-screen order. */
+    buttons: readonly ButtonSpec[];
+    /** Invoked whenever an owned button element changes, so state can follow it. */
+    onButtonChange: (role: ButtonRole, button: Element | null) => void;
     /** The re-render loop only runs while the mode is inactive. */
     isModeActive: () => boolean;
   }) {
     this.adapter = options.adapter;
     this.doc = options.document;
-    this.onToggle = options.onToggle;
+    this.specs = options.buttons;
     this.onButtonChange = options.onButtonChange;
     this.isModeActive = options.isModeActive;
+    // One delegated handler for every control: the element carries its own role,
+    // so the click routes without a closure per button.
     this.clickHandler = (e: Event): void => {
       e.preventDefault();
-      this.onToggle();
+      const role = (e.currentTarget as Element).getAttribute(BUTTON_MARKER_ATTR);
+      this.specs.find((spec) => spec.role === role)?.onActivate();
     };
   }
 
@@ -1310,7 +1862,7 @@ export class ButtonInjector {
     this.runDetection();
   }
 
-  /** Stop watching, dispose hooks, and remove our button. */
+  /** Stop watching, dispose hooks, and remove our buttons. */
   stop(): void {
     this.started = false;
     this.detectionDone = true;
@@ -1325,52 +1877,109 @@ export class ButtonInjector {
     this.disposeVideoChange?.();
     this.disposeVideoChange = null;
 
-    if (this.current) {
-      this.current.removeEventListener("click", this.clickHandler);
-      this.current.remove();
-      this.current = null;
-      this.onButtonChange(null);
+    for (const [role, button] of this.buttons) {
+      button.removeEventListener("click", this.clickHandler);
+      button.remove();
+      this.onButtonChange(role, null);
     }
+    this.buttons.clear();
   }
 
   /**
    * Idempotently guarantee exactly one correctly placed, correctly labelled
-   * button. Safe to call any number of times. The native control is read but
-   * never modified.
+   * element per control. Safe to call any number of times. The native control is
+   * read but never modified.
    */
-  ensureButton(): EnsureResult {
+  ensureButtons(): EnsureResult {
     const container = this.adapter.findControlsContainer(this.doc);
     const native = this.adapter.findNativeFullscreenButton(this.doc);
     // No render target yet: leave the page exactly as it is.
     if (!container || !native) return "no-target";
 
-    // De-duplicate, preferring the instance we already own.
-    const marked = Array.from(container.querySelectorAll(`[${BUTTON_MARKER_ATTR}]`));
-    let kept: Element | null = null;
-    if (marked.length > 0) {
-      kept = (this.current && marked.includes(this.current) && this.current) || marked[0];
-      for (const el of marked) {
-        if (el !== kept) el.remove();
+    // Sweep markers we do not recognise — a control left behind by an earlier
+    // version of the extension, which used a different marker value.
+    for (const el of Array.from(container.querySelectorAll(`[${BUTTON_MARKER_ATTR}]`))) {
+      const role = el.getAttribute(BUTTON_MARKER_ATTR) as ButtonRole | null;
+      if (!role || !BUTTON_ROLES.includes(role)) el.remove();
+    }
+
+    let created = false;
+    // Each control is placed after the previous one, so `specs` order is
+    // on-screen order, beginning just past the site's own fullscreen control —
+    // past the cluster that holds it, not inside it. See `outermostChildOf`.
+    let anchor: Element = outermostChildOf(container, native);
+
+    for (const spec of this.specs) {
+      const marked = Array.from(
+        container.querySelectorAll(`[${BUTTON_MARKER_ATTR}="${spec.role}"]`),
+      );
+      const owned = this.buttons.get(spec.role) ?? null;
+
+      // Not applicable to this page: withdraw the control if it is present.
+      if (spec.isAvailable && !spec.isAvailable()) {
+        for (const el of marked) el.remove();
+        if (owned) {
+          this.buttons.delete(spec.role);
+          this.onButtonChange(spec.role, null);
+        }
+        continue;
       }
-    }
 
-    const created = kept === null;
-    const button = kept ?? this.createButton(native);
+      // De-duplicate, preferring the instance we already own.
+      let kept: Element | null = null;
+      if (marked.length > 0) {
+        kept = (owned && marked.includes(owned) && owned) || marked[0];
+        for (const el of marked) {
+          if (el !== kept) el.remove();
+        }
+      }
 
-    // Re-position if the site moved it away from the native control.
-    if (native.nextSibling !== button) native.after(button);
+      const button = kept ?? this.createButton(spec, native);
+      if (kept === null) created = true;
 
-    if (!this.wired.has(button)) {
-      button.addEventListener("click", this.clickHandler);
-      this.wired.add(button);
-    }
+      // Re-position if the site moved it away from where we put it.
+      if (anchor.nextSibling !== button) anchor.after(button);
 
-    if (this.current !== button) {
-      this.current = button;
-      this.onButtonChange(button);
+      if (!this.wired.has(button)) {
+        button.addEventListener("click", this.clickHandler);
+        this.wired.add(button);
+      }
+
+      if (owned !== button) {
+        this.buttons.set(spec.role, button);
+        this.onButtonChange(spec.role, button);
+      }
+
+      anchor = button;
     }
 
     return created ? "injected" : "present";
+  }
+
+  /**
+   * True when a control that applies to this page has still not been injected.
+   *
+   * Availability can resolve later than the control bar does — the side-panel
+   * toggle waits on the page's below-video block, which mounts on its own
+   * schedule. Without this the detection loop would stop as soon as the FIRST
+   * control landed, and the panel toggle would only ever appear if some later
+   * mutation happened to trigger a re-check. On a paused player, that could be
+   * never.
+   */
+  private hasPendingButton(): boolean {
+    for (const spec of this.specs) {
+      if (spec.isAvailable && !spec.isAvailable()) continue;
+      if (!this.buttons.has(spec.role)) return true;
+    }
+    return false;
+  }
+
+  /** True when a control we own has been torn out of the DOM. */
+  private hasDetachedButton(): boolean {
+    for (const button of this.buttons.values()) {
+      if (!isConnected(button)) return true;
+    }
+    return false;
   }
 
   /**
@@ -1378,17 +1987,17 @@ export class ButtonInjector {
    * make it actually visible inside a typical video control bar; without them it
    * has no size and no glyph.
    */
-  private createButton(native: Element): Element {
+  private createButton(spec: ButtonSpec, native: Element): Element {
     const btn = this.doc.createElement("button");
-    btn.setAttribute(BUTTON_MARKER_ATTR, "");
+    btn.setAttribute(BUTTON_MARKER_ATTR, spec.role);
     btn.setAttribute("type", "button");
     btn.className = "wfs-button";
 
     // Keep our accessible name distinct from the native control's.
     const label =
-      accessibleName(native).toLowerCase() === BUTTON_LABEL.toLowerCase()
-        ? BUTTON_LABEL_FALLBACK
-        : BUTTON_LABEL;
+      spec.fallbackLabel && accessibleName(native).toLowerCase() === spec.label.toLowerCase()
+        ? spec.fallbackLabel
+        : spec.label;
     btn.setAttribute("aria-label", label);
     btn.setAttribute("title", label);
     btn.setAttribute("aria-pressed", "false");
@@ -1409,53 +2018,8 @@ export class ButtonInjector {
       "box-sizing:border-box",
     ].join(";");
 
-    btn.appendChild(this.buildIcon());
+    btn.appendChild(spec.buildIcon(this.doc));
     return btn;
-  }
-
-  /**
-   * The glyph: a framed rectangle suggesting a video filling a window. Built
-   * with DOM calls rather than `innerHTML` so Trusted Types pages cannot block
-   * it.
-   */
-  private buildIcon(): Element {
-    const ns = "http://www.w3.org/2000/svg";
-    const svg = this.doc.createElementNS(ns, "svg");
-    svg.setAttribute("viewBox", "0 0 36 36");
-    svg.setAttribute("width", "24");
-    svg.setAttribute("height", "24");
-    svg.setAttribute("aria-hidden", "true");
-    svg.setAttribute("focusable", "false");
-
-    const frame = this.doc.createElementNS(ns, "rect");
-    for (const [name, value] of Object.entries({
-      x: "7",
-      y: "9",
-      width: "22",
-      height: "18",
-      rx: "1.5",
-      fill: "none",
-      stroke: "#ffffff",
-      "stroke-width": "2",
-    })) {
-      frame.setAttribute(name, value);
-    }
-    svg.appendChild(frame);
-
-    const fill = this.doc.createElementNS(ns, "rect");
-    for (const [name, value] of Object.entries({
-      x: "10",
-      y: "12.5",
-      width: "16",
-      height: "11",
-      rx: "1",
-      fill: "#ffffff",
-    })) {
-      fill.setAttribute(name, value);
-    }
-    svg.appendChild(fill);
-
-    return svg;
   }
 
   /**
@@ -1474,7 +2038,7 @@ export class ButtonInjector {
     this.observer = new MutationObserver(() => {
       // The site removed our button while the mode is off: hand off to the
       // bounded re-render loop rather than re-injecting immediately.
-      if (this.current && !isConnected(this.current) && !this.isModeActive()) {
+      if (this.hasDetachedButton() && !this.isModeActive()) {
         this.startReRenderLoop();
         return;
       }
@@ -1488,7 +2052,7 @@ export class ButtonInjector {
     this.clearTimer("debounceTimer");
     this.debounceTimer = this.setTimer(() => {
       this.debounceTimer = null;
-      this.ensureButton();
+      this.ensureButtons();
     }, DEBOUNCE_MS);
   }
 
@@ -1497,7 +2061,9 @@ export class ButtonInjector {
     if (this.detectionDone || !this.started) return;
 
     this.detectionAttempts += 1;
-    if (this.ensureButton() !== "no-target") {
+    // Keep going while a control that applies here is still missing, not merely
+    // until the first one lands.
+    if (this.ensureButtons() !== "no-target" && !this.hasPendingButton()) {
       this.detectionDone = true;
       return;
     }
@@ -1509,13 +2075,16 @@ export class ButtonInjector {
       const context = { siteId: this.adapter.siteId, attempts: this.detectionAttempts };
       if (!this.adapter.findPlayer(this.doc)) {
         warn(DIAGNOSTIC.playerNotFound, "Video player not found; leaving the page unchanged.", context);
-      } else {
+      } else if (!this.adapter.findNativeFullscreenButton(this.doc)) {
         warn(
           DIAGNOSTIC.nativeControlNotFound,
           "Native fullscreen control not found; leaving the page unchanged.",
           context,
         );
       }
+      // Otherwise the bar was found and at least one control is placed; a spec
+      // whose availability never resolved is not an error, and the mutation
+      // observer still picks it up if the page mounts it later.
       return;
     }
 
@@ -1541,8 +2110,8 @@ export class ButtonInjector {
       this.stopReRenderLoop();
       return;
     }
-    // Something else already restored it.
-    if (this.current && isConnected(this.current)) {
+    // Something else already restored them.
+    if (this.buttons.size > 0 && !this.hasDetachedButton()) {
       this.stopReRenderLoop();
       return;
     }
@@ -1551,7 +2120,7 @@ export class ButtonInjector {
       this.adapter.findControlsContainer(this.doc) && this.adapter.findNativeFullscreenButton(this.doc);
 
     if (hasTarget) {
-      if (this.ensureButton() !== "no-target") this.reRenderAttempts += 1;
+      if (this.ensureButtons() !== "no-target") this.reRenderAttempts += 1;
       // The observer restarts this loop if the site removes the button again,
       // up to the attempt bound.
       this.stopReRenderLoop();
@@ -1626,11 +2195,31 @@ function resolveDescriptor(
   return {
     player,
     nativeFullscreenButton,
+    // Optional: a page with nothing to dock is still perfectly usable, it just
+    // has no side panel.
+    sideContent: adapter.findSideContent(doc),
     siteChromeElements,
     missingChromeSelectors,
     activePlayerClasses: adapter.getActivePlayerClasses(),
+    keepPlayerClasses: adapter.keepsActivePlayerClasses(),
   };
 }
+
+/**
+ * How long to keep trying to re-enter the mode after browser fullscreen ends.
+ * Six attempts at 250ms covers the site rebuilding its player without leaving a
+ * pending timer around long enough to matter.
+ */
+const RESUME_RETRY_MS = 250;
+const MAX_RESUME_ATTEMPTS = 6;
+
+/**
+ * How long a pre-emptive stand-down waits for fullscreen to actually arrive
+ * before putting the mode back. Covers a click or keypress that turned out not
+ * to request fullscreen at all, so a misread never leaves the reader stranded on
+ * a plain page.
+ */
+const FULLSCREEN_GRACE_MS = 900;
 
 /** A live content-script session for one supported site. */
 interface Session {
@@ -1663,6 +2252,8 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
 
   const maybeAutoApply = (): void => {
     if (!prefResolved || !autoApplyEnabled || autoApplied || controller.isActive) return;
+    // Never arrive on top of browser fullscreen; see the fullscreen handoff below.
+    if (doc.fullscreenElement) return;
     const descriptor = resolve();
     // Not ready yet; the next button change re-triggers this.
     if (!descriptor) return;
@@ -1677,9 +2268,206 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
    */
   const reapplyMode = (): void => {
     if (!controller.isActive || controller.mode === modeFor(prefs)) return;
+    // Exit closes the panel, so carry the reader's choice across the swap.
+    const panelWasOpen = controller.isPanelOpen;
     controller.exit();
     const descriptor = resolve();
-    if (descriptor) controller.enter(descriptor);
+    if (descriptor && controller.enter(descriptor) && panelWasOpen) {
+      controller.setPanelOpen(true);
+    }
+  };
+
+  // -------------------------------------------------------------------------
+  // Browser fullscreen handoff.
+  //
+  // Windowed mode and browser fullscreen are ALTERNATIVES, never layers. Both
+  // want to own the player's box: the mode pins it with fixed positioning, a
+  // maximum z-index, a locked page scroll, and hidden site chrome, while
+  // fullscreen expects the site's own layout to be intact so it can measure and
+  // rebuild it. Left both on, they fight — the site ends up measuring a player
+  // it does not control, picks its smallest control bar, and the result is the
+  // mangled player that made this necessary.
+  //
+  // So exactly one is ever active. Entering fullscreen stands the mode fully
+  // down through the ordinary exit path, which restores the page byte for byte,
+  // and leaving fullscreen brings it back with the panel as it was. Pressing
+  // either button always does its own job:
+  //
+  //   fullscreen button, in windowed mode -> plain YouTube fullscreen
+  //   exit fullscreen                     -> back to windowed mode
+  //   windowed button, in fullscreen      -> leaves fullscreen, goes windowed
+  //   comment button, in fullscreen       -> leaves fullscreen, docks the panel
+  // -------------------------------------------------------------------------
+  let resumeAfterFullscreen = false;
+  let resumePanelAfterFullscreen = false;
+  let graceTimer: number | null = null;
+
+  const timers = (): { setTimeout: typeof setTimeout; clearTimeout: typeof clearTimeout } =>
+    (doc.defaultView ?? globalThis) as unknown as {
+      setTimeout: typeof setTimeout;
+      clearTimeout: typeof clearTimeout;
+    };
+
+  const clearGrace = (): void => {
+    if (graceTimer === null) return;
+    timers().clearTimeout(graceTimer);
+    graceTimer = null;
+  };
+
+  /**
+   * Stand the mode down for a fullscreen request that has NOT been made yet.
+   *
+   * Timing is the whole point. Reacting to `fullscreenchange` is too late: by
+   * then the browser is already fullscreen and the site has begun measuring its
+   * new layout — against a player still pinned by this extension. It caches that
+   * bogus size and renders its smallest control bar, which is the broken player.
+   * Running first, in the capture phase of the click or keypress that triggers
+   * the request, means the site only ever measures its own untouched layout.
+   *
+   * The grace timer is the safety net: if fullscreen never materialises, the mode
+   * comes straight back.
+   */
+  const standDownForFullscreen = (): void => {
+    if (!controller.isActive) return;
+    resumeAfterFullscreen = true;
+    resumePanelAfterFullscreen = controller.isPanelOpen;
+    controller.exit();
+
+    clearGrace();
+    graceTimer = timers().setTimeout(() => {
+      graceTimer = null;
+      if (doc.fullscreenElement || !resumeAfterFullscreen) return;
+      const panel = resumePanelAfterFullscreen;
+      resumeAfterFullscreen = false;
+      resumePanelAfterFullscreen = false;
+      resumeWindowed(panel, 0);
+    }, FULLSCREEN_GRACE_MS) as unknown as number;
+  };
+
+  /**
+   * Every way the site can be asked for fullscreen from the page: its own
+   * fullscreen button, a double-click on the player, and the `f` shortcut.
+   * Capturing, so we run before the site's handler on the same event.
+   * `fullscreenchange` still backs this up for any path not listed here.
+   */
+  const onPointerCapture = (e: Event): void => {
+    if (!controller.isActive || doc.fullscreenElement) return;
+    const target = e.target as Node | null;
+    if (!target) return;
+    const button = adapter.findNativeFullscreenButton(doc);
+    if (button?.contains(target)) {
+      standDownForFullscreen();
+      return;
+    }
+    if (e.type === "dblclick" && adapter.findPlayer(doc)?.contains(target)) {
+      standDownForFullscreen();
+    }
+  };
+
+  const onKeyCapture = (e: KeyboardEvent): void => {
+    if (!controller.isActive || doc.fullscreenElement) return;
+    if (e.key !== "f" && e.key !== "F") return;
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    // Not a shortcut while the reader is typing — in the search box, or in the
+    // comment box the side panel put on screen.
+    const focused = doc.activeElement as HTMLElement | null;
+    if (
+      focused &&
+      (focused.tagName === "INPUT" ||
+        focused.tagName === "TEXTAREA" ||
+        focused.isContentEditable ||
+        focused.getAttribute("contenteditable") === "true")
+    ) {
+      return;
+    }
+    standDownForFullscreen();
+  };
+
+  doc.addEventListener("click", onPointerCapture, true);
+  doc.addEventListener("dblclick", onPointerCapture, true);
+  doc.addEventListener("keydown", onKeyCapture as EventListener, true);
+
+  /** Leave fullscreen, having recorded what to restore once it ends. */
+  const leaveFullscreenFor = (panel: boolean): void => {
+    resumeAfterFullscreen = true;
+    resumePanelAfterFullscreen = resumePanelAfterFullscreen || panel;
+    try {
+      void doc.exitFullscreen?.()?.catch(() => {});
+    } catch {
+      // Refused: the page stays fullscreen and nothing was changed.
+    }
+  };
+
+  const onFullscreenChange = (): void => {
+    clearGrace();
+
+    if (doc.fullscreenElement) {
+      // Usually already handled by the pre-emptive stand-down above; this is the
+      // backstop for a request that came from somewhere else entirely.
+      if (!controller.isActive) return;
+      resumeAfterFullscreen = true;
+      resumePanelAfterFullscreen = controller.isPanelOpen;
+      controller.exit();
+      return;
+    }
+
+    if (!resumeAfterFullscreen) {
+      // Fullscreen ended without us having been in the picture.
+      maybeAutoApply();
+      return;
+    }
+    const panel = resumePanelAfterFullscreen;
+    resumeAfterFullscreen = false;
+    resumePanelAfterFullscreen = false;
+    resumeWindowed(panel, 0);
+  };
+
+  /**
+   * Come back after fullscreen, retrying briefly. Leaving fullscreen makes the
+   * site rebuild its player, so the first resolve can land in the gap where the
+   * control bar has not remounted — and silently dropping the reader back to a
+   * plain page is the one outcome this whole handoff exists to avoid.
+   */
+  function resumeWindowed(panel: boolean, attempt: number): void {
+    if (doc.fullscreenElement || controller.isActive) return;
+    const descriptor = resolve();
+    if (descriptor) {
+      if (controller.enter(descriptor) && panel) controller.setPanelOpen(true);
+      return;
+    }
+    if (attempt >= MAX_RESUME_ATTEMPTS) return;
+    (doc.defaultView ?? globalThis).setTimeout(
+      () => resumeWindowed(panel, attempt + 1),
+      RESUME_RETRY_MS,
+    );
+  }
+  doc.addEventListener("fullscreenchange", onFullscreenChange);
+
+  /** The windowed-fullscreen button, the popup, and the keyboard shortcut. */
+  const toggleMode = (): void => {
+    if (doc.fullscreenElement) {
+      leaveFullscreenFor(false);
+      return;
+    }
+    controller.toggle(resolve);
+  };
+
+  /**
+   * The comment button. Docking the panel only means anything inside the mode,
+   * so pressing it from a plain watch page enters the mode and docks in one go —
+   * otherwise the first press would appear to do nothing.
+   */
+  const togglePanel = (): void => {
+    if (doc.fullscreenElement) {
+      leaveFullscreenFor(true);
+      return;
+    }
+    if (controller.isActive) {
+      controller.togglePanel();
+      return;
+    }
+    const descriptor = resolve();
+    if (descriptor && controller.enter(descriptor)) controller.setPanelOpen(true);
   };
 
   // Toggling the mode in the popup while a video is open should change what is on
@@ -1693,8 +2481,28 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
   const injector = new ButtonInjector({
     adapter,
     document: doc,
-    onToggle: () => controller.toggle(resolve),
-    onButtonChange: (button) => {
+    buttons: [
+      {
+        role: "mode",
+        label: BUTTON_LABEL,
+        fallbackLabel: BUTTON_LABEL_FALLBACK,
+        buildIcon: buildModeIcon,
+        onActivate: toggleMode,
+      },
+      {
+        role: "panel",
+        label: PANEL_BUTTON_LABEL,
+        buildIcon: buildPanelIcon,
+        onActivate: togglePanel,
+        // Nothing to dock means nothing to offer.
+        isAvailable: () => adapter.findSideContent(doc) !== null,
+      },
+    ],
+    onButtonChange: (role, button) => {
+      if (role === "panel") {
+        controller.setPanelButton(button);
+        return;
+      }
       controller.setButton(button);
       // The button appearing is a good proxy for the player having loaded.
       maybeAutoApply();
@@ -1715,7 +2523,7 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
     handleMessage(message) {
       switch (message?.type) {
         case "TOGGLE":
-          controller.toggle(resolve);
+          toggleMode();
           return { ok: true, active: controller.isActive };
         case "GET_STATUS":
           return { ok: true, active: controller.isActive };
@@ -1725,6 +2533,12 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
     },
     stop() {
       disposePrefWatch();
+      doc.removeEventListener("fullscreenchange", onFullscreenChange);
+      doc.removeEventListener("click", onPointerCapture, true);
+      doc.removeEventListener("dblclick", onPointerCapture, true);
+      doc.removeEventListener("keydown", onKeyCapture as EventListener, true);
+      clearGrace();
+      resumeAfterFullscreen = false;
       injector.stop();
       if (controller.isActive) controller.exit();
       // Belt-and-suspenders: ensure no active-mode class lingers on <html> after
@@ -1732,7 +2546,12 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
       // while the mode was off). Without this, a leftover class from a prior
       // session could cause the hover-reveal masthead CSS to fire on pages that
       // are not in windowed mode (e.g. the YouTube home page after SPA nav).
-      doc.documentElement.classList.remove(WINDOWED_CLASS, SCROLLABLE_CLASS);
+      doc.documentElement.classList.remove(
+        WINDOWED_CLASS,
+        SCROLLABLE_CLASS,
+        PANEL_CLASS,
+        REVEAL_CLASS,
+      );
     },
   };
 }

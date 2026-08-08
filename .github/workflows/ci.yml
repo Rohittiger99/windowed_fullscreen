@@ -1,0 +1,52 @@
+# Gate for the extension: types, unit tests, and a build that actually produces
+# a loadable extension.
+#
+# `npm run verify:live` is deliberately absent. It drives a real YouTube page over
+# the DevTools protocol, so it needs a browser and a network and would fail for
+# reasons that have nothing to do with the change under test. Run it locally
+# before shipping anything that touches layout — see AGENTS.md.
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: windowed-fullscreen-extension
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # 22.18+ runs the TypeScript test files directly via type stripping,
+          # which is what keeps the test suite dependency-free.
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: windowed-fullscreen-extension/package-lock.json
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      # Also asserts manifest.json and package.json carry the same version.
+      - name: Build
+        run: npm run build
+
+      - name: Package
+        run: npm run package
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unpacked-extension
+          path: windowed-fullscreen-extension/extension
+          if-no-files-found: error

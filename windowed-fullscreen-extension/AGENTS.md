@@ -1,0 +1,228 @@
+# Working in this repo
+
+Read this before changing anything. It exists so you do not have to infer the
+design from the code, and so you do not re-introduce a bug that has already been
+fixed once.
+
+`README.md` is for users of the extension. This file is for whoever edits it.
+
+## What it is
+
+A Manifest V3 Chromium extension. It adds a **windowed-fullscreen** mode to
+YouTube: the player fills the browser window — the whole screen when the window
+is maximized — without ever calling the browser Fullscreen API, so the tab strip,
+clock, and taskbar stay visible.
+
+A second control docks everything below the video (channel, subscribe, likes,
+description, comments) into a column beside the player.
+
+## Where everything is
+
+```
+src/windowed-fullscreen.ts   ALL extension code, one sectioned file
+manifest.json                Extension identity. THE version source of truth
+public/                      Shipped static assets (icons, popup + options HTML)
+scripts/build.mjs            Bundles the source once per MV3 surface
+scripts/package.mjs          Zips the build for the Web Store
+scripts/verify-live.mjs      Layout regression check against real YouTube
+tests/                       Unit tests (node:test, no dependencies)
+extension/                   BUILD OUTPUT. Never edit; never commit
+release/                     The upload zip only
+store-assets/                Not shipped: listing copy, screenshots, tiles
+```
+
+All the code is in one file on purpose. `scripts/build.mjs` bundles it four
+times, synthesising a one-line entry per surface, and esbuild tree-shakes away
+what that surface cannot reach:
+
+| Surface | Entry point |
+| --- | --- |
+| Content script | `startContentScript()` |
+| Service worker | `startServiceWorker()` |
+| Options page | `startOptionsPage()` |
+| Toolbar popup | `startPopup()` |
+
+Navigate it by section marker — `§3`, `§7` — not by line number. The section
+index is in the file header.
+
+## Commands
+
+```bash
+npm install
+npm run typecheck     # tsc --noEmit. The primary gate
+npm test              # unit tests, no browser needed
+npm run build         # emits extension/
+npm run verify:live   # layout check against a real watch page (see below)
+npm run package       # build + release/windowed-fullscreen-v<version>.zip
+```
+
+Load the unpacked build at `chrome://extensions` → Developer mode → Load
+unpacked → select `extension/`.
+
+Before you hand work back: `npm run typecheck && npm test && npm run build`.
+
+## The invariants
+
+Every one of these was learned from a bug. Breaking one is a regression even if
+nothing appears to fail.
+
+**1. No top-level side effects.** The four `start*` functions are the only way
+anything runs. Add a side effect and every surface's bundle inflates with code it
+cannot use — the popup would start shipping content-script logic.
+
+**2. Site knowledge lives only in §3.** Every YouTube selector belongs to the
+`YT` object or `YT_ACTIVE_MODE_CSS`. The controller, injector, and content script
+work from a `SiteDescriptor` and must never name a site element. This is what
+keeps a YouTube redesign to one blast radius, and what makes a second site an
+additive change.
+
+**3. `enter()` snapshots before mutating; `exit()` restores exactly.** The
+snapshot records properties that were *unset* so they can be removed again rather
+than left at a computed value. If you add a mutation to `enter()`, add its
+capture to `LayoutSnapshot` in the same commit.
+
+**4. Windowed mode and browser fullscreen are alternatives, never layers.**
+Both want to own the player's box. With both applied, YouTube measures a player
+it does not control, caches a bogus size, and renders its smallest control bar —
+a squashed scrubber with the buttons crammed into a corner. §9 stands the mode
+fully down for fullscreen and brings it back afterwards.
+
+**5. Bounded loops only.** Detection, re-render, class re-assertion, and resume
+each have an attempt cap and emit a `DIAGNOSTIC` when they give up. Never add an
+unbounded retry or an observer that can fight the page forever.
+
+**6. Nothing leaves the device.** No network requests, no `chrome.storage.sync`
+(deliberately — sync would replicate settings through the user's browser
+account), no analytics. The privacy policy promises this.
+
+## Traps that have already bitten
+
+Do not undo these without reading why they are there.
+
+**`box-sizing` on the panel.** `#below` is `content-box` on YouTube, so a
+`width` plus padding renders wider than asked. The panel overhung the video and
+swallowed the right end of the control bar — including the fullscreen button.
+The dock rule sets `box-sizing: border-box`.
+
+**`100vw` versus a scrollbar.** `100vw` includes the vertical scrollbar; a fixed
+element at `right: 0` sits against the viewport's inner edge, which excludes it.
+Sizing the player with `calc(100vw - panel)` while positioning the panel at
+`right: 0` made them disagree by exactly the scrollbar width on any page that had
+one. Cover mode now sizes the player from its `left`/`right` insets instead. Do
+not reintroduce `vw` into that calculation.
+
+**Hover zones eat clicks.** The masthead reveal used to be a transparent
+pseudo-element stretched across the top of the page. Anything that accepts
+pointer events to sense the cursor also swallows clicks meant for what is
+underneath — in that case the top of YouTube's guide drawer, so Home and Shorts
+became unclickable. Cursor proximity is tracked in JS (`REVEAL_CLASS`) precisely
+because no CSS state both senses the cursor and lets clicks through.
+
+**Fullscreen must be pre-empted, not reacted to.** `fullscreenchange` fires
+*after* the browser is already fullscreen, which is after YouTube has started
+measuring. Standing down there is too late and produces the broken control bar.
+§9 stands down in the capture phase of the click, double-click, or `f` keypress
+that triggers the request, with `fullscreenchange` as a backstop and a grace
+timer to recover if fullscreen never arrives.
+
+**Never inject into the site's button cluster.** YouTube groups its right-hand
+controls in `.ytp-right-controls-right`, a flex box sized to an exact number of
+48px slots. Putting a button in there does not widen it — YouTube drops one of
+its own controls to make room (the cast button was the casualty) and squeezes the
+spacing of the rest. The injector anchors after the cluster instead, as a direct
+child of the controls container, which is styled `flex: 0 1 auto` and grows.
+`outermostChildOf` is what finds that anchor. `npm run verify:live` asserts both
+halves of this.
+
+**Controls can become available later than the control bar.** YouTube mounts
+`ytd-watch-flexy #below` several seconds *after* the player exists, so the
+side-panel toggle is not injectable on the first pass. The detection loop keeps
+running while any applicable control is still missing, rather than stopping at
+the first success — otherwise the toggle only appeared if some later mutation
+happened to trigger a re-check, which on a paused player could be never. Any new
+`ButtonSpec` with an `isAvailable` inherits this for free.
+
+**Do not hide an ancestor of the player.** `#movie_player` lives inside
+`#page-manager`. `display: none` on an ancestor takes the video with it — a
+`position: fixed` descendant is not spared. That produced a black screen. Only
+elements outside the player subtree may go in `chromeAlways` / `chromeCoverOnly`.
+
+**YouTube takes `ytp-big-mode` back.** It strips the class whenever it
+recomputes its player layout, which silently shrinks the control bar from 72px to
+59px and the buttons from 48px to 40px. The controller re-applies the classes it
+added, capped at `MAX_CLASS_REASSERTIONS`. If you find a way to own the control
+sizing outright, that contest can go away.
+
+**Letterboxing in windowed mode is correct.** A maximized window is
+proportionally wider than 16:9 because the browser chrome and taskbar take height
+and nothing takes width, so an aspect-preserving fit leaves bars at the sides.
+`object-fit: contain` is deliberate. `cover` would fill the window by cropping
+the top and bottom of every frame; that was considered and rejected.
+
+## How to make common changes
+
+**Add a video site.** Write a `SiteAdapter` in §3, add it to `ADAPTERS` in §4.
+Touch nothing else. The interface is the entire contract; `keepsActivePlayerClasses`
+returning false costs you nothing if the site leaves your classes alone.
+
+**Add a control to the player bar.** Add a `ButtonSpec` to the `buttons` array in
+`startSession` (§9) and a role to `BUTTON_ROLES` (§8). The injector handles
+de-duplication, placement, re-injection after re-render, and removal. Give it an
+`isAvailable` if it does not apply to every page.
+
+**Add a preference.** Extend `SitePrefs` and `DEFAULT_SITE_PREFS` (§5), then
+handle it in `normalizeSitePrefs` — check the new field independently so values
+written by an older version still read as valid instead of being discarded as
+corrupt. `setSitePrefs` takes a patch and merges, because the settings UI has one
+control per field and a whole-object write would reset the others.
+
+**Change the active-mode layout.** It is all in `YT_ACTIVE_MODE_CSS` (§3),
+scoped under `html.wfs-windowed`. `!important` is required throughout: YouTube
+sizes the player with inline styles from its own JS. Mode-specific rules key off
+`.wfs-scrollable`; panel rules off `.wfs-side-panel`. Watch specificity when
+overriding an existing rule — several rules deliberately repeat a selector with
+an extra `:not()` to win by class count rather than source order.
+
+## Verifying layout changes
+
+`npm test` covers preferences, URL matching, and the adapter registry. It cannot
+see layout, because layout only exists inside a real YouTube page.
+
+`npm run verify:live` fills that gap. It attaches to a Chrome instance over the
+DevTools protocol, injects the real content script into a watch page, clicks the
+actual buttons, and asserts the geometry invariants:
+
+- the panel's left edge sits exactly on the player's right edge (no overlap)
+- the control bar clears the panel
+- `ytp-big-mode` survives, so the control bar stays at its large size
+- entering fullscreen leaves no class or inline style of ours behind
+- leaving fullscreen restores the mode and the panel
+
+Run it before shipping any change to §3's CSS, the controller's geometry, or the
+fullscreen handoff. It needs a browser and a network, so it is not part of CI.
+
+## Style
+
+Match what is there. The house style is worth keeping:
+
+- Comments explain **why**, including approaches that failed and why they were
+  abandoned. A comment restating the code is noise; a comment recording a dead
+  end saves the next person a day.
+- Every magic number is a named constant with a comment justifying the value.
+- Diagnostics are stable codes in the `DIAGNOSTIC` map, written to the console
+  and nowhere else.
+- Prefer explicit over clever. Where a selector repeats itself to win on
+  specificity, say so rather than relying on file order silently.
+- British/American spelling: whatever the surrounding paragraph uses.
+
+## Not goals
+
+Say no to these, and say why:
+
+- **A feature suite.** This does one thing. Enhancer for YouTube already owns
+  the everything-app niche; competing there is unwinnable and dilutes the reason
+  someone installs this.
+- **Fullscreen features.** Browser fullscreen belongs to YouTube, including its
+  own comments drawer. See invariant 4.
+- **Cropping or stretching video** to avoid letterboxing.
+- **`chrome.storage.sync`, telemetry, or any network call.**

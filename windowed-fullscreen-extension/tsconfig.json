@@ -15,8 +15,14 @@
     "skipLibCheck": true,
     "isolatedModules": true,
     "verbatimModuleSyntax": true,
-    "noEmit": true
+    "noEmit": true,
+    // Tests import "../src/windowed-fullscreen.ts" with the extension spelled
+    // out, because Node's type stripping does no extension resolution. Safe here
+    // only because nothing is ever emitted from this config.
+    "allowImportingTsExtensions": true
   },
-  "include": ["src", "scripts"],
+  // `tests` is included so a type error in a test fails `npm run typecheck`
+  // rather than surfacing only when the suite runs.
+  "include": ["src", "scripts", "tests"],
   "exclude": ["node_modules", "extension", "store-assets"]
 }
