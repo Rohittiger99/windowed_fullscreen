@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Windowed Fullscreen",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Adds a windowed-fullscreen button next to YouTube's fullscreen control. The video fills the window; tabs and taskbar stay visible.",
   "minimum_chrome_version": "116",
   "homepage_url": "https://rohittiger.vercel.app/product/windowedfullscreen",

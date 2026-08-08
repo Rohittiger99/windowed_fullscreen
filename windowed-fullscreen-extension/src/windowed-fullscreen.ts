@@ -46,6 +46,18 @@
 // ===========================================================================
 
 /**
+ * How the expanded player relates to the rest of the page.
+ *
+ * - `cover` — the player is fixed to the viewport and the page cannot scroll.
+ *   Nothing but the video is reachable, which is the point.
+ * - `scrollable` — the player is a viewport-sized block at the top of the normal
+ *   document flow. It fills the screen on arrival, but scrolling continues past
+ *   it to the title, description, and comments, and scrolling back up returns to
+ *   the video. The browser Fullscreen API is not involved in either mode.
+ */
+export type WindowedMode = "cover" | "scrollable";
+
+/**
  * The only contract between the generic core and a site. The core uses nothing
  * beyond what this interface exposes.
  */
@@ -71,8 +83,12 @@ export interface SiteAdapter {
   /** Locate the site's own fullscreen button; we inject ours next to it. */
   findNativeFullscreenButton(doc: Document): Element | null;
 
-  /** Selectors for page chrome hidden on entry. Absent ones are tolerated. */
-  getSiteChromeSelectors(): string[];
+  /**
+   * Selectors for page chrome hidden on entry, for the mode being entered.
+   * Absent ones are tolerated. Scrollable mode deliberately hides less, since
+   * the page's own content below the player is the reason to use it.
+   */
+  getSiteChromeSelectors(mode: WindowedMode): string[];
   /** Classes added to the player while active, removed on exit. */
   getActivePlayerClasses(): string[];
   /** Site CSS, scoped under `html.wfs-windowed`, injected once. */
@@ -101,15 +117,30 @@ interface LayoutSnapshot {
   playerStyle: Record<string, string | null>;
   chrome: Array<{ element: Element; style: Record<string, string | null> }>;
   documentElementHadWindowedClass: boolean;
+  documentElementHadScrollableClass: boolean;
+  /**
+   * Scroll offset at the moment of entry. Both modes disturb it — cover mode
+   * locks scrolling, scrollable mode jumps to the top so the player is fully
+   * visible — so exit puts the reader back where they were.
+   */
+  scrollX: number;
+  scrollY: number;
 }
 
 /** Per-site preferences. */
 export interface SitePrefs {
   autoApply: boolean;
+  /** Use {@link WindowedMode} `scrollable` instead of `cover`. */
+  scrollable: boolean;
 }
 
 /** Documented defaults applied when nothing is stored. */
-export const DEFAULT_SITE_PREFS: SitePrefs = { autoApply: false };
+export const DEFAULT_SITE_PREFS: SitePrefs = { autoApply: false, scrollable: false };
+
+/** The mode a site's preferences select. */
+export function modeFor(prefs: SitePrefs): WindowedMode {
+  return prefs.scrollable ? "scrollable" : "cover";
+}
 
 /** Messages exchanged between the surfaces. */
 export type ExtMessage = { type: "TOGGLE" } | { type: "GET_STATUS" };
@@ -159,15 +190,22 @@ const YT = {
   /** YouTube's own fullscreen control. */
   nativeFullscreen: ".ytp-fullscreen-button",
   /**
-   * Page chrome hidden on entry. Both masthead forms are listed so a missing
-   * one is simply tolerated.
+   * Page chrome hidden in every mode. Both masthead forms are listed so a
+   * missing one is simply tolerated. The masthead is fixed to the top of the
+   * viewport, and the related-videos rail steals width the player wants, so
+   * neither belongs on screen in either mode.
    *
    * Only elements OUTSIDE the player subtree may appear here. `#movie_player`
    * lives inside `#page-manager`, so hiding an ancestor like that with
    * `display:none` would take the video with it — a `position:fixed` descendant
    * is not spared. That mistake produced a black screen.
    */
-  siteChrome: ["#masthead-container", "#masthead", "#secondary", "#comments"],
+  chromeAlways: ["#secondary"],
+  /**
+   * Additionally hidden in cover mode only. In scrollable mode these ARE the
+   * content the user scrolled down for, so they stay.
+   */
+  chromeCoverOnly: ["#comments"],
 } as const;
 
 /** Hosts treated as YouTube. */
@@ -180,9 +218,9 @@ const YT_HOSTS = new Set(["www.youtube.com", "youtube.com", "m.youtube.com"]);
  * styles from its own JS, and those beat ordinary rules.
  */
 const YT_ACTIVE_MODE_CSS = `
-/* The player fills the viewport and sits above all page chrome. */
-html.wfs-windowed #movie_player,
-html.wfs-windowed .html5-video-player {
+/* --- Cover mode: the player is pinned to the viewport, above all chrome. --- */
+html.wfs-windowed:not(.wfs-scrollable) #movie_player,
+html.wfs-windowed:not(.wfs-scrollable) .html5-video-player {
   position: fixed !important;
   top: 0 !important;
   left: 0 !important;
@@ -238,17 +276,205 @@ html.wfs-windowed .ytp-ce-element {
   display: none !important;
 }
 
-/* Safety net for page chrome, in case the player is not covering it. Every
-   selector here is a sibling of the player, never an ancestor, so none of this
-   can hide the video. */
-html.wfs-windowed ytd-watch-metadata,
-html.wfs-windowed #above-the-fold,
+/* Chrome hidden in BOTH modes. The related-videos rail competes for width, so
+   it goes in either mode. */
 html.wfs-windowed #secondary,
-html.wfs-windowed #secondary-inner,
-html.wfs-windowed #comments,
-html.wfs-windowed #masthead-container,
-html.wfs-windowed #masthead {
+html.wfs-windowed #secondary-inner {
   display: none !important;
+}
+
+/* -------------------------------------------------------------------------
+   Hover-to-reveal masthead.
+
+   Instead of removing the masthead entirely, we slide it off-screen and bring
+   it back when the cursor moves to the top edge. This keeps every stock
+   YouTube feature (hamburger menu, search, playlists, notifications) fully
+   functional without leaving windowed mode.
+
+   The technique: translate the masthead up by its own height, make it
+   transparent, and reverse both on :hover. A transparent trigger zone (the
+   ::before of the container) extends the hover target down a few px so the
+   transition begins the moment the cursor touches the top edge.
+   ------------------------------------------------------------------------- */
+html.wfs-windowed #masthead-container {
+  position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  /* Sit above the player, which has z-index 2147483647 in cover mode. */
+  z-index: 2147483648 !important;
+  transform: translateY(-100%) !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  /* Fast reveal (80ms in), slower hide (200ms out) so it doesn't vanish
+     while you're moving the cursor toward a link in the bar. */
+  transition: transform 0.08s ease-out, opacity 0.08s ease-out !important;
+}
+
+/* Invisible trigger zone: extends the hover target below the translated-away
+   masthead. 80px — well into the video area — so the cursor doesn't need to
+   reach the very top edge to activate. pointer-events is auto so it detects
+   the hover, but once the masthead is revealed the zone becomes pass-through
+   so it doesn't block clicks on content beneath (like the sidebar's Home and
+   Shorts links). */
+html.wfs-windowed #masthead-container::before {
+  content: "" !important;
+  position: absolute !important;
+  top: 100% !important;
+  left: 0 !important;
+  right: 0 !important;
+  height: 80px !important;
+  pointer-events: auto !important;
+}
+
+/* Once revealed, the trigger zone's job is done — stop intercepting clicks. */
+html.wfs-windowed #masthead-container:hover::before,
+html.wfs-windowed #masthead-container:focus-within::before {
+  pointer-events: none !important;
+}
+
+html.wfs-windowed #masthead-container:hover,
+html.wfs-windowed #masthead-container:focus-within {
+  transform: translateY(0) !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  /* Slightly slower on hide so the bar doesn't snap away mid-click. */
+  transition: transform 0.08s ease-out, opacity 0.08s ease-out !important;
+}
+
+/* The masthead itself must be visible and clickable once the container reveals. */
+html.wfs-windowed #masthead {
+  opacity: 1 !important;
+  pointer-events: auto !important;
+}
+
+/* A subtle dark scrim behind the masthead so it reads over bright video. */
+html.wfs-windowed #masthead-container:hover #masthead,
+html.wfs-windowed #masthead-container:focus-within #masthead {
+  background: rgba(15, 15, 15, 0.92) !important;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html.wfs-windowed #masthead-container {
+    transition: none !important;
+  }
+}
+
+/* Cover mode also hides the page's own content: nothing below the player is
+   reachable while the player owns the viewport, so leaving it rendered only
+   risks it showing through. Scrollable mode keeps all of it — that is the
+   entire feature. */
+html.wfs-windowed:not(.wfs-scrollable) ytd-watch-metadata,
+html.wfs-windowed:not(.wfs-scrollable) #above-the-fold,
+html.wfs-windowed:not(.wfs-scrollable) #comments {
+  display: none !important;
+}
+
+/* -------------------------------------------------------------------------
+   Scrollable mode.
+
+   The player becomes an ordinary block at the top of the document flow, sized
+   to the viewport, so the page scrolls past it to the title, description, and
+   comments exactly as it normally would.
+
+   Getting there means undoing YouTube's player sizing, which is a chain of
+   nested containers: #player-container-inner carries the aspect-ratio padding,
+   #player-container-outer carries a max-width derived from CSS variables
+   ytd-watch-flexy sets inline, and #player-container is absolutely positioned
+   inside them. Every link has to be flattened to a plain full-width block, or
+   the innermost one cannot grow.
+
+   Widths are percentages rather than 100vw on purpose: this mode keeps a
+   vertical scrollbar, and 100vw includes the scrollbar's width, which would
+   push a horizontal scrollbar onto the page.
+   ------------------------------------------------------------------------- */
+html.wfs-windowed.wfs-scrollable #movie_player,
+html.wfs-windowed.wfs-scrollable .html5-video-player {
+  position: relative !important;
+  top: auto !important;
+  left: auto !important;
+  right: auto !important;
+  bottom: auto !important;
+  width: 100% !important;
+  max-width: 100% !important;
+  height: 100vh !important;
+  max-height: 100vh !important;
+  margin: 0 !important;
+  background: #000 !important;
+}
+
+/* Flatten the container chain between #primary-inner and the player. */
+html.wfs-windowed.wfs-scrollable ytd-watch-flexy #player,
+html.wfs-windowed.wfs-scrollable ytd-watch-flexy #player-container-outer,
+html.wfs-windowed.wfs-scrollable ytd-watch-flexy #player-container-inner,
+html.wfs-windowed.wfs-scrollable ytd-watch-flexy #player-container,
+html.wfs-windowed.wfs-scrollable ytd-watch-flexy ytd-player,
+html.wfs-windowed.wfs-scrollable ytd-watch-flexy ytd-player > #container {
+  position: static !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  height: 100vh !important;
+  min-height: 0 !important;
+  max-height: 100vh !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* #columns is a flex row of #primary and #secondary. With the related rail
+   hidden, make it a plain block so #primary takes the full width. */
+html.wfs-windowed.wfs-scrollable ytd-watch-flexy #columns,
+html.wfs-windowed.wfs-scrollable ytd-watch-flexy #primary,
+html.wfs-windowed.wfs-scrollable ytd-watch-flexy #primary-inner {
+  display: block !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* Theater mode parks the player in a height-capped full-bleed host. Release the
+   cap so the same 100vh sizing applies whichever layout the user was in. */
+html.wfs-windowed.wfs-scrollable ytd-watch-flexy #full-bleed-container {
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  padding: 0 !important;
+}
+
+/* The page reserves a strip for the fixed masthead. With the masthead hidden,
+   that strip would sit above the video as a gap. */
+html.wfs-windowed.wfs-scrollable #page-manager {
+  margin-top: 0 !important;
+}
+
+/* The content below the player spans the full window, matching the player above
+   it. Only a gutter is added back, since #primary's padding was zeroed above. */
+html.wfs-windowed.wfs-scrollable ytd-watch-flexy #below {
+  width: auto !important;
+  max-width: none !important;
+  margin: 20px 0 64px !important;
+  padding: 0 24px !important;
+}
+
+/* #below's own children carry YouTube's column width, sized for the narrow
+   watch-page layout. Without releasing them the section stretches but the
+   metadata and comments inside stay in a centred column. */
+html.wfs-windowed.wfs-scrollable ytd-watch-flexy #below > *,
+html.wfs-windowed.wfs-scrollable ytd-watch-metadata,
+html.wfs-windowed.wfs-scrollable #above-the-fold,
+html.wfs-windowed.wfs-scrollable #bottom-row,
+html.wfs-windowed.wfs-scrollable #description,
+html.wfs-windowed.wfs-scrollable #comments,
+html.wfs-windowed.wfs-scrollable #comments > #sections,
+html.wfs-windowed.wfs-scrollable ytd-comments,
+html.wfs-windowed.wfs-scrollable ytd-item-section-renderer#sections {
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
 }
 `;
 
@@ -289,10 +515,11 @@ const youtubeAdapter: SiteAdapter = {
       return false;
     }
     if (!YT_HOSTS.has(parsed.hostname)) return false;
-    if (parsed.pathname.startsWith("/watch")) return true;
-    // An in-app navigation can land us in a watch context without a URL we can
-    // read that from, so fall back to the presence of a live player.
-    return typeof document !== "undefined" && document.querySelector(YT.player) !== null;
+    // Only match explicit watch pages. YouTube keeps `#movie_player` in the DOM
+    // on non-watch pages (for the mini-player), so a DOM-presence fallback would
+    // keep the session alive on the home page after SPA navigation — causing the
+    // hover-reveal masthead CSS to persist where it should not.
+    return parsed.pathname.startsWith("/watch");
   },
 
   matchesSite(url) {
@@ -315,9 +542,11 @@ const youtubeAdapter: SiteAdapter = {
     return doc.querySelector(YT.nativeFullscreen);
   },
 
-  getSiteChromeSelectors() {
-    // Fresh copy so callers cannot mutate the shared list.
-    return [...YT.siteChrome];
+  getSiteChromeSelectors(mode) {
+    // Fresh copy so callers cannot mutate the shared lists.
+    return mode === "scrollable"
+      ? [...YT.chromeAlways]
+      : [...YT.chromeAlways, ...YT.chromeCoverOnly];
   },
 
   /**
@@ -441,31 +670,74 @@ export async function getSitePrefs(
       // First run: defaults, not a failure.
       return { prefs: { ...DEFAULT_SITE_PREFS }, loadFailed: false };
     }
-    if (typeof stored !== "object" || stored === null || typeof (stored as SitePrefs).autoApply !== "boolean") {
-      return { prefs: { ...DEFAULT_SITE_PREFS }, loadFailed: true };
-    }
-    return { prefs: { ...DEFAULT_SITE_PREFS, ...(stored as SitePrefs) }, loadFailed: false };
+    const normalized = normalizeSitePrefs(stored);
+    if (!normalized) return { prefs: { ...DEFAULT_SITE_PREFS }, loadFailed: true };
+    return { prefs: normalized, loadFailed: false };
   } catch {
     return { prefs: { ...DEFAULT_SITE_PREFS }, loadFailed: true };
   }
 }
 
 /**
- * Persist a site's preferences. On failure nothing is written, so the previously
- * stored value survives intact.
+ * Coerce a stored value into usable preferences, or null when it is too damaged
+ * to trust.
+ *
+ * Each field is checked on its own so a value written by an older version — one
+ * that knew nothing about `scrollable` — reads back as valid with that field at
+ * its default, rather than being discarded as corrupt.
+ */
+function normalizeSitePrefs(stored: unknown): SitePrefs | null {
+  if (typeof stored !== "object" || stored === null) return null;
+  const raw = stored as Record<string, unknown>;
+  // autoApply has existed since the first release; its absence means this is not
+  // a preferences object at all.
+  if (typeof raw.autoApply !== "boolean") return null;
+  return {
+    autoApply: raw.autoApply,
+    scrollable: typeof raw.scrollable === "boolean" ? raw.scrollable : DEFAULT_SITE_PREFS.scrollable,
+  };
+}
+
+/**
+ * Persist part of a site's preferences, leaving the fields not named alone. On
+ * failure nothing is written, so the previously stored value survives intact.
+ *
+ * The read-then-merge matters: the settings UI has one control per field, and a
+ * whole-object write from either would silently reset the other.
  */
 export async function setSitePrefs(
   siteId: string,
-  prefs: SitePrefs,
+  patch: Partial<SitePrefs>,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const area = storageArea();
   if (!area) return { ok: false, error: "storage unavailable" };
   try {
-    await area.set({ [siteKey(siteId)]: prefs });
+    const { prefs } = await getSitePrefs(siteId);
+    await area.set({ [siteKey(siteId)]: { ...prefs, ...patch } });
     return { ok: true };
   } catch (err) {
     return { ok: false, error: describeError(err) };
   }
+}
+
+/**
+ * Call `onChange` whenever a site's preferences are written from another surface
+ * (the popup or the options page), so a live page can follow along instead of
+ * waiting for a reload. Returns a disposer.
+ */
+function watchSitePrefs(siteId: string, onChange: (prefs: SitePrefs) => void): () => void {
+  if (typeof chrome === "undefined" || !chrome.storage?.onChanged) return () => {};
+  const key = siteKey(siteId);
+  const listener = (
+    changes: Record<string, chrome.storage.StorageChange>,
+    areaName: string,
+  ): void => {
+    if (areaName !== "local" || !(key in changes)) return;
+    const normalized = normalizeSitePrefs(changes[key]?.newValue);
+    if (normalized) onChange(normalized);
+  };
+  chrome.storage.onChanged.addListener(listener);
+  return () => chrome.storage.onChanged.removeListener(listener);
 }
 
 /** Best-effort human-readable form of an unknown thrown value. */
@@ -484,6 +756,13 @@ const STYLE_ELEMENT_ID = "wfs-windowed-styles";
 
 /** Class the controller toggles on `<html>` while the mode is active. */
 const WINDOWED_CLASS = "wfs-windowed";
+
+/**
+ * Added alongside {@link WINDOWED_CLASS} while the active mode is `scrollable`.
+ * Every rule that differs between the two modes keys off its presence, so a
+ * stylesheet is injected once and never rewritten.
+ */
+const SCROLLABLE_CLASS = "wfs-scrollable";
 
 /** Attribute marking our injected button. */
 const BUTTON_MARKER_ATTR = "data-wfs-button";
@@ -518,10 +797,17 @@ const BASE_CSS = `
   box-shadow: inset 0 -3px 0 0 #3ea6ff !important;
 }
 
-/* Hide the page scrollbar while the player fills the viewport. */
-html.wfs-windowed,
-html.wfs-windowed body {
+/* Cover mode locks the page: the player owns the viewport, so a scrollbar would
+   only scroll hidden chrome. Scrollable mode must keep scrolling, and only
+   suppresses sideways overflow in case a site element still overhangs. */
+html.wfs-windowed:not(.wfs-scrollable),
+html.wfs-windowed:not(.wfs-scrollable) body {
   overflow: hidden !important;
+}
+
+html.wfs-windowed.wfs-scrollable,
+html.wfs-windowed.wfs-scrollable body {
+  overflow-x: hidden !important;
 }
 `;
 
@@ -576,18 +862,43 @@ const PLAYER_STYLE_PROPS = [
   "margin",
 ] as const;
 
-/** The viewport-filling style applied to the player on entry. */
-const PLAYER_ACTIVE_STYLE: Record<string, string> = {
-  position: "fixed",
-  top: "0",
-  right: "0",
-  bottom: "0",
-  left: "0",
-  inset: "0",
-  width: "100vw",
-  height: "100vh",
-  "z-index": MAX_Z_INDEX,
-  margin: "0",
+/**
+ * The player style applied on entry, per mode. Both maps set the same
+ * properties — the ones {@link PLAYER_STYLE_PROPS} captures — so restoring is
+ * identical whichever mode was used.
+ */
+const PLAYER_ACTIVE_STYLE: Record<WindowedMode, Record<string, string>> = {
+  /** Pinned to the viewport, above everything. */
+  cover: {
+    position: "fixed",
+    top: "0",
+    right: "0",
+    bottom: "0",
+    left: "0",
+    inset: "0",
+    width: "100vw",
+    height: "100vh",
+    "z-index": MAX_Z_INDEX,
+    margin: "0",
+  },
+  /**
+   * A viewport-tall block in normal flow. Nothing is lifted out of the document,
+   * so the player reserves its own space and the page scrolls past it. Width is
+   * a percentage, not `100vw`, because this mode keeps a vertical scrollbar and
+   * `100vw` counts the scrollbar's width.
+   */
+  scrollable: {
+    position: "relative",
+    top: "auto",
+    right: "auto",
+    bottom: "auto",
+    left: "auto",
+    inset: "auto",
+    width: "100%",
+    height: "100vh",
+    "z-index": "auto",
+    margin: "0",
+  },
 };
 
 /** Inline properties mutated on each chrome element when hiding it. */
@@ -631,8 +942,14 @@ function isConnected(el: Element): boolean {
  */
 export class WindowedFullscreenController {
   private readonly doc: Document;
+  /**
+   * Read at entry, not construction, so a preference changed mid-session takes
+   * effect on the next entry without rebuilding anything.
+   */
+  private readonly getMode: () => WindowedMode;
 
   private active = false;
+  private activeMode: WindowedMode = "cover";
   private descriptor: SiteDescriptor | null = null;
   private snapshot: LayoutSnapshot | null = null;
   private button: Element | null = null;
@@ -643,13 +960,19 @@ export class WindowedFullscreenController {
   private addedPlayerClasses: string[] = [];
   private reflowTimers: number[] = [];
 
-  constructor(doc: Document) {
+  constructor(doc: Document, getMode: () => WindowedMode = () => "cover") {
     this.doc = doc;
+    this.getMode = getMode;
   }
 
   /** Whether the mode is currently active. */
   get isActive(): boolean {
     return this.active;
+  }
+
+  /** The mode the current session entered with. Meaningless while inactive. */
+  get mode(): WindowedMode {
+    return this.activeMode;
   }
 
   /**
@@ -668,6 +991,8 @@ export class WindowedFullscreenController {
     if (!descriptor.player || !descriptor.nativeFullscreenButton) return false;
 
     const docEl = this.doc.documentElement;
+    const view = this.doc.defaultView;
+    const mode = this.getMode();
 
     // 1. Capture the restore record BEFORE touching anything.
     this.snapshot = {
@@ -677,6 +1002,9 @@ export class WindowedFullscreenController {
         style: captureStyle(element, CHROME_STYLE_PROPS),
       })),
       documentElementHadWindowedClass: docEl.classList.contains(WINDOWED_CLASS),
+      documentElementHadScrollableClass: docEl.classList.contains(SCROLLABLE_CLASS),
+      scrollX: view?.scrollX ?? 0,
+      scrollY: view?.scrollY ?? 0,
     };
 
     // 2. Record selectors that matched nothing, then carry on regardless.
@@ -684,12 +1012,13 @@ export class WindowedFullscreenController {
       warn(DIAGNOSTIC.absentChrome, "Site chrome selector matched no element on entry", { selector });
     }
 
-    // 3. Activate the stylesheet.
+    // 3. Activate the stylesheet, selecting the mode's half of it.
     docEl.classList.add(WINDOWED_CLASS);
+    if (mode === "scrollable") docEl.classList.add(SCROLLABLE_CLASS);
 
     // 4. Expand the player. CSS only — never the Fullscreen API.
     const playerStyle = (descriptor.player as HTMLElement).style;
-    for (const [prop, value] of Object.entries(PLAYER_ACTIVE_STYLE)) {
+    for (const [prop, value] of Object.entries(PLAYER_ACTIVE_STYLE[mode])) {
       playerStyle.setProperty(prop, value);
     }
 
@@ -710,12 +1039,18 @@ export class WindowedFullscreenController {
     }
 
     this.descriptor = descriptor;
+    this.activeMode = mode;
     this.active = true;
     this.applyButtonState(true);
     this.registerEscape();
     this.startPlayerWatcher(descriptor.player);
 
-    // 7. Prompt the site to recompute its control-bar geometry.
+    // 7. In scrollable mode the player only fills the screen when the page is at
+    //    the top, so start there however far down the reader had scrolled. Exit
+    //    puts them back.
+    if (mode === "scrollable") view?.scrollTo(0, 0);
+
+    // 8. Prompt the site to recompute its control-bar geometry.
     this.scheduleReflowNudge();
     return true;
   }
@@ -733,9 +1068,20 @@ export class WindowedFullscreenController {
       for (const entry of snapshot.chrome) {
         restoreStyle(entry.element, entry.style);
       }
-      // Leave the class alone if it somehow pre-dated entry.
+      // Leave either class alone if it somehow pre-dated entry.
       if (!snapshot.documentElementHadWindowedClass) {
         this.doc.documentElement.classList.remove(WINDOWED_CLASS);
+      }
+      if (!snapshot.documentElementHadScrollableClass) {
+        this.doc.documentElement.classList.remove(SCROLLABLE_CLASS);
+      }
+      // Restore the reading position. Deferred to the next frame because the
+      // layout the offset refers to only exists once the styles above have been
+      // reverted and the page has re-flowed.
+      const view = this.doc.defaultView;
+      if (view) {
+        const { scrollX, scrollY } = snapshot;
+        view.requestAnimationFrame(() => view.scrollTo(scrollX, scrollY));
       }
     }
 
@@ -1258,7 +1604,11 @@ export class ButtonInjector {
  * Selectors that match nothing are collected rather than treated as failures:
  * a site legitimately does not render every chrome element on every page.
  */
-function resolveDescriptor(adapter: SiteAdapter, doc: Document): SiteDescriptor | null {
+function resolveDescriptor(
+  adapter: SiteAdapter,
+  doc: Document,
+  mode: WindowedMode,
+): SiteDescriptor | null {
   const player = adapter.findPlayer(doc);
   const nativeFullscreenButton = adapter.findNativeFullscreenButton(doc);
   // The controls container is not part of the descriptor, but its absence means
@@ -1267,7 +1617,7 @@ function resolveDescriptor(adapter: SiteAdapter, doc: Document): SiteDescriptor 
 
   const siteChromeElements: Element[] = [];
   const missingChromeSelectors: string[] = [];
-  for (const selector of adapter.getSiteChromeSelectors()) {
+  for (const selector of adapter.getSiteChromeSelectors(mode)) {
     const matched = Array.from(doc.querySelectorAll(selector));
     if (matched.length === 0) missingChromeSelectors.push(selector);
     else siteChromeElements.push(...matched);
@@ -1299,8 +1649,10 @@ interface Session {
 function startSession(adapter: SiteAdapter, doc: Document): Session {
   injectStyles(doc, adapter.getActiveModeCss());
 
-  const controller = new WindowedFullscreenController(doc);
-  const resolve = (): SiteDescriptor | null => resolveDescriptor(adapter, doc);
+  let prefs: SitePrefs = { ...DEFAULT_SITE_PREFS };
+
+  const controller = new WindowedFullscreenController(doc, () => modeFor(prefs));
+  const resolve = (): SiteDescriptor | null => resolveDescriptor(adapter, doc, modeFor(prefs));
 
   // Auto-apply enters the mode once, as soon as both the preference has resolved
   // and the player exists. Which happens first is unpredictable, so this is
@@ -1318,6 +1670,26 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
     controller.enter(descriptor);
   };
 
+  /**
+   * Switch modes without leaving the mode. Exit restores the page, so a fresh
+   * descriptor has to be resolved afterwards — the chrome it hides differs
+   * between the two modes.
+   */
+  const reapplyMode = (): void => {
+    if (!controller.isActive || controller.mode === modeFor(prefs)) return;
+    controller.exit();
+    const descriptor = resolve();
+    if (descriptor) controller.enter(descriptor);
+  };
+
+  // Toggling the mode in the popup while a video is open should change what is on
+  // screen, not what happens next time.
+  const disposePrefWatch = watchSitePrefs(adapter.siteId, (next) => {
+    prefs = next;
+    autoApplyEnabled = next.autoApply;
+    reapplyMode();
+  });
+
   const injector = new ButtonInjector({
     adapter,
     document: doc,
@@ -1331,8 +1703,9 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
   });
   injector.start();
 
-  void getSitePrefs(adapter.siteId).then(({ prefs }) => {
-    autoApplyEnabled = prefs.autoApply;
+  void getSitePrefs(adapter.siteId).then(({ prefs: stored }) => {
+    prefs = stored;
+    autoApplyEnabled = stored.autoApply;
     prefResolved = true;
     maybeAutoApply();
   });
@@ -1351,8 +1724,15 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
       }
     },
     stop() {
+      disposePrefWatch();
       injector.stop();
       if (controller.isActive) controller.exit();
+      // Belt-and-suspenders: ensure no active-mode class lingers on <html> after
+      // teardown, even if exit() was not called (e.g. the session is torn down
+      // while the mode was off). Without this, a leftover class from a prior
+      // session could cause the hover-reveal masthead CSS to fire on pages that
+      // are not in windowed mode (e.g. the YouTube home page after SPA nav).
+      doc.documentElement.classList.remove(WINDOWED_CLASS, SCROLLABLE_CLASS);
     },
   };
 }
@@ -1422,6 +1802,20 @@ export function startContentScript(): void {
   window.addEventListener("popstate", onMaybeNavigated);
   window.addEventListener("hashchange", onMaybeNavigated);
   setInterval(onMaybeNavigated, 1_000);
+
+  // YouTube fires `yt-navigate-finish` after every SPA navigation completes.
+  // The href poll catches most transitions, but YouTube can fire this event
+  // before the URL visibly changes in `location.href` (the history entry is
+  // committed inside the event). More critically, `resolveAdapter` falls back
+  // to the player element's presence, so during the brief overlap where the URL
+  // changed but the old player is still in the DOM, sync() would not tear down
+  // the session. Listening here guarantees teardown happens the instant YouTube
+  // considers the navigation done — so the masthead returns to normal on pages
+  // that are not watch pages.
+  document.addEventListener("yt-navigate-finish", () => {
+    lastHref = location.href;
+    sync();
+  });
 }
 
 // ===========================================================================
@@ -1538,6 +1932,40 @@ const DONATION_URL = "https://ko-fi.com/rohittiger";
 const PRIVACY_POLICY_URL = "https://rohittiger.vercel.app/product/windowedfullscreen/privacy";
 
 /**
+ * The per-site boolean preferences, in the order they appear. Every entry is one
+ * checkbox in both the options page and the popup; adding a preference here is
+ * all it takes to surface it in both.
+ */
+const SITE_TOGGLES: ReadonlyArray<{
+  field: keyof SitePrefs;
+  /** Marker attribute, so the control is findable without relying on order. */
+  marker: string;
+  /** Visible text beside the checkbox. */
+  text: (siteLabel: string) => string;
+  /** Accessible name, which must stand alone out of context. */
+  aria: (siteLabel: string) => string;
+  /** Optional explanation rendered beneath. */
+  hint?: string;
+}> = [
+  {
+    field: "autoApply",
+    marker: "data-wfs-autoapply",
+    text: (siteLabel) => `Automatically enter windowed fullscreen on ${siteLabel}`,
+    aria: (siteLabel) => `Auto-apply windowed fullscreen on ${siteLabel}`,
+  },
+  {
+    field: "scrollable",
+    marker: "data-wfs-scrollable",
+    text: () => "Scrollable mode",
+    aria: (siteLabel) => `Scrollable windowed fullscreen on ${siteLabel}`,
+    hint:
+      "The video still fills the screen when you enter, but the page keeps scrolling — " +
+      "scroll down for the description and comments, scroll back up for the video. " +
+      "Leave this off to lock the page to the video alone.",
+  },
+];
+
+/**
  * Render the settings controls into `root`: one auto-apply checkbox per
  * supported site, the shortcut link, the donation link, and a privacy-policy
  * footer link.
@@ -1552,7 +1980,7 @@ const PRIVACY_POLICY_URL = "https://rohittiger.vercel.app/product/windowedfullsc
 function renderSettings(doc: Document, root: Element, options: { showHeading: boolean }): void {
   root.replaceChildren();
 
-  /** The last value known to be persisted, per site. */
+  /** The last value known to be persisted, keyed `siteId:field`. */
   const persisted = new Map<string, boolean>();
 
   if (options.showHeading) {
@@ -1634,42 +2062,56 @@ function renderSettings(doc: Document, root: Element, options: { showHeading: bo
   });
   donationSection.appendChild(donationLink);
 
-  // --- Per-site auto-apply ------------------------------------------------
+  // --- Per-site toggles ---------------------------------------------------
   for (const { siteId, label } of supportedSites()) {
     const section = addSection("data-wfs-site-section", label);
     section.setAttribute("data-site-id", siteId);
 
-    const checkbox = doc.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.setAttribute("data-wfs-autoapply", "");
-    checkbox.setAttribute("data-site-id", siteId);
-    checkbox.setAttribute("aria-label", `Auto-apply windowed fullscreen on ${label}`);
+    for (const toggle of SITE_TOGGLES) {
+      const text = toggle.text(label);
+      const stateKey = `${siteId}:${toggle.field}`;
 
-    checkbox.addEventListener("change", () => {
-      void (async () => {
-        const next = checkbox.checked;
-        const result = await setSitePrefs(siteId, { autoApply: next });
-        if (!result.ok) {
-          // Nothing was written, so put the control back where it was.
-          checkbox.checked = persisted.get(siteId) ?? DEFAULT_SITE_PREFS.autoApply;
-          showError(`Could not save auto-apply for "${label}": not saved (${result.error}).`);
-          return;
-        }
-        persisted.set(siteId, next);
-        showSaved(`Saved "${label}" auto-apply.`);
-      })();
-    });
+      const checkbox = doc.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.setAttribute(toggle.marker, "");
+      checkbox.setAttribute("data-site-id", siteId);
+      checkbox.setAttribute("aria-label", toggle.aria(label));
 
-    const wrapper = doc.createElement("label");
-    wrapper.appendChild(checkbox);
-    wrapper.appendChild(doc.createTextNode(` Automatically enter windowed fullscreen on ${label}`));
-    section.appendChild(wrapper);
+      checkbox.addEventListener("change", () => {
+        void (async () => {
+          const next = checkbox.checked;
+          // Only this field is written, so the site's other settings survive.
+          const patch: Partial<SitePrefs> = { [toggle.field]: next };
+          const result = await setSitePrefs(siteId, patch);
+          if (!result.ok) {
+            // Nothing was written, so put the control back where it was.
+            checkbox.checked = persisted.get(stateKey) ?? DEFAULT_SITE_PREFS[toggle.field];
+            showError(`Could not save "${text}" for "${label}": not saved (${result.error}).`);
+            return;
+          }
+          persisted.set(stateKey, next);
+          showSaved(`Saved "${text}" for "${label}".`);
+        })();
+      });
 
-    void getSitePrefs(siteId).then(({ prefs, loadFailed }) => {
-      persisted.set(siteId, prefs.autoApply);
-      checkbox.checked = prefs.autoApply;
-      if (loadFailed) showError("Could not load preferences; showing defaults.");
-    });
+      const wrapper = doc.createElement("label");
+      wrapper.appendChild(checkbox);
+      wrapper.appendChild(doc.createTextNode(` ${text}`));
+      section.appendChild(wrapper);
+
+      if (toggle.hint) {
+        const hint = doc.createElement("p");
+        hint.textContent = toggle.hint;
+        section.appendChild(hint);
+      }
+
+      void getSitePrefs(siteId).then(({ prefs, loadFailed }) => {
+        const value = prefs[toggle.field];
+        persisted.set(stateKey, value);
+        checkbox.checked = value;
+        if (loadFailed) showError("Could not load preferences; showing defaults.");
+      });
+    }
   }
 
   root.appendChild(status);

@@ -7,8 +7,20 @@ A Manifest V3 Chromium extension that adds a **windowed-fullscreen** mode next t
 - A dedicated button beside YouTube's native fullscreen control.
 - Toggle from the button, the toolbar popup, or `Alt+Shift+F` (rebindable at `chrome://extensions/shortcuts`).
 - `Escape` exits and restores the page to its exact previous state.
+- Optional per-site **scrollable mode**: the video still fills the screen on entry, but the page keeps scrolling, so the description and comments are one scroll away instead of requiring you to leave the mode. Scroll back up and the video fills the screen again.
 - Optional per-site auto-apply: enter the mode automatically when a video loads.
 - Survives YouTube's in-app navigations without a reload.
+
+### The two modes
+
+Both are the same feature — a CSS-expanded player, no Fullscreen API — differing only in how the player relates to the page. The per-site **Scrollable mode** checkbox in the popup or the options page picks between them, and switching it applies to the video already on screen.
+
+| | Cover (default) | Scrollable |
+| --- | --- | --- |
+| Player | Fixed to the viewport | Viewport-sized block at the top of the page |
+| Page scrolling | Locked | Normal |
+| Below the player | Nothing reachable | Title, description, comments |
+| Related videos rail | Hidden | Hidden (the player owns the full width) |
 
 ## Layout
 
