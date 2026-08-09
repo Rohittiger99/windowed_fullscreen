@@ -13,10 +13,10 @@ node marketing/render.mjs 04     # re-render only sources matching "04"
 | File | Dashboard slot | Notes |
 | --- | --- | --- |
 | `01-hero-1280x800.png` | Screenshot 1 | Lead with this one. |
-| `02-button-1280x800.png` | Screenshot 2 | The integrated button. |
-| `03-compare-1280x800.png` | Screenshot 3 | Native vs windowed. |
-| `04-popup-1280x800.png` | Screenshot 4 | Popup features. |
-| `05-controls-1280x800.png` | Screenshot 5 | Toggles, shortcut, privacy. |
+| `02-button-1280x800.png` | Screenshot 2 | The two injected buttons, magnified. |
+| `03-panel-1280x800.png` | Screenshot 3 | The docked side panel. |
+| `04-modes-1280x800.png` | Screenshot 4 | Cover vs scrollable, plus the masthead reveal. |
+| `05-controls-1280x800.png` | Screenshot 5 | Popup, shortcut, privacy. |
 | `promo-small-440x280.png` | Small promo tile | **Required.** Items without one are ranked below items that have one. |
 | `promo-marquee-1400x560.png` | Marquee promo tile | Optional, but you cannot be featured in the store's marquee without it. |
 
@@ -235,8 +235,8 @@ shrink the shot's `--w`, or tighten the spacing around it.
 four numbers:
 
 ```html
-<div class="shot" style="--w: 302px; --cx: 0.6828; --cy: 0.0937; --cw: 0.2087; --ch: 0.6447">
-  <img src="../raw/before-popup.png" alt="" />
+<div class="shot framed" style="--w: 1150px; --cy: 0.0927; --cw: 0.62; --ch: 0.1483">
+  <img src="../raw/masthead.png" alt="" />
 </div>
 ```
 
@@ -245,43 +245,84 @@ fraction of the source image. `--w` is how wide the crop should render. Overlay
 children positioned in `%` are relative to the crop box, so they line up with
 source fractions only on uncropped shots.
 
-**Don't eyeball these numbers.** A crop that is a handful of pixels too wide puts
-a strip of the page behind the popup into the shot, which is obvious once someone
-zooms in. Measure instead — both captures have flat, uniform surfaces whose edges
-are easy to find by scanning luminance along a row or column, and known-size UI
-(the popup is 320 CSS px wide, its toggle button inset 18px) to calibrate
-against. That is how the popup's bounds above were established: x 1309..1708,
-y 101..795.
+**Don't eyeball these numbers.** A crop a handful of pixels too wide puts a strip
+of the surrounding page into the shot, which is obvious the moment someone zooms
+in — and a callout box a few pixels off looks like it is pointing at the wrong
+thing. Measure instead: scan the mean luminance of each row and column and take
+the big jumps, which is exactly where one UI band stops and the next begins.
+
+Every fraction in `src/` was established that way. The numbers worth knowing,
+all from the 1919x1079 window captures:
+
+| Edge | Where | How it reads |
+| --- | --- | --- |
+| Browser chrome / page | y=108 → 109 | every capture |
+| Player top, masthead hidden | y=109 | `windowed.png` |
+| Revealed masthead | y=109..178 | `masthead.png`, then the video at 179 |
+| Player bottom / taskbar | y=1019 → 1021 | every capture |
+| Video letterbox, cover mode | x=140..1760 | `windowed.png`; the bars are `object-fit: contain` |
+| Video / side panel seam | x=1420 → 1421 | `side-panel.png`, a 104-point luminance drop |
+| Player / page content, scrollable | y=520 → 521 | `scrollable.png` |
+| Injected buttons | x=1281..1400 | `side-panel.png`; x=1761..1881 in `windowed.png` |
+
+Control-bar buttons are the useful calibration handle: they are 48 CSS px wide, so
+they step by exactly 60 source px at this capture's 1.25 scale. Find one and you
+have all of them — that is how `02`'s pointer at YouTube's own fullscreen button
+was placed, counting one step left from the pair we inject.
+
+**A luminance jump is a boundary, not a label.** Row jumps tell you *that*
+something changes at a row, never *what*. `05`'s first crop ended at y=535 because
+that boundary was read as the "Scrollable mode" row; it was really the "YouTube"
+section heading, 90 rows earlier than the checkboxes, so the screenshot cut off
+immediately before the two settings it existed to show — and read as a broken
+render rather than a deliberate crop.
+
+For a text-dense capture, identify rows before trusting them: group the rows
+carrying ink into bands, then match the bands against the surface's DOM order,
+using each band's height and width as the check. A 20-row band is a checkbox row,
+not a 12px heading; a 203px-wide band followed by a 47px one is a label wrapping
+onto a short second line. `05`'s crop comment records the resulting map for the
+popup. Then end a crop **in a gap between bands**, so if a measurement is still
+off by a few pixels the cut lands in blank space instead of through a glyph.
 
 Percentage-positioned overlays need the same care. A pointer's `left: %` resolves
 against its offset parent, so the strip and its pointers on `02` share one
 fixed-width wrapper — when the pointers were allowed to stretch to the full stage
 width instead, every label sat about 100px right of the icon it named.
 
-`--src-ar` in `_base.css` is the source aspect ratio (height / width). Both raw
-captures are 1917x1078; **replace a raw capture with a different aspect ratio and
-that token has to change too.**
+`--src-ar` in `_base.css` is the source aspect ratio (height / width). Every
+window capture is 1919x1079, so the shared token is 0.56227; **replace one with a
+different aspect ratio and that token has to change too.** A capture that is a
+different shape overrides the token on its own `.shot` instead of changing it for
+everyone — `05-controls` does exactly that for `popup.png`, which is 391x740.
 
 ## Source captures
 
-`raw/` holds the unretouched captures. They were taken at 1917x1078 on a 125%
-display, so one CSS pixel of browser UI is exactly 1.25 pixels in the file. That
-ratio is worth remembering: it converts any known CSS dimension in the extension
-straight into pixels in these captures, which is how the crops were calibrated.
+`raw/` holds the unretouched captures, all of the same video on the same window so
+the five screenshots read as one session. The window captures are 1919x1079 on a
+125% display, so one CSS pixel of browser UI is exactly 1.25 pixels in the file.
+That ratio converts any known CSS dimension in the extension straight into source
+pixels, which is what makes the crops checkable rather than guessed.
 
-- `after-windowed.png` — windowed fullscreen engaged. The video fills the window
-  while the tab strip, address bar, taskbar and clock stay visible. The injected
-  button carries its blue active underline (`box-shadow: inset 0 -3px 0 0
-  #3ea6ff`), which is what screenshot 2 points at.
-- `before-popup.png` — a normal watch page with the toolbar popup open, showing
-  the status card, toggle, shortcut link, donation link, auto-apply checkbox and
-  privacy link.
+| File | What it shows | Used by |
+| --- | --- | --- |
+| `windowed.png` | Cover mode. Video fills the window; tab strip, address bar, taskbar and clock all still there. Masthead hidden. | `01`, `02`, `04` |
+| `side-panel.png` | Cover mode with the panel docked: `#below` beside the player, the control bar clear of it, the windowed button carrying its blue active underline. | `03` |
+| `scrollable.png` | Scrollable mode, scrolled down past the player to the title, description and comments. | `04` |
+| `masthead.png` | The masthead revealed by cursor proximity — search bar, hamburger, notifications. | `04` |
+| `popup.png` | The toolbar popup (391x740): status card, toggle, shortcut link, donation link, and both per-site checkboxes. Cut off mid-sentence in the trailing hint, so `05` crops above it. | `05` |
+| `normal.png` | An untouched watch page — default player, related-videos rail. | none |
 
-### One panel is derived
+`normal.png` is the odd one out: it is the "before" state, kept because it is the
+clearest way to show how much of the window YouTube's default layout leaves
+empty, but it does not currently earn one of the five slots. Every other feature
+in the release needs one more than a before/after does.
 
-The "Native fullscreen" panel in `03-compare` is `after-windowed.png` cropped to
-just the video area. That is a faithful depiction — native fullscreen shows the
-video and nothing else — but it is not a separate capture. To make it a real one,
-take a screenshot of the same video in YouTube's own fullscreen (`f`), save it as
-`raw/native-fullscreen.png`, and point the left panel's `<img>` at it with the
-crop fractions reset to the defaults.
+### Recapturing
+
+If you reshoot, shoot the whole set in one sitting on the same video, at the same
+window size, with the same theme. Mixed sessions show up immediately as a
+different timestamp in the taskbar clock or a different frame in the player, and
+the set stops reading as one product tour. Then re-measure — the fractions in
+`src/` are tied to these exact captures, and the boundary table above is the
+fastest way to check a new one lines up.

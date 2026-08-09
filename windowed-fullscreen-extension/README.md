@@ -122,8 +122,8 @@ Do **not** zip the build by hand with Windows tooling. `Compress-Archive` and .N
 
 ## Permissions
 
-- `storage` — one boolean per site (auto-apply), written to `chrome.storage.local` only. `chrome.storage.sync` is deliberately unused, so settings never leave the device.
-- `*://*.youtube.com/*` — to inject the button, apply the CSS that expands the player, and read the active tab's URL so the popup can report whether the page is supported.
+- `storage` — two booleans per site (auto-apply and scrollable mode), written to `chrome.storage.local` only. `chrome.storage.sync` is deliberately unused, so settings never leave the device.
+- `*://*.youtube.com/*` — to inject the buttons, apply the CSS that expands the player and docks the side panel beside it, and read the active tab's URL so the popup can report whether the page is supported.
 
 No other permissions. No runtime dependencies, no network requests, no remote code, no analytics or telemetry.
 

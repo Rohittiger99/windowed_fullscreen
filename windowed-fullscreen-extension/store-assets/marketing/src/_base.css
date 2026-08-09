@@ -30,8 +30,12 @@
     "Helvetica Neue", Arial, sans-serif;
   --mono: "Cascadia Mono", "Consolas", ui-monospace, monospace;
 
-  /* Aspect ratio of the raw captures (1917 x 1078), as height / width. */
-  --src-ar: 0.56234;
+  /**
+   * Aspect ratio of the raw window captures (1919 x 1079), as height / width.
+   * A capture with a different ratio — the popup, which is 391 x 740 — sets this
+   * on its own `.shot` rather than changing it here.
+   */
+  --src-ar: 0.56227;
 }
 
 * {
@@ -226,6 +230,53 @@ h1 .hl {
 .band.amber {
   border-color: var(--amber);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), 0 0 22px rgba(232, 168, 56, 0.45);
+}
+
+/**
+ * Rings a rectangular region of a capture — the side panel, the pair of injected
+ * buttons. Unlike `.band` it needs its own horizontal insets, so every use sets
+ * `left` plus either `width` or `right`.
+ */
+.box {
+  position: absolute;
+  border: 2px solid var(--accent);
+  border-radius: 6px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), 0 0 22px rgba(43, 143, 238, 0.45);
+  pointer-events: none;
+}
+
+.box.amber {
+  border-color: var(--amber);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), 0 0 22px rgba(232, 168, 56, 0.45);
+}
+
+/**
+ * Legend row pairing a callout colour with what it marks, used where a label
+ * inside the capture would cover the thing it names.
+ */
+.legend {
+  display: flex;
+  gap: 40px;
+}
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  font-size: 22px;
+  font-weight: 600;
+}
+
+.legend-item .swatch {
+  flex: none;
+  width: 26px;
+  height: 16px;
+  border: 2px solid var(--accent);
+  border-radius: 4px;
+}
+
+.legend-item.amber .swatch {
+  border-color: var(--amber);
 }
 
 /** Small label pill anchored over a capture. */

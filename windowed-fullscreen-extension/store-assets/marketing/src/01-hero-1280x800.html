@@ -41,17 +41,21 @@
       </header>
 
       <figure>
-        <!-- Uncropped capture: overlay percentages map straight to the source. -->
+        <!--
+          Uncropped capture, so an overlay's `%` maps straight onto the source.
+          Measured in raw/windowed.png (1919x1079): browser chrome ends at y=108,
+          the player runs y=109..1019, the taskbar starts at y=1021.
+        -->
         <div class="shot framed" style="--w: 1046px">
-          <img src="../raw/after-windowed.png" alt="" />
+          <img src="../raw/windowed.png" alt="" />
 
           <!-- Browser chrome band: tab strip + address bar. -->
-          <div class="band" style="top: 0.4%; height: 9.4%"></div>
-          <span class="tag" style="top: 12.2%; left: 16px">Tabs and address bar</span>
+          <div class="band" style="top: 0.37%; height: 9.45%"></div>
+          <span class="tag" style="top: 11.4%; left: 14px">Tabs and address bar</span>
 
           <!-- Windows taskbar band. -->
-          <div class="band" style="top: 94.6%; height: 5.1%"></div>
-          <span class="tag" style="bottom: 7.4%; right: 16px">Taskbar and clock</span>
+          <div class="band" style="top: 94.63%; height: 5.1%"></div>
+          <span class="tag" style="bottom: 7.2%; right: 14px">Taskbar and clock</span>
         </div>
       </figure>
     </div>

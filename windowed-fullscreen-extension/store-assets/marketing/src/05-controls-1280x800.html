@@ -3,15 +3,22 @@
   <head>
     <meta charset="utf-8" />
     <meta name="asset-size" content="1280x800" />
-    <title>Windowed Fullscreen — three ways to switch</title>
+    <title>Windowed Fullscreen — controls and privacy</title>
     <link rel="stylesheet" href="./_base.css" />
     <style>
       .stage {
         display: flex;
-        flex-direction: column;
         align-items: center;
-        padding: 40px 56px 0;
-        text-align: center;
+        gap: 52px;
+        /* Symmetric padding, so centring the tall popup shot leaves equal
+           margins above and below it. */
+        padding: 40px 58px;
+      }
+
+      .copy {
+        display: flex;
+        flex-direction: column;
+        width: 657px;
       }
 
       h1 {
@@ -20,159 +27,130 @@
       }
 
       .sub {
+        margin-top: 14px;
+        max-width: 30ch;
+      }
+
+      .keys {
+        margin-top: 26px;
+      }
+
+      .shortcut-note {
         margin-top: 12px;
+        font-size: 20px;
+        color: var(--secondary);
       }
 
-      .cards {
-        display: grid;
-        grid-template-columns: repeat(3, 1fr);
-        gap: 26px;
-        width: 100%;
-        margin-top: 30px;
-      }
-
-      .card {
+      .checks {
         display: flex;
         flex-direction: column;
-        align-items: center;
-        padding: 26px 22px 24px;
-        min-height: 296px;
+        gap: 15px;
+        margin-top: 26px;
       }
 
-      .num {
-        display: grid;
-        place-items: center;
-        width: 34px;
-        height: 34px;
-        font-size: 18px;
-        font-weight: 700;
-        color: var(--accent);
-        background: var(--accent-soft);
-        border-radius: 50%;
-      }
-
-      .card h2 {
-        margin-top: 15px;
-        font-size: 27px;
-        font-weight: 700;
-        letter-spacing: -0.4px;
-      }
-
-      .card p {
-        margin-top: 9px;
-        font-size: 20px;
-        line-height: 1.35;
-        color: var(--secondary);
-      }
-
-      /* Visual sample sits at the bottom of every card on a shared baseline. */
-      .sample {
-        display: grid;
-        place-items: center;
-        width: 100%;
-        margin-top: auto;
-        padding-top: 24px;
-      }
-
-      .sample .shot {
-        border-radius: 9px;
-        border: 1px solid var(--border-strong);
-        box-shadow: 0 12px 30px -12px rgba(0, 0, 0, 0.8);
-      }
-
-      .escape {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 18px;
-        margin-top: 28px;
-        padding: 18px 30px;
-        background: var(--surface);
-        border: 1px solid var(--border);
-        border-radius: 14px;
-      }
-
-      .escape .copy {
-        font-size: 23px;
-        color: var(--text);
-      }
-
-      .escape .copy span {
-        color: var(--secondary);
-      }
-
-      footer {
-        margin-top: 24px;
+      .trust {
+        margin-top: 30px;
       }
     </style>
   </head>
   <body>
     <div class="stage">
-      <div class="eyebrow"><span class="dot"></span>Three ways in, one way out</div>
-      <h1>Switch however suits you.</h1>
-      <p class="sub">The player, the toolbar, or the keyboard.</p>
+      <!--
+        Crop: raw/popup.png is the toolbar popup, 391x740 — a different aspect
+        ratio from the window captures, so this shot overrides --src-ar rather
+        than changing the shared token.
 
-      <div class="cards">
-        <section class="card">
-          <span class="num">1</span>
-          <h2>The player button</h2>
-          <p>Next to YouTube's own fullscreen button.</p>
-          <div class="sample">
-            <!-- Crop: the injected button and its neighbour, magnified. -->
-            <div
-              class="shot"
-              style="--w: 268px; --cx: 0.925; --cy: 0.879; --cw: 0.075; --ch: 0.07"
-            >
-              <img src="../raw/after-windowed.png" alt="" />
-            </div>
-          </div>
-        </section>
+        The crop runs y=48..648. Both bounds sit in blank space between text rows,
+        so the cut reads as deliberate rather than as a broken layout. The
+        source's own text rows, found by grouping the ones that carry ink:
 
-        <section class="card">
-          <span class="num">2</span>
-          <h2>The toolbar button</h2>
-          <p>One click, wherever you are on the page.</p>
-          <div class="sample">
-            <!-- Crop: the popup's primary action button. -->
-            <div
-              class="shot"
-              style="--w: 290px; --cx: 0.6885; --cy: 0.2535; --cw: 0.2002; --ch: 0.0454"
-            >
-              <img src="../raw/before-popup.png" alt="" />
-            </div>
-          </div>
-        </section>
+          17..37   "Windowed Fullscreen"       432..445  "Support this extension"
+          92..109  status card                 467..484  donate link
+          170..184 "Exit windowed fullscreen"  529..539  "YouTube"
+          263..276 "Keyboard shortcut"         562..603  auto-apply checkbox
+          298..315 shortcut link               622..639  "Scrollable mode"
+          330..386 shortcut hint, 3 lines      657..734  scrollable hint, 4 lines
 
-        <section class="card">
-          <span class="num">3</span>
-          <h2>The keyboard</h2>
-          <p>A shortcut you can change to anything.</p>
-          <div class="sample">
-            <div class="keys">
-              <span class="key">Alt</span>
-              <span class="plus">+</span>
-              <span class="key">Shift</span>
-              <span class="plus">+</span>
-              <span class="key">F</span>
-            </div>
-          </div>
-        </section>
+        Ending at 648 keeps both checkboxes — the payload of this screenshot —
+        and drops the trailing hint, which the capture itself cuts off mid-word
+        and which would be mush once the store halves the image anyway.
+      -->
+      <div
+        class="shot framed"
+        style="--src-ar: 1.8926; --w: 455px; --cy: 0.0649; --ch: 0.8108"
+      >
+        <img src="../raw/popup.png" alt="" />
       </div>
 
-      <div class="escape">
-        <span class="key">Esc</span>
-        <span class="copy">Exits and puts the page back <span>exactly as it was</span></span>
-      </div>
+      <div class="copy">
+        <div class="eyebrow"><span class="dot"></span>Toolbar popup and options</div>
+        <h1 data-no-wrap>Set it once.</h1>
+        <p class="sub">
+          Toggle from the popup, or bind it to whatever key you like.
+        </p>
 
-      <footer>
+        <div class="keys">
+          <span class="key">Alt</span>
+          <span class="plus">+</span>
+          <span class="key">Shift</span>
+          <span class="plus">+</span>
+          <span class="key">F</span>
+        </div>
+        <p class="shortcut-note">Rebindable at chrome://extensions/shortcuts</p>
+
+        <div class="checks">
+          <div class="check">
+            <svg class="mark" viewBox="0 0 20 20" aria-hidden="true">
+              <circle cx="10" cy="10" r="9" fill="rgba(43,143,238,0.16)" />
+              <path
+                d="M5.6 10.3l2.9 2.9L14.4 7.3"
+                fill="none"
+                stroke="#2b8fee"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <span>Enter it automatically when a video loads</span>
+          </div>
+          <div class="check">
+            <svg class="mark" viewBox="0 0 20 20" aria-hidden="true">
+              <circle cx="10" cy="10" r="9" fill="rgba(43,143,238,0.16)" />
+              <path
+                d="M5.6 10.3l2.9 2.9L14.4 7.3"
+                fill="none"
+                stroke="#2b8fee"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <span>Escape backs out one layer at a time</span>
+          </div>
+          <div class="check">
+            <svg class="mark" viewBox="0 0 20 20" aria-hidden="true">
+              <circle cx="10" cy="10" r="9" fill="rgba(43,143,238,0.16)" />
+              <path
+                d="M5.6 10.3l2.9 2.9L14.4 7.3"
+                fill="none"
+                stroke="#2b8fee"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              />
+            </svg>
+            <span>Settings stay on this device, never synced</span>
+          </div>
+        </div>
+
         <div class="trust">
           <span>No accounts</span>
           <span class="sep"></span>
           <span>No tracking</span>
           <span class="sep"></span>
-          <span>Nothing leaves your computer</span>
+          <span>No network requests</span>
         </div>
-      </footer>
+      </div>
     </div>
   </body>
 </html>

@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="asset-size" content="1280x800" />
+    <title>Windowed Fullscreen — the two modes</title>
+    <link rel="stylesheet" href="./_base.css" />
+    <style>
+      .stage {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 40px 60px 0;
+        text-align: center;
+      }
+
+      h1 {
+        margin-top: 10px;
+        font-size: 46px;
+      }
+
+      .row {
+        display: flex;
+        gap: 40px;
+        margin-top: 22px;
+      }
+
+      .col {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      .panel-label {
+        justify-content: center;
+      }
+
+      .panel-label .dim {
+        color: var(--secondary);
+        font-weight: 500;
+      }
+
+      .strip {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+        margin-top: 26px;
+      }
+
+      .strip .panel-label {
+        color: var(--text);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stage">
+      <div class="eyebrow"><span class="dot"></span>Pick one per site</div>
+      <h1 data-no-wrap>Two modes. And the search bar when you want it.</h1>
+
+      <div class="row">
+        <div class="col">
+          <div class="panel-label">Cover <span class="dim">— just the video</span></div>
+          <div class="shot framed" style="--w: 555px">
+            <img src="../raw/windowed.png" alt="" />
+          </div>
+        </div>
+
+        <div class="col">
+          <div class="panel-label">Scrollable <span class="dim">— the page still scrolls</span></div>
+          <!--
+            Measured in raw/scrollable.png (1919x1079): the player ends at y=520
+            and the page's own content — title, description, comments — runs from
+            y=521 to y=1019. That band is the whole point of this mode.
+          -->
+          <div class="shot framed" style="--w: 555px">
+            <img src="../raw/scrollable.png" alt="" />
+            <div class="band" style="top: 48.29%; height: 46.15%"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="strip">
+        <div class="panel-label">
+          Cursor to the top edge: the masthead slides back in
+        </div>
+        <!-- Crop: chrome, the revealed masthead (y=109..178), and the video below. -->
+        <div class="shot framed" style="--w: 1150px; --cy: 0.0927; --cw: 0.62; --ch: 0.1483">
+          <img src="../raw/masthead.png" alt="" />
+        </div>
+      </div>
+    </div>
+  </body>
+</html>

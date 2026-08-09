@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="asset-size" content="1280x800" />
+    <title>Windowed Fullscreen — the side panel</title>
+    <link rel="stylesheet" href="./_base.css" />
+    <style>
+      .stage {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 34px 60px 0;
+        text-align: center;
+      }
+
+      h1 {
+        margin-top: 10px;
+        font-size: 46px;
+      }
+
+      figure {
+        margin-top: 16px;
+      }
+
+      .legend {
+        margin-top: 20px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="stage">
+      <div class="eyebrow"><span class="dot"></span>The comments button</div>
+      <h1 data-no-wrap>Comments beside the video. Never on top of it.</h1>
+
+      <figure>
+        <!--
+          Uncropped capture, so an overlay's `%` maps straight onto the source.
+          Measured in raw/side-panel.png (1919x1079): the player runs y=109..1019,
+          the panel starts at x=1421 — exactly where the video ends, which is the
+          invariant `npm run verify:live` asserts. The injected buttons sit at
+          x=1281..1400, clear of the panel.
+        -->
+        <div class="shot framed" style="--w: 980px">
+          <img src="../raw/side-panel.png" alt="" />
+
+          <!-- The docked panel: YouTube's own #below, positioned beside the player. -->
+          <div class="box" style="left: 74.05%; right: 0.3%; top: 10.1%; height: 84.4%"></div>
+
+          <!-- The two injected control-bar buttons. -->
+          <div
+            class="box amber"
+            style="left: 66.44%; width: 6.83%; top: 89.53%; height: 4.26%"
+          ></div>
+        </div>
+      </figure>
+
+      <div class="legend">
+        <div class="legend-item amber">
+          <span class="swatch"></span>
+          <span>Press this</span>
+        </div>
+        <div class="legend-item">
+          <span class="swatch"></span>
+          <span>Channel, subscribe, likes, description, comments</span>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
