@@ -6,13 +6,41 @@ Copy-paste answers for the Developer Dashboard. Asset files live in `marketing/o
 
 Current package version: **1.2.0** (`release/windowed-fullscreen-v1.2.0.zip`).
 
-1.2.0 combines the three features added since 1.0.0: the masthead hover reveal, scrollable mode, and the side panel. **Nothing in `manifest.json` changed except the version string** — `permissions`, `host_permissions`, `content_scripts.matches`, `commands`, `options_ui`, and `action` are byte-identical to the reviewed 1.0.0 manifest. So there is no new permission warning, no new justification to write, and no data-disclosure change. The three features are CSS and DOM work inside the existing content script:
+Nothing has been published yet, so 1.2.0 is the **first submission** and the version stays there until it is live. Everything below describes it. The number only has to move once the store holds a build carrying it — a listing will not accept the same version twice.
+
+## Name and store search
+
+**Store name: `Windowed Fullscreen for YouTube™`** (32 of the 75 characters a manifest `name` allows). The store listing takes its title from `manifest.json`, not from the dashboard, so the name ships in the package.
+
+Why the trademark is in the title at all: "YouTube" is the term someone looking for this actually types, and the store weights the name heavily in its own search. A title of just "Windowed Fullscreen" competes for a phrase nobody searches, and says nothing about what it works with.
+
+Why it is safe to put there: the [branding guidelines](https://developer.chrome.com/docs/webstore/branding) forbid a Google trademark **as** the name, and separately permit referring to a compatible Google product with "for", "for use with", or "compatible with" plus the ™ symbol — their own worked example is the extension title "Highlight local shops for Google Maps™". So the brand stays first and "for YouTube™" reads as a compatibility statement. The attribution line the same page asks for is already the last line of the description below, and it is now required rather than merely polite, because the mark is in the title.
+
+Note the tension, so nobody is surprised by it: the [YouTube API Services branding guidelines](https://developers.google.com/youtube/branding_guidelines) say never to put "YouTube" or "YT" in an app's name. Those bind YouTube **API clients** — anything using the Data API or the IFrame Player API under the YouTube API ToS. This extension uses neither; it is a content script on a page the user already opened, with no API key and no network calls at all. The Chrome Web Store guidelines are what govern the listing. If a reviewer disagrees anyway, the fallback costs nothing: rename to plain `Windowed Fullscreen` and leave "for YouTube" in the description, where descriptive use is not in question.
+
+What not to do: no keyword stuffing in the title. There is room for another 43 characters and the temptation is a tail like "— Full Window Video, Theater Mode, Multitask". Program policies treat keyword-spammed metadata as grounds for removal, and it reads like malware. Secondary terms belong in the 132-character summary and the first two lines of the description, which is where they are.
+
+**Summary (the manifest `description`, 124 of 132 characters):**
+
+```
+Watch YouTube full-window without true fullscreen: tabs, taskbar and clock stay visible. Dock the comments beside the video.
+```
+
+It leads with the search phrase, names the mechanism that makes the product different, and spends its last clause on the side panel — the feature reviewers and users are least likely to guess from the name.
+
+The in-product wordmark stays **Windowed Fullscreen** — options page, popup, toolbar tooltip, brand mark. "for YouTube™" is a descriptor for the store, not part of the logo, and the guidelines specifically want trademark references kept smaller than the mark itself.
+
+## What 1.2.0 contains
+
+Three features grew on top of the original windowed-fullscreen toggle: the masthead hover reveal, scrollable mode, and the side panel. All three are CSS and DOM work inside the single content script, which is why the manifest asks for nothing beyond `storage` and `*://*.youtube.com/*`:
 
 - **Side panel** repositions YouTube's own `#below` element with CSS. It does not use `chrome.sidePanel`, `scripting`, or `tabs`, and it does not move site DOM — Polymer keeps owning the element, which is why likes, subscribe, and comment pagination keep working.
 - **Masthead reveal** tracks cursor proximity in JS and toggles a class. No new host access, and no pointer-event-catching overlay.
 - **Scrollable mode** is one extra stored boolean and a second half of the same stylesheet.
 
-If a reviewer asks why the update needs no new permissions, that is the answer.
+Also in 1.2.0: YouTube's chapter row no longer wraps its last segment onto a second line in windowed mode, which painted a stray red line under the scrubber. It was a sub-pixel bar width against float segments YouTube sizes in whole pixels — see `AGENTS.md`.
+
+If a reviewer asks why so little is requested for this much behaviour, that is the answer.
 
 ## Justifications
 
@@ -32,7 +60,7 @@ If a reviewer asks why the update needs no new permissions, that is the answer.
 
 ## Trademark attribution
 
-The listing describes the extension as working with YouTube, a Google trademark, so the [branding guidelines](https://developer.chrome.com/docs/webstore/branding) ask for an attribution in the description:
+The title and the description both name YouTube, a Google trademark, so the [branding guidelines](https://developer.chrome.com/docs/webstore/branding) require this attribution in the description. It is the last line of the copy below — do not drop it while editing. The ™ symbol belongs in the title, not in the attribution: the attribution text already says the mark is Google's.
 
 ```
 YouTube is a trademark of Google LLC. Use of this trademark is subject to Google Permissions.

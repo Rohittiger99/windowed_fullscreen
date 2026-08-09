@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Windowed Fullscreen",
+  "name": "Windowed Fullscreen for YouTube™",
   "version": "1.2.0",
-  "description": "Adds a windowed-fullscreen button next to YouTube's fullscreen control. The video fills the window; tabs and taskbar stay visible.",
+  "description": "Watch YouTube full-window without true fullscreen: tabs, taskbar and clock stay visible. Dock the comments beside the video.",
   "minimum_chrome_version": "116",
   "homepage_url": "https://rohittiger.vercel.app/product/windowedfullscreen",
   "icons": {
