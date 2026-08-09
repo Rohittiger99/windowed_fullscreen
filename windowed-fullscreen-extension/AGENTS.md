@@ -142,6 +142,16 @@ the first success — otherwise the toggle only appeared if some later mutation
 happened to trigger a re-check, which on a paused player could be never. Any new
 `ButtonSpec` with an `isAvailable` inherits this for free.
 
+**A `SiteDescriptor` field about something that mounts late must be a predicate,
+not a snapshot.** `hasSideContent` is a function for exactly this reason. It used
+to be the element itself, resolved once in `resolveDescriptor`, and with
+auto-apply on it was resolved before `#below` existed — so `setPanelOpen` refused
+for the rest of the session and the comment button sat there injected and inert.
+Only auto-apply on a reload hit it, because pressing the button by hand happens
+long after the block has mounted. Everything else in the descriptor is a genuine
+snapshot; if you add a field, decide which kind it is and say so in the comment.
+`tests/panel.test.ts` guards this one by mounting the block *after* entry.
+
 **Do not hide an ancestor of the player.** `#movie_player` lives inside
 `#page-manager`. `display: none` on an ancestor takes the video with it — a
 `position: fixed` descendant is not spared. That produced a black screen. Only
@@ -153,9 +163,29 @@ masthead did exactly that to sit "above" the player, tied with it instead, and
 lost on document order — `#masthead-container` precedes `#page-manager` — so the
 revealed bar painted *behind* a full-viewport player and could be neither seen
 nor clicked. §3 now declares an explicit scale (`--wfs-z-player` <
-`--wfs-z-panel` < `--wfs-z-chrome`), all below the maximum, and `PLAYER_Z_INDEX`
-in §7 matches the first of them because it lands on the same element. Adding a
-layer means adding a token, not reaching for the ceiling.
+`--wfs-z-panel` < `--wfs-z-chrome` < `--wfs-z-overlay`), all below the maximum,
+and `PLAYER_Z_INDEX` in §7 matches the first of them because it lands on the same
+element. Adding a layer means adding a token, not reaching for the ceiling.
+
+**Raising the player buries everything the site opens over itself.** YouTube
+appends its menus, dialogs and toasts to hosts hanging off `ytd-app` —
+`ytd-popup-container`, `snackbar-container`, `tp-yt-app-drawer#guide` — at
+z-indexes in the low thousands, not to the button that opened them. So they do
+not inherit the masthead's layer, and the notifications and account menus opened
+*underneath* the side panel: a sliver visible past its left edge and otherwise
+unusable. All three hosts are lifted to `--wfs-z-overlay` at the end of §3. Lift
+the host, not the popup: the host holds every popup the site has, including ones
+that do not exist yet, and a z-index on it makes a stacking context so the popups
+keep their order relative to each other. A z-index alone creates no containing
+block, so the `position: fixed` popups inside still anchor to the viewport.
+Search suggestions are deliberately absent from that list — they render inside
+`yt-searchbox`, so they already ride the masthead.
+
+**The guide drawer may only be lifted while `[opened]`.** It is `position: fixed`
+across the whole viewport even when closed, so an unconditional lift parks an
+invisible full-window element above the video and eats every click on it — the
+same mistake as the masthead hover zone. `verify:live` asserts a closed drawer is
+still below the player.
 
 **Read the theme, don't inherit a token you cannot see.**
 `--yt-spec-base-background` is not set on `<html>`, so `var(..., #0f0f0f)` on
@@ -210,6 +240,29 @@ recomputes its player layout, which silently shrinks the control bar from 72px t
 added, capped at `MAX_CLASS_REASSERTIONS`. If you find a way to own the control
 sizing outright, that contest can go away.
 
+**Putting a stripped class back is only half the repair.** YouTube sizes the parts
+of the control bar that CSS cannot express — the width of every chapter segment,
+the scrubber's offset — in JS pixels, from the bar width it last measured, and it
+only recomputes on a resize. It strips `ytp-big-mode` *during* that relayout, so
+writing the class back in the same task means it finishes measuring without it and
+caches geometry for a bar we then render at a different size. On a chaptered video
+that is unmissable: the progress bar breaks into segments that no longer tile it and
+the scrubber sits off the true playhead. It only showed up with the side panel
+docked, because narrowing the player is what makes YouTube disagree about the size,
+and only on some videos, because a bar with no chapters has almost no per-pixel
+geometry to get wrong. So the re-assert is deferred to the next animation frame —
+after YouTube's task, before any paint, so no frame renders at the small size — and
+followed by a reflow nudge.
+
+**That nudge must be debounced.** The nudge is a resize, YouTube answers a resize
+by relayouting, and a relayout is when it strips the class. Nudging once per strip
+turned a single disagreement into a contest that burned all 50 reassertions in a few
+seconds and gave up, leaving the small control bar for the rest of the session.
+`GEOMETRY_REPAIR_DEBOUNCE_MS` collapses a burst into one repair and
+`MAX_GEOMETRY_REPAIRS` bounds it, per the bounded-loops invariant. Measured after
+the fix, docking costs exactly one strip, restored in the same millisecond, then
+quiet.
+
 **Letterboxing in windowed mode is correct.** A maximized window is
 proportionally wider than 16:9 because the browser chrome and taskbar take height
 and nothing takes width, so an aspect-preserving fit leaves bars at the sides.
@@ -242,8 +295,9 @@ an extra `:not()` to win by class count rather than source order.
 
 ## Verifying layout changes
 
-`npm test` covers preferences, URL matching, and the adapter registry. It cannot
-see layout, because layout only exists inside a real YouTube page.
+`npm test` covers preferences, URL matching, the adapter registry, and the
+controller's panel state machine. It cannot see layout, because layout only
+exists inside a real YouTube page.
 
 `npm run verify:live` fills that gap. It attaches to a Chrome instance over the
 DevTools protocol, injects the real content script into a watch page, clicks the
@@ -252,7 +306,9 @@ actual buttons, and asserts the geometry invariants:
 - the panel's left edge sits exactly on the player's right edge (no overlap)
 - the control bar clears the panel
 - `ytp-big-mode` survives, so the control bar stays at its large size
-- the layers stay ordered player < panel < masthead, none of them clamped
+- the layers stay ordered player < panel < masthead < popups, none of them clamped
+- the site's own menus and dialogs open above the player and the panel, while a
+  closed guide drawer stays below the player so it cannot swallow clicks
 - the panel is opaque and legible in both the light and the dark theme
 - the revealed masthead owns the top edge, rather than the player's overlay
 - entering fullscreen leaves no class or inline style of ours behind

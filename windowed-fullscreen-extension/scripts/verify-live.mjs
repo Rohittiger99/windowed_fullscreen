@@ -155,12 +155,30 @@ const PROBE = `(() => {
     // asking to be above the maximum is clamped onto it and then loses on
     // document order. That is how the revealed masthead ended up painting
     // behind the player.
+    //
+    // The popup and toast hosts are YouTube's own. They hang off ytd-app in the
+    // low thousands, so raising the player buries every menu and dialog the site
+    // opens unless they are lifted too.
     layers: (() => {
       const z = (sel) => {
         const el = document.querySelector(sel);
         return el ? getComputedStyle(el).zIndex : null;
       };
-      return { player: z('#movie_player'), panel: z('ytd-watch-flexy #below'), masthead: z('#masthead-container') };
+      return {
+        player: z('#movie_player'),
+        panel: z('ytd-watch-flexy #below'),
+        masthead: z('#masthead-container'),
+        popups: z('ytd-popup-container'),
+        toasts: z('snackbar-container'),
+      };
+    })(),
+    // A closed guide drawer is position:fixed across the whole viewport, so
+    // lifting it unconditionally would put an invisible full-window element over
+    // the video. It must only be raised while [opened].
+    closedDrawerZ: (() => {
+      const el = document.querySelector('tp-yt-app-drawer#guide');
+      if (!el || el.hasAttribute('opened')) return null;
+      return getComputedStyle(el).zIndex;
     })(),
     // The panel is opaque and carries the site's own theme. It used to read a
     // YouTube token that is not set on <html>, so it always painted the dark
@@ -190,6 +208,31 @@ const PROBE = `(() => {
     })(),
   });
 })()`;
+
+/**
+ * Is `el` the topmost thing at several points inside its own box?
+ *
+ * A z-index comparison is not enough on its own: paint order also depends on
+ * stacking contexts and document order, which is exactly what went wrong when the
+ * masthead's clamped z-index tied with the player's. Hit-testing several points
+ * is what actually answers "can the user see and click this".
+ *
+ * Sampling more than the centre matters because these overlays only partly
+ * overlap the panel — a single point can miss the overlapping region entirely.
+ */
+const TOPMOST = `((el) => {
+  const r = el.getBoundingClientRect();
+  if (r.width < 4 || r.height < 4) return { ok: false, why: 'not rendered' };
+  const misses = [];
+  for (const [fx, fy] of [[0.5, 0.15], [0.5, 0.5], [0.5, 0.85], [0.15, 0.5], [0.85, 0.5]]) {
+    const x = Math.round(r.left + r.width * fx);
+    const y = Math.round(r.top + r.height * fy);
+    if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight) continue;
+    const hit = document.elementFromPoint(x, y);
+    if (!hit || !el.contains(hit)) misses.push(x + ',' + y + '->' + (hit ? hit.tagName.toLowerCase() : 'null'));
+  }
+  return { ok: misses.length === 0, misses };
+})`;
 
 /** Perceived luminance of a `rgb()`/`rgba()` string, or null if unreadable. */
 function luminance(colour) {
@@ -318,11 +361,56 @@ async function main() {
     `bigMode=${docked.bigMode}, bar ${docked.controlBar.height}`,
   );
   check(
-    "the layers are ordered player < panel < masthead, none of them clamped",
+    "the layers are ordered player < panel < masthead < popups, none clamped",
     Number(docked.layers.player) < Number(docked.layers.panel) &&
       Number(docked.layers.panel) < Number(docked.layers.masthead) &&
-      Number(docked.layers.masthead) < 2147483647,
-    `player ${docked.layers.player}, panel ${docked.layers.panel}, masthead ${docked.layers.masthead}`,
+      Number(docked.layers.masthead) < Number(docked.layers.popups) &&
+      Number(docked.layers.popups) < 2147483647 &&
+      Number(docked.layers.toasts) > Number(docked.layers.panel),
+    `player ${docked.layers.player}, panel ${docked.layers.panel}, masthead ${docked.layers.masthead}, popups ${docked.layers.popups}, toasts ${docked.layers.toasts}`,
+  );
+  check(
+    "a closed guide drawer is left on its own layer, so it cannot eat clicks",
+    docked.closedDrawerZ === null || Number(docked.closedDrawerZ) < Number(docked.layers.player),
+    `closed drawer z ${docked.closedDrawerZ} vs player ${docked.layers.player}`,
+  );
+
+  // --- the site's own popups open over the mode ------------------------------
+  // Everything YouTube opens over its page — notification and account menus, a
+  // comment's overflow menu, dialogs, toasts — is appended to a host hanging off
+  // ytd-app at a z-index in the low thousands, not to the button that opened it.
+  // Raising the player buried all of it: the reported symptom was the
+  // notifications menu opening underneath the docked comments.
+  //
+  // A stand-in is put into the real host rather than driving a real menu. YouTube
+  // needs a signed-in account for notifications, and the share dialog is
+  // lazy-loaded and not reliably open by this point, so a click-driven check is
+  // flaky for reasons that have nothing to do with the property being tested.
+  // The stand-in takes the same shape as a real dropdown — position:fixed at
+  // z-index 2202 inside ytd-popup-container — and straddles the panel's left
+  // edge, which is exactly where the real menus were being clipped.
+  const popup = JSON.parse(
+    await evaluate(
+      `(() => {
+        const host = document.querySelector('ytd-popup-container');
+        const panel = document.querySelector('ytd-watch-flexy #below');
+        if (!host || !panel) return JSON.stringify({ ok: false, why: 'no popup host' });
+        const edge = panel.getBoundingClientRect().left;
+        const el = document.createElement('div');
+        el.style.cssText = 'position:fixed;z-index:2202;top:120px;width:260px;height:300px;background:#000;';
+        el.style.left = Math.round(Math.max(0, edge - 130)) + 'px';
+        host.appendChild(el);
+        const result = (${TOPMOST})(el);
+        el.remove();
+        return JSON.stringify(result);
+      })()`,
+      false,
+    ),
+  );
+  check(
+    "the site's own popups open above the player and the panel",
+    popup.ok === true,
+    popup.why ?? `covered at ${(popup.misses ?? []).join(" ")}`,
   );
 
   // --- the panel follows the site's theme -----------------------------------

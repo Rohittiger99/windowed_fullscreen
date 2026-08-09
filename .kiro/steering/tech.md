@@ -49,7 +49,7 @@ This is why **the source must have no top-level side effects**. Add one and ever
 
 ## Testing layers
 
-- `npm test` covers preferences, URL matching, and the adapter registry (`tests/prefs.test.ts`, `tests/adapters.test.ts`). It cannot see layout.
+- `npm test` covers preferences, URL matching, the adapter registry, and the controller's panel state machine (`tests/prefs.test.ts`, `tests/adapters.test.ts`, `tests/panel.test.ts`). It cannot see layout.
 - `npm run verify:live` attaches to Chrome over the DevTools protocol, injects the real content script into a watch page, clicks the real buttons, and asserts geometry: the panel's left edge sits exactly on the player's right edge, the control bar clears the panel, `ytp-big-mode` survives, and fullscreen leaves none of our classes or inline styles behind. Needs a browser and network, so it is **not part of CI**. Run it locally before shipping any change to the site CSS, the controller's geometry, or the fullscreen handoff.
 
 ## CI

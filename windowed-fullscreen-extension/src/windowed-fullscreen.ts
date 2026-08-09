@@ -133,10 +133,18 @@ export interface SiteDescriptor {
   player: Element;
   nativeFullscreenButton: Element;
   /**
-   * The below-video block the side panel docks, or null when the site has none.
-   * Null only disables the panel; the mode itself does not depend on it.
+   * Whether the site currently has a below-video block for the side panel to
+   * dock. False only disables the panel; the mode itself does not depend on it.
+   *
+   * A predicate, not an element, and the one field here that is deliberately not
+   * a snapshot. The block mounts LATER than the player does — several seconds
+   * later on YouTube — so a value captured at entry says "nothing to dock" for
+   * the rest of the session on any page where the mode went on early. Auto-apply
+   * on a reload is exactly that page, and it left the comment button injected but
+   * permanently inert. Resolved on demand instead, so the answer is whatever is
+   * true at the moment the reader presses the button.
    */
-  sideContent: Element | null;
+  hasSideContent: () => boolean;
   /** Chrome elements that resolved; may be empty. */
   siteChromeElements: Element[];
   /** Selectors that matched nothing, recorded for diagnostics. */
@@ -284,7 +292,14 @@ const YT_ACTIVE_MODE_CSS = `
    "above" the player; it tied with it instead, and lost on document order —
    #masthead-container precedes #page-manager — so the revealed bar painted
    BEHIND a full-viewport player and could be neither seen nor clicked. Leave
-   headroom below the maximum and order the three layers explicitly.
+   headroom below the maximum and order the layers explicitly.
+
+   Raising the player above the page also buries everything the page opens OVER
+   itself. YouTube's overlay hosts sit in the low thousands — popups at 2202, the
+   guide drawer at 2030 — and hang off ytd-app rather than off the element that
+   triggered them, so they do not inherit the masthead's layer. Left alone, the
+   notifications and account menus opened underneath the side panel. Every such
+   host is lifted to --wfs-z-overlay at the end of this stylesheet.
    ------------------------------------------------------------------------- */
 html.wfs-windowed {
   /* Light theme (YouTube's default when <html> carries no \`dark\`). */
@@ -292,9 +307,13 @@ html.wfs-windowed {
   --wfs-edge: rgba(0, 0, 0, 0.14);
   --wfs-scrim: rgba(255, 255, 255, 0.94);
 
-  --wfs-z-player: 2147483640;
-  --wfs-z-panel: 2147483643;
-  --wfs-z-chrome: 2147483646;
+  --wfs-z-player: 2147483630;
+  --wfs-z-panel: 2147483634;
+  --wfs-z-chrome: 2147483638;
+  /* Above the masthead, because that is where YouTube puts its own popups
+     relative to it, and because a menu anchored to a masthead button opens
+     downward across both the video and the panel. */
+  --wfs-z-overlay: 2147483642;
 }
 
 html[dark].wfs-windowed {
@@ -770,6 +789,42 @@ html.wfs-windowed.wfs-side-panel #comments #header {
    reveals over the top of the video. Nudging the panel's padding to compensate
    would shift the text mid-read, so it does not: the bar is transient, and the
    panel scrolls under it. */
+
+/* -------------------------------------------------------------------------
+   Page-level overlay hosts.
+
+   Anything YouTube opens over its own page — the notifications and account
+   menus, a comment's overflow menu, the share dialog, a "Saved to Watch later"
+   toast — is not rendered inside the thing that triggered it. It is appended to
+   a host hanging off ytd-app, at a z-index in the low thousands, which is far
+   below the layer the expanded player occupies. So the menus opened *underneath*
+   the video and the side panel: visible as a sliver past the panel's left edge
+   and otherwise unusable.
+
+   Raising the host rather than the popup is deliberate. These hosts hold every
+   popup YouTube has, including ones that do not exist yet, and giving the host a
+   z-index makes it a stacking context so the popups keep their existing order
+   relative to each other. A z-index alone does not create a containing block, so
+   the position:fixed popups inside still anchor to the viewport.
+
+   Search suggestions are absent from this list on purpose: they render inside
+   yt-searchbox, which is inside #masthead-container, so they already ride the
+   masthead's layer.
+   ------------------------------------------------------------------------- */
+html.wfs-windowed ytd-popup-container,
+html.wfs-windowed snackbar-container {
+  z-index: var(--wfs-z-overlay) !important;
+}
+
+/* The guide drawer, and ONLY while it is open. It is position:fixed across the
+   whole viewport even when closed, so raising it unconditionally would park an
+   invisible full-window element above the video and swallow every click on it —
+   the same mistake the masthead hover zone made. The [opened] attribute is
+   YouTube's own signal, so the drawer drops back to its normal layer the moment
+   it starts closing. */
+html.wfs-windowed tp-yt-app-drawer#guide[opened] {
+  z-index: var(--wfs-z-overlay) !important;
+}
 `;
 
 /**
@@ -1177,9 +1232,11 @@ function injectStyles(doc: Document, siteCss: string): void {
  * Deliberately not 2147483647. z-index is a 32-bit signed integer, so nothing
  * can sit above the maximum: a rule asking for 2147483648 is clamped back to the
  * same value and then loses on document order. Matches `--wfs-z-player` in the
- * YouTube stylesheet (§3), which applies to the same element.
+ * YouTube stylesheet (§3), which applies to the same element — and sits below
+ * the layers that stylesheet reserves for the panel, the site's top chrome, and
+ * the site's own popups.
  */
-const PLAYER_Z_INDEX = "2147483640";
+const PLAYER_Z_INDEX = "2147483630";
 
 /**
  * Delays (ms) at which a synthetic `resize` is dispatched after the player size
@@ -1191,8 +1248,12 @@ const PLAYER_Z_INDEX = "2147483640";
  * intermittent "sometimes half, sometimes full" scrubber. The player resizes
  * synchronously, so `0` covers the common case; the later ticks cover the
  * site's own debounced layout settling.
+ *
+ * The 1200ms tail is for the side panel: docking it mounts the comment list,
+ * which the site hydrates well after the width change, and it relayouts the
+ * player again when it does.
  */
-const REFLOW_NUDGE_DELAYS_MS = [0, 60, 250, 600] as const;
+const REFLOW_NUDGE_DELAYS_MS = [0, 60, 250, 600, 1200] as const;
 
 /**
  * How many times one session will re-apply a player class the site removed.
@@ -1201,6 +1262,28 @@ const REFLOW_NUDGE_DELAYS_MS = [0, 60, 250, 600] as const;
  * them cannot be fought indefinitely.
  */
 const MAX_CLASS_REASSERTIONS = 50;
+
+/**
+ * How long the player's class attribute must be quiet before the mode asks the
+ * site to re-measure.
+ *
+ * The debounce is not politeness, it is what stops a runaway. The site strips
+ * these classes in bursts while it relayouts, and the nudge that repairs the
+ * geometry is itself a resize the site answers by relayouting again — which can
+ * strip the class again. Nudging per strip turned one disagreement into a contest
+ * that burned {@link MAX_CLASS_REASSERTIONS} in a few seconds and then gave up,
+ * leaving the small control bar. Waiting for quiet collapses a burst into one
+ * repair.
+ */
+const GEOMETRY_REPAIR_DEBOUNCE_MS = 400;
+
+/**
+ * How many re-measures one session will ask for after a class contest. Each is a
+ * real fix for a real stale layout, but since a nudge can provoke the next strip
+ * this is bounded like every other loop here. Four covers the handful of
+ * transitions a session actually produces.
+ */
+const MAX_GEOMETRY_REPAIRS = 4;
 
 /**
  * Inline player properties the controller mutates. Kebab-case so
@@ -1326,6 +1409,15 @@ export class WindowedFullscreenController {
   private playerClassWatcher: MutationObserver | null = null;
   /** Bounds the re-apply loop if the site insists on removing the classes. */
   private classReassertions = 0;
+  /**
+   * Cancels the pending deferred class re-assert, so a burst of mutations costs
+   * one write. A disposer rather than an id because the schedule falls back from
+   * `requestAnimationFrame` to `setTimeout`, which cancel differently.
+   */
+  private classReassertCancel: (() => void) | null = null;
+  /** Debounced re-measure after a class contest, and its bound. */
+  private geometryRepairTimer: number | null = null;
+  private geometryRepairs = 0;
   /** Only the classes we actually added, so exit removes exactly those. */
   private addedPlayerClasses: string[] = [];
   private reflowTimers: number[] = [];
@@ -1373,13 +1465,18 @@ export class WindowedFullscreenController {
    */
   setPanelOpen(open: boolean): boolean {
     if (!this.active) return false;
-    if (open && !this.descriptor?.sideContent) return false;
+    // Asked, not remembered: see `hasSideContent` for why a snapshot is wrong.
+    if (open && !this.descriptor?.hasSideContent()) return false;
 
     if (open === this.panelOpen) return true;
 
     this.panelOpen = open;
     this.doc.documentElement.classList.toggle(PANEL_CLASS, open);
     this.applyPanelButtonState(open);
+    // A deliberate width change earns a fresh repair budget: this is the moment
+    // the site is most likely to disagree about the player's size, and the reader
+    // is looking straight at the control bar when it does.
+    this.geometryRepairs = 0;
     // The player just changed width, and YouTube derives its control-bar
     // geometry from that in JS — the same reason entry and exit nudge it.
     this.scheduleReflowNudge();
@@ -1650,13 +1747,36 @@ export class WindowedFullscreenController {
    *
    * Re-adding cannot recurse: the observer fires again on our own write, sees
    * nothing missing, and does nothing.
+   *
+   * The write is DEFERRED to the end of the current task, and followed by a
+   * reflow nudge. Both matter, and a bug found the hard way is why.
+   *
+   * The site strips these classes *during* its own control-bar relayout, because
+   * it has just decided the player is no longer the size those classes are for.
+   * Writing them back inside that same task means it finishes measuring with the
+   * class absent, and caches geometry for the small control bar — then our class
+   * comes back and the bar renders at the large size against measurements taken
+   * for the small one. Anything the site sizes in JS pixels is then wrong, which
+   * on a chaptered video is glaring: the progress bar breaks into segments that
+   * no longer tile the bar, and the scrubber sits off the true playhead. It only
+   * showed up with the side panel docked, because narrowing the player is what
+   * makes the site disagree about the size in the first place, and only on some
+   * videos, because a bar without chapters has almost no per-pixel geometry to
+   * get wrong.
+   *
+   * So: let the site finish, then put the classes back, then ask it to measure
+   * again. The nudge is the half that actually repairs the geometry.
    */
   private startPlayerClassWatcher(player: Element): void {
     if (this.playerClassWatcher || typeof MutationObserver === "undefined") return;
 
     this.classReassertions = 0;
+    this.geometryRepairs = 0;
     this.playerClassWatcher = new MutationObserver(() => {
       if (!this.active) return;
+      // A re-assert is already queued; the burst of mutations the site makes
+      // while relayouting should cost one write, not one per mutation record.
+      if (this.classReassertCancel !== null) return;
       const missing = this.addedPlayerClasses.filter((cls) => !player.classList.contains(cls));
       if (missing.length === 0) return;
 
@@ -1671,9 +1791,75 @@ export class WindowedFullscreenController {
       }
 
       this.classReassertions += 1;
-      player.classList.add(...missing);
+      this.queueClassReassert(player);
     });
     this.playerClassWatcher.observe(player, { attributes: true, attributeFilter: ["class"] });
+  }
+
+  /**
+   * Put the tracked classes back once the site's current task has finished, then
+   * make it re-measure. See {@link startPlayerClassWatcher} for why the delay and
+   * the nudge are both load-bearing.
+   */
+  private queueClassReassert(player: Element): void {
+    const view = this.doc.defaultView;
+
+    const reassert = (): void => {
+      this.classReassertCancel = null;
+      if (!this.active) return;
+      const missing = this.addedPlayerClasses.filter((cls) => !player.classList.contains(cls));
+      // The site may have put them back itself while we waited.
+      if (missing.length === 0) return;
+      player.classList.add(...missing);
+      // Debounced, NOT immediate: see GEOMETRY_REPAIR_DEBOUNCE_MS.
+      this.scheduleGeometryRepair();
+    };
+
+    if (!view) {
+      reassert();
+      return;
+    }
+
+    // requestAnimationFrame rather than a timeout: it still runs after the site's
+    // task has finished, so the measurement problem is solved either way, but it
+    // runs BEFORE the next paint — so the control bar never renders a frame at
+    // the small size on its way back to the large one.
+    if (typeof view.requestAnimationFrame === "function") {
+      const frame = view.requestAnimationFrame(reassert);
+      this.classReassertCancel = () => view.cancelAnimationFrame(frame);
+      return;
+    }
+    const timer = view.setTimeout(reassert, 0);
+    this.classReassertCancel = () => view.clearTimeout(timer);
+  }
+
+  /**
+   * Ask the site to re-measure once its class writes have gone quiet.
+   *
+   * This is the half that actually repairs the layout. The site sizes the parts
+   * of its control bar that cannot be expressed in CSS — the width of each
+   * chapter segment, the scrubber's offset — in JS pixels, from the bar width it
+   * last measured, and only recomputes on a resize. Take the classes away and put
+   * them back without one, and the bar renders at a size those pixels do not
+   * describe: on a chaptered video the segments stop tiling the bar and the
+   * scrubber sits off the true playhead.
+   */
+  private scheduleGeometryRepair(): void {
+    const view = this.doc.defaultView;
+    if (!view) return;
+
+    if (this.geometryRepairTimer !== null) {
+      view.clearTimeout(this.geometryRepairTimer);
+      this.geometryRepairTimer = null;
+    }
+    if (this.geometryRepairs >= MAX_GEOMETRY_REPAIRS) return;
+
+    this.geometryRepairTimer = view.setTimeout(() => {
+      this.geometryRepairTimer = null;
+      if (!this.active) return;
+      this.geometryRepairs += 1;
+      this.scheduleReflowNudge();
+    }, GEOMETRY_REPAIR_DEBOUNCE_MS) as unknown as number;
   }
 
   private stopPlayerWatcher(): void {
@@ -1681,6 +1867,14 @@ export class WindowedFullscreenController {
     this.playerWatcher = null;
     this.playerClassWatcher?.disconnect();
     this.playerClassWatcher = null;
+    // A queued re-assert would otherwise fire after exit and put a class back on
+    // a player the mode no longer owns.
+    this.classReassertCancel?.();
+    this.classReassertCancel = null;
+    if (this.geometryRepairTimer !== null) {
+      this.doc.defaultView?.clearTimeout(this.geometryRepairTimer);
+      this.geometryRepairTimer = null;
+    }
   }
 
   /**
@@ -2311,9 +2505,11 @@ function resolveDescriptor(
   return {
     player,
     nativeFullscreenButton,
-    // Optional: a page with nothing to dock is still perfectly usable, it just
-    // has no side panel.
-    sideContent: adapter.findSideContent(doc),
+    // Deliberately lazy: the below-video block mounts long after the player, so
+    // resolving it here would freeze "no panel available" into a session that
+    // entered early. A page with nothing to dock is still perfectly usable, it
+    // just has no side panel.
+    hasSideContent: () => adapter.findSideContent(doc) !== null,
     siteChromeElements,
     missingChromeSelectors,
     activePlayerClasses: adapter.getActivePlayerClasses(),
