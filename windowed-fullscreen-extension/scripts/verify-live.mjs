@@ -109,7 +109,10 @@ const PROBE = `(() => {
     const el = document.querySelector(sel);
     if (!el) return null;
     const b = el.getBoundingClientRect();
-    return { left: Math.round(b.left), right: Math.round(b.right), width: Math.round(b.width), height: Math.round(b.height) };
+    return {
+      left: Math.round(b.left), right: Math.round(b.right), top: Math.round(b.top), bottom: Math.round(b.bottom),
+      width: Math.round(b.width), height: Math.round(b.height),
+    };
   };
   const player = document.querySelector('#movie_player');
   const inline = player ? player.style : null;
@@ -148,8 +151,54 @@ const PROBE = `(() => {
     panel: rect('ytd-watch-flexy #below'),
     controlBar: rect('.ytp-chrome-bottom'),
     rightControls: rect('.ytp-right-controls'),
+    // Nothing may sit at 2147483647: z-index is a 32-bit integer, so a layer
+    // asking to be above the maximum is clamped onto it and then loses on
+    // document order. That is how the revealed masthead ended up painting
+    // behind the player.
+    layers: (() => {
+      const z = (sel) => {
+        const el = document.querySelector(sel);
+        return el ? getComputedStyle(el).zIndex : null;
+      };
+      return { player: z('#movie_player'), panel: z('ytd-watch-flexy #below'), masthead: z('#masthead-container') };
+    })(),
+    // The panel is opaque and carries the site's own theme. It used to read a
+    // YouTube token that is not set on <html>, so it always painted the dark
+    // fallback — black panel behind black light-theme text.
+    theme: (() => {
+      const panel = document.querySelector('ytd-watch-flexy #below');
+      const text = document.querySelector('ytd-watch-metadata');
+      if (!panel || !text) return null;
+      return {
+        dark: document.documentElement.hasAttribute('dark'),
+        panelBackground: getComputedStyle(panel).backgroundColor,
+        textColour: getComputedStyle(text).color,
+      };
+    })(),
+    // With the bar revealed, the top edge of the window must belong to the
+    // masthead. YouTube's .ytp-overlay-top-right un-autohides into exactly that
+    // strip on cursor movement and used to swallow the hover and the click.
+    topEdgeOwner: (() => {
+      const el = document.elementFromPoint(Math.round(innerWidth / 2), 20);
+      if (!el) return null;
+      return document.querySelector('#masthead-container')?.contains(el) ? 'masthead' : el.className.toString().slice(0, 60) || el.tagName;
+    })(),
+    masthead: rect('#masthead-container'),
+    mastheadOpacity: (() => {
+      const el = document.querySelector('#masthead-container');
+      return el ? getComputedStyle(el).opacity : null;
+    })(),
   });
 })()`;
+
+/** Perceived luminance of a `rgb()`/`rgba()` string, or null if unreadable. */
+function luminance(colour) {
+  const parts = /rgba?\(([^)]+)\)/.exec(colour ?? "");
+  if (!parts) return null;
+  const [r, g, b, a = "1"] = parts[1].split(",").map((n) => Number.parseFloat(n));
+  if (Number.parseFloat(a) < 0.99) return null; // Transparent: the video shows through.
+  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+}
 
 async function main() {
   const target = await findWatchTab();
@@ -268,6 +317,59 @@ async function main() {
     docked.bigMode && docked.controlBar.height === windowed.controlBar.height,
     `bigMode=${docked.bigMode}, bar ${docked.controlBar.height}`,
   );
+  check(
+    "the layers are ordered player < panel < masthead, none of them clamped",
+    Number(docked.layers.player) < Number(docked.layers.panel) &&
+      Number(docked.layers.panel) < Number(docked.layers.masthead) &&
+      Number(docked.layers.masthead) < 2147483647,
+    `player ${docked.layers.player}, panel ${docked.layers.panel}, masthead ${docked.layers.masthead}`,
+  );
+
+  // --- the panel follows the site's theme -----------------------------------
+  // The panel is opaque page content laid over the player, so a hardcoded colour
+  // is legible in one theme and invisible in the other. Both are checked by
+  // flipping the `dark` attribute YouTube itself uses.
+  const siteWasDark = docked.theme?.dark === true;
+  const setTheme = (dark) =>
+    evaluate(
+      `(() => { const h = document.documentElement; ${dark ? `h.setAttribute('dark', '')` : `h.removeAttribute('dark')`}; return true; })()`,
+      false,
+    );
+  for (const dark of [false, true]) {
+    await setTheme(dark);
+    await sleep(600);
+    const { theme } = await measure();
+    const bg = luminance(theme?.panelBackground);
+    const fg = luminance(theme?.textColour);
+    check(
+      `the panel is opaque and legible in the ${dark ? "dark" : "light"} theme`,
+      bg !== null && fg !== null && Math.abs(bg - fg) > 0.4,
+      `background ${theme?.panelBackground} vs text ${theme?.textColour}`,
+    );
+  }
+  await setTheme(siteWasDark);
+  await sleep(400);
+
+  // --- the revealed masthead owns the top edge ------------------------------
+  // Cursor proximity is tracked in JS, so the reveal class can be set directly;
+  // what matters here is that the bar then paints and hit-tests above the player.
+  await evaluate(`document.documentElement.classList.add('wfs-reveal-chrome'); true`, false);
+  await sleep(600);
+  const revealed = await measure();
+  check(
+    "hovering the top edge slides the masthead into view",
+    revealed.masthead?.top === 0 && revealed.mastheadOpacity === "1",
+    `masthead top ${revealed.masthead?.top}, opacity ${revealed.mastheadOpacity}`,
+  );
+  check(
+    "the revealed masthead owns the top edge, not the player's overlay",
+    revealed.topEdgeOwner === "masthead",
+    `top edge belongs to ${revealed.topEdgeOwner}`,
+  );
+  await evaluate(`document.documentElement.classList.remove('wfs-reveal-chrome'); true`, false);
+  // Long enough for the delayed hide to finish, so the fullscreen leg below
+  // starts from a settled layout rather than mid-transition.
+  await sleep(800);
 
   // --- fullscreen round trip ------------------------------------------------
   // A refused fullscreen request is an automation limitation, not a regression,

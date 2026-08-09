@@ -147,6 +147,63 @@ happened to trigger a re-check, which on a paused player could be never. Any new
 `position: fixed` descendant is not spared. That produced a black screen. Only
 elements outside the player subtree may go in `chromeAlways` / `chromeCoverOnly`.
 
+**`z-index: 2147483647` is a ceiling, not a rank.** z-index is a 32-bit signed
+integer, so a rule asking for 2147483648 is clamped back onto the maximum. The
+masthead did exactly that to sit "above" the player, tied with it instead, and
+lost on document order — `#masthead-container` precedes `#page-manager` — so the
+revealed bar painted *behind* a full-viewport player and could be neither seen
+nor clicked. §3 now declares an explicit scale (`--wfs-z-player` <
+`--wfs-z-panel` < `--wfs-z-chrome`), all below the maximum, and `PLAYER_Z_INDEX`
+in §7 matches the first of them because it lands on the same element. Adding a
+layer means adding a token, not reaching for the ceiling.
+
+**Read the theme, don't inherit a token you cannot see.**
+`--yt-spec-base-background` is not set on `<html>`, so `var(..., #0f0f0f)` on
+the panel always resolved to the dark fallback. In dark mode that looked
+correct; in the light theme it painted a black column behind YouTube's own
+`#0f0f0f` text. Every colour the stylesheet paints now comes from
+`--wfs-surface` / `--wfs-edge` / `--wfs-scrim`, defined twice: once for
+`html.wfs-windowed` and once for `html[dark].wfs-windowed`, which is the
+attribute YouTube itself themes from. `npm run verify:live` flips that attribute
+and asserts the panel stays opaque and legible either way.
+
+**Reduced motion means fade, not pop.** `prefers-reduced-motion: reduce` used to
+get `transition: none`, which is the obvious reading of the preference and the
+wrong one: the masthead then appeared and vanished instantly, which is precisely
+the jarring transition the preference exists to prevent. Windows has animations
+off by default on plenty of machines, so this was most users. The reduce branch
+now zeroes the *travel* (`--wfs-chrome-shift: 0%` in both states) and keeps the
+cross-fade. If you add another animated affordance, give it a reduced-motion
+variant rather than switching it off.
+
+**The masthead's reveal and hide are deliberately asymmetric.** Arriving is
+240ms on a decelerating curve with no delay — the cursor is already heading for
+the bar, so any delay reads as lag. Leaving is 320ms on an ease-in-out after a
+140ms hold, so drifting a few pixels out of the band does not yank it away. All
+six numbers live in custom properties on `#masthead-container`; browsers take
+transition timing from the state being transitioned *to*, which is what lets one
+`transition` declaration produce two different feels. Do not add a second
+`transition` declaration to get the asymmetry — see the next trap for why.
+
+**One state, one declaration.** The masthead reveal used to be two rules setting
+`transform`/`opacity`/`pointer-events` `!important` against each other, the more
+specific one winning on paper. In practice the reveal only took effect
+intermittently, and when it lost the bar stayed off-screen with `pointer-events`
+already switched on — hover the top edge, nothing happens, then it appears stuck.
+The hidden state now declares the properties once and the revealed state swaps
+custom properties (`--wfs-chrome-shift` and friends), so there is no contest.
+As a bonus the `prefers-reduced-motion` override works again: the old reveal rule
+re-declared `transition` and silently beat it on class count.
+
+**`.ytp-overlay-top-right` is not inside `.ytp-chrome-top`.** YouTube parents it
+to `.ytp-overlays-container`, so hiding the in-player title bar left Copy link
+and Show cards behind. While the player's controls are showing it stretches 74px
+across the whole top of the video — the same strip the masthead reveals into, and
+above it in the player's stacking context. Moving the cursor to the top edge is
+what un-autohides the controls, so it appeared precisely when it would eat the
+hover. It is in the hidden list now. Expect more of this: the top overlay is
+several sibling elements, not one.
+
 **YouTube takes `ytp-big-mode` back.** It strips the class whenever it
 recomputes its player layout, which silently shrinks the control bar from 72px to
 59px and the buttons from 48px to 40px. The controller re-applies the classes it
@@ -195,6 +252,9 @@ actual buttons, and asserts the geometry invariants:
 - the panel's left edge sits exactly on the player's right edge (no overlap)
 - the control bar clears the panel
 - `ytp-big-mode` survives, so the control bar stays at its large size
+- the layers stay ordered player < panel < masthead, none of them clamped
+- the panel is opaque and legible in both the light and the dark theme
+- the revealed masthead owns the top edge, rather than the player's overlay
 - entering fullscreen leaves no class or inline style of ours behind
 - leaving fullscreen restores the mode and the panel
 

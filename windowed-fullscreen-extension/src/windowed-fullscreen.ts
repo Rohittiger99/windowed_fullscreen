@@ -267,6 +267,42 @@ const YT_HOSTS = new Set(["www.youtube.com", "youtube.com", "m.youtube.com"]);
  * styles from its own JS, and those beat ordinary rules.
  */
 const YT_ACTIVE_MODE_CSS = `
+/* -------------------------------------------------------------------------
+   Theme and stacking tokens.
+
+   THEME. Every surface this stylesheet paints used to read YouTube's own
+   \`--yt-spec-base-background\` with a dark fallback. That token is not set on
+   <html>, so the fallback was ALWAYS what rendered — invisible in dark mode,
+   and catastrophic in light mode: the side panel painted #0f0f0f behind
+   YouTube's light-theme text, which is also #0f0f0f. Black on black, which is
+   why the panel looked like a solid black column. The theme is read from the
+   \`dark\` attribute YouTube sets on <html> instead, and both colours are stated
+   outright rather than inherited from a token we cannot see.
+
+   STACKING. z-index is a 32-bit signed integer, so 2147483648 is out of range
+   and Chrome clamps it to 2147483647. The masthead used that value to sit
+   "above" the player; it tied with it instead, and lost on document order —
+   #masthead-container precedes #page-manager — so the revealed bar painted
+   BEHIND a full-viewport player and could be neither seen nor clicked. Leave
+   headroom below the maximum and order the three layers explicitly.
+   ------------------------------------------------------------------------- */
+html.wfs-windowed {
+  /* Light theme (YouTube's default when <html> carries no \`dark\`). */
+  --wfs-surface: #ffffff;
+  --wfs-edge: rgba(0, 0, 0, 0.14);
+  --wfs-scrim: rgba(255, 255, 255, 0.94);
+
+  --wfs-z-player: 2147483640;
+  --wfs-z-panel: 2147483643;
+  --wfs-z-chrome: 2147483646;
+}
+
+html[dark].wfs-windowed {
+  --wfs-surface: #0f0f0f;
+  --wfs-edge: rgba(255, 255, 255, 0.12);
+  --wfs-scrim: rgba(15, 15, 15, 0.92);
+}
+
 /* --- Cover mode: the player is pinned to the viewport, above all chrome. --- */
 html.wfs-windowed:not(.wfs-scrollable) #movie_player,
 html.wfs-windowed:not(.wfs-scrollable) .html5-video-player {
@@ -280,7 +316,7 @@ html.wfs-windowed:not(.wfs-scrollable) .html5-video-player {
   max-width: 100vw !important;
   max-height: 100vh !important;
   margin: 0 !important;
-  z-index: 2147483647 !important;
+  z-index: var(--wfs-z-player) !important;
   background: #000 !important;
 }
 
@@ -316,8 +352,20 @@ html.wfs-windowed .ytp-chrome-bottom {
 }
 
 /* Hide the in-player top overlay (title, channel, share, cards, gradient).
-   The bottom control bar stays fully usable. */
+   The bottom control bar stays fully usable.
+
+   .ytp-overlay-top-right is NOT inside .ytp-chrome-top — YouTube parents it to
+   .ytp-overlays-container — so hiding the title bar left it behind. It holds
+   Copy link and Show cards, and while the player's controls are showing it
+   stretches 74px across the whole top of the video: exactly the strip the
+   masthead reveals into, and above it in the player's own stacking context.
+   Moving the cursor to the top edge is what un-autohides the controls, so this
+   overlay appeared precisely when it would swallow the hover and the click that
+   followed — the "top bar does nothing" symptom. Both of its buttons exist
+   elsewhere (Copy link in the side panel's share row, cards via .ytp-ce-element,
+   which is already hidden). */
 html.wfs-windowed .ytp-chrome-top,
+html.wfs-windowed .ytp-overlay-top-right,
 html.wfs-windowed .ytp-gradient-top,
 html.wfs-windowed .ytp-title,
 html.wfs-windowed .ytp-show-cards-title,
@@ -352,33 +400,76 @@ html.wfs-windowed #secondary-inner {
    that both senses the cursor and lets clicks through.
    ------------------------------------------------------------------------- */
 html.wfs-windowed #masthead-container {
+  /* The hidden/revealed state lives in these three custom properties, not in a
+     second rule that re-declares the same properties.
+
+     It used to: a base rule set transform/opacity/pointer-events !important and
+     a more specific rule set them again !important. On paper the specific one
+     wins; in practice that only held intermittently, and when it lost the bar
+     stayed parked off-screen with pointer-events already switched on — the
+     "hover the top edge and nothing happens, then it sticks" symptom. Swapping a
+     custom property leaves exactly ONE transform declaration on the element, so
+     there is no contest to lose. It also lets the reduced-motion override below
+     take effect: re-declaring \`transition\` in the reveal rule silently beat it
+     on class count. */
+  --wfs-chrome-shift: -100%;
+  --wfs-chrome-opacity: 0;
+  --wfs-chrome-events: none;
+  --wfs-chrome-scrim: transparent;
+
+  /* Leaving. Slower than arriving, because a bar that snaps away reads as a
+     glitch while one that eases away reads as intent — and 140ms of delay means
+     drifting a few pixels past the band does not yank it off the screen. The
+     curve is a symmetric ease-in-out: it starts moving gently instead of
+     departing at full speed. */
+  --wfs-chrome-duration: 320ms;
+  --wfs-chrome-delay: 140ms;
+  --wfs-chrome-ease: cubic-bezier(0.33, 0, 0.67, 1);
+
   position: fixed !important;
   top: 0 !important;
   left: 0 !important;
   right: 0 !important;
-  /* Sit above the player, which has z-index 2147483647 in cover mode. */
-  z-index: 2147483648 !important;
-  transform: translateY(-100%) !important;
-  opacity: 0 !important;
-  pointer-events: none !important;
-  /* Fast reveal (80ms in), slower hide (200ms out) so it doesn't vanish
-     while you're moving the cursor toward a link in the bar. */
-  transition: transform 0.08s ease-out, opacity 0.08s ease-out !important;
+  z-index: var(--wfs-z-chrome) !important;
+  transform: translateY(var(--wfs-chrome-shift)) !important;
+  opacity: var(--wfs-chrome-opacity) !important;
+  pointer-events: var(--wfs-chrome-events) !important;
+  /* Both animated properties are compositor-friendly, and the element already
+     carries a transform in every state, so promoting it costs nothing new — it
+     is already a stacking context and a containing block for fixed descendants.
+     Worth it here because the bar animates over playing video. */
+  will-change: transform, opacity !important;
+  /* Declared exactly once, with the timing arriving through the custom
+     properties above. Re-declaring it in the revealed rule would give the
+     cascade a second transition to arbitrate, and that is how the
+     prefers-reduced-motion override below got silently outranked before. */
+  transition:
+    transform var(--wfs-chrome-duration) var(--wfs-chrome-ease) var(--wfs-chrome-delay),
+    opacity var(--wfs-chrome-duration) var(--wfs-chrome-ease) var(--wfs-chrome-delay) !important;
 }
 
 /* Revealed. .wfs-reveal-chrome is the controller's pointer-proximity signal;
    :hover keeps the bar out while the cursor is on it even if a pointermove is
    missed (an iframe under the cursor, say), and :focus-within covers tabbing in
    from the keyboard. Nothing here overlays the page, so the guide drawer's
-   links stay clickable at every point in the transition. */
+   links stay clickable at every point in the transition.
+
+   Arriving is quicker than leaving and starts immediately: the cursor is already
+   travelling toward the bar, so any delay reads as lag. A decelerating curve
+   lands it rather than stopping it dead. Browsers take transition timing from
+   the state being transitioned TO, which is what makes one declaration above
+   produce two different feels. */
 html.wfs-windowed.wfs-reveal-chrome #masthead-container,
 html.wfs-windowed #masthead-container:hover,
 html.wfs-windowed #masthead-container:focus-within {
-  transform: translateY(0) !important;
-  opacity: 1 !important;
-  pointer-events: auto !important;
-  /* Slightly slower on hide so the bar doesn't snap away mid-click. */
-  transition: transform 0.08s ease-out, opacity 0.08s ease-out !important;
+  --wfs-chrome-shift: 0%;
+  --wfs-chrome-opacity: 1;
+  --wfs-chrome-events: auto;
+  --wfs-chrome-scrim: var(--wfs-scrim);
+
+  --wfs-chrome-duration: 240ms;
+  --wfs-chrome-delay: 0ms;
+  --wfs-chrome-ease: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 /* The masthead itself must be visible and clickable once the container reveals. */
@@ -387,16 +478,29 @@ html.wfs-windowed #masthead {
   pointer-events: auto !important;
 }
 
-/* A subtle dark scrim behind the masthead so it reads over bright video. */
-html.wfs-windowed.wfs-reveal-chrome #masthead-container #masthead,
-html.wfs-windowed #masthead-container:hover #masthead,
-html.wfs-windowed #masthead-container:focus-within #masthead {
-  background: rgba(15, 15, 15, 0.92) !important;
+/* A scrim behind the masthead so it reads over bright video. It has to follow
+   the site's theme, not the video: a dark scrim under light-theme YouTube puts
+   near-black search text and icons on a near-black bar.
+
+   Driven by the same --wfs-chrome-scrim-alpha the reveal rule switches, rather
+   than by a second copy of that three-selector list, so the scrim fades in step
+   with the bar instead of appearing fully formed the instant the class lands. */
+html.wfs-windowed #masthead-container #masthead {
+  background: var(--wfs-chrome-scrim) !important;
+  transition: background-color var(--wfs-chrome-duration) var(--wfs-chrome-ease) var(--wfs-chrome-delay) !important;
 }
 
+/* Reduced motion: drop the travel, keep the cross-fade. Removing the animation
+   outright is the obvious reading of the preference and it is the wrong one here
+   — the bar then pops in and out, which is the exact jarring transition the
+   preference exists to avoid. Fading in place is the accepted substitute: no
+   movement, still a transition. Setting the shift to 0% in BOTH states is what
+   removes the travel, and this rule wins because it repeats the base selector
+   later in the sheet. */
 @media (prefers-reduced-motion: reduce) {
   html.wfs-windowed #masthead-container {
-    transition: none !important;
+    --wfs-chrome-shift: 0%;
+    transition: opacity var(--wfs-chrome-duration) var(--wfs-chrome-ease) var(--wfs-chrome-delay) !important;
   }
 }
 
@@ -620,10 +724,13 @@ html.wfs-windowed.wfs-side-panel.wfs-scrollable ytd-watch-flexy #below {
   overflow-x: hidden !important;
   /* Keep a flick at the end of the comment list from scrolling the page. */
   overscroll-behavior: contain !important;
-  /* Above the player, which reaches the maximum z-index in cover mode. */
-  z-index: 2147483647 !important;
-  background: var(--yt-spec-base-background, #0f0f0f) !important;
-  box-shadow: -1px 0 0 0 rgba(255, 255, 255, 0.12) !important;
+  /* Above the player, below the masthead — see the stacking note at the top. */
+  z-index: var(--wfs-z-panel) !important;
+  /* Opaque, or the video shows through the comments. Theme-derived: see the
+     theme note at the top of this stylesheet for why this is not read from
+     YouTube's own token. */
+  background: var(--wfs-surface) !important;
+  box-shadow: -1px 0 0 0 var(--wfs-edge) !important;
 }
 
 /* Cover mode hides #comments with an inline style, and the metadata block is
@@ -1062,8 +1169,17 @@ function injectStyles(doc: Document, siteCss: string): void {
 // §7  Controller (generic core)
 // ===========================================================================
 
-/** Highest practical stacking value, so the player sits above page chrome. */
-const MAX_Z_INDEX = "2147483647";
+/**
+ * Stacking value for the expanded player: high enough to clear any page chrome,
+ * with headroom left above it for the layers an adapter puts on top (on YouTube,
+ * the side panel and the revealed masthead).
+ *
+ * Deliberately not 2147483647. z-index is a 32-bit signed integer, so nothing
+ * can sit above the maximum: a rule asking for 2147483648 is clamped back to the
+ * same value and then loses on document order. Matches `--wfs-z-player` in the
+ * YouTube stylesheet (§3), which applies to the same element.
+ */
+const PLAYER_Z_INDEX = "2147483640";
 
 /**
  * Delays (ms) at which a synthetic `resize` is dispatched after the player size
@@ -1119,7 +1235,7 @@ const PLAYER_ACTIVE_STYLE: Record<WindowedMode, Record<string, string>> = {
     inset: "0",
     width: "100vw",
     height: "100vh",
-    "z-index": MAX_Z_INDEX,
+    "z-index": PLAYER_Z_INDEX,
     margin: "0",
   },
   /**
