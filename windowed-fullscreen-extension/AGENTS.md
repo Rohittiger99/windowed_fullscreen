@@ -240,28 +240,54 @@ recomputes its player layout, which silently shrinks the control bar from 72px t
 added, capped at `MAX_CLASS_REASSERTIONS`. If you find a way to own the control
 sizing outright, that contest can go away.
 
-**Putting a stripped class back is only half the repair.** YouTube sizes the parts
-of the control bar that CSS cannot express — the width of every chapter segment,
-the scrubber's offset — in JS pixels, from the bar width it last measured, and it
-only recomputes on a resize. It strips `ytp-big-mode` *during* that relayout, so
-writing the class back in the same task means it finishes measuring without it and
-caches geometry for a bar we then render at a different size. On a chaptered video
-that is unmissable: the progress bar breaks into segments that no longer tile it and
-the scrubber sits off the true playhead. It only showed up with the side panel
-docked, because narrowing the player is what makes YouTube disagree about the size,
-and only on some videos, because a bar with no chapters has almost no per-pixel
-geometry to get wrong. So the re-assert is deferred to the next animation frame —
-after YouTube's task, before any paint, so no frame renders at the small size — and
-followed by a reflow nudge.
+**Re-assert the class synchronously. Do not defer it.** YouTube sizes the parts of
+the control bar that CSS cannot express — the width of every chapter segment, the
+scrubber's offset — in JS pixels from the bar width it last measured, and only
+recomputes on a resize. It strips `ytp-big-mode` at the *start* of a relayout and
+measures afterwards, so writing the class straight back inside the observer
+callback means it measures a player that already has it and its own geometry comes
+out right. That is why the plain windowed mode has always looked correct.
 
-**That nudge must be debounced.** The nudge is a resize, YouTube answers a resize
-by relayouting, and a relayout is when it strips the class. Nudging once per strip
-turned a single disagreement into a contest that burned all 50 reassertions in a few
-seconds and gave up, leaving the small control bar for the rest of the session.
-`GEOMETRY_REPAIR_DEBOUNCE_MS` collapses a burst into one repair and
-`MAX_GEOMETRY_REPAIRS` bounds it, per the bounded-loops invariant. Measured after
-the fix, docking costs exactly one strip, restored in the same millisecond, then
-quiet.
+Deferring the write by a single animation frame was tried, to "let YouTube finish".
+It inverts the outcome: YouTube is then *guaranteed* to measure without the class,
+so the geometry is guaranteed stale, and windowed mode with no panel — which was
+fine — grew a broken chapter bar with segments that no longer tile it and a scrubber
+past the end of the track. Immediate is not a race we are losing; it is the race we
+win almost every time.
+
+**The nudge is the fallback, and it must be debounced.** Sometimes YouTube has
+already measured before the observer fires, and no synchronous write can help; that
+is the side-panel case, where narrowing the player is what makes YouTube disagree
+about the size in the first place. Only chaptered videos show it, because a bar
+without chapters has almost no per-pixel geometry to get wrong.
+`scheduleGeometryRepair` asks for a re-measure once the class writes go quiet.
+Debounced because the nudge is a resize, YouTube answers a resize by relayouting,
+and a relayout is when it strips the class again — nudging once per strip turned one
+disagreement into a contest that burned all 50 reassertions in seconds and gave up,
+leaving the small control bar for the rest of the session.
+`GEOMETRY_REPAIR_DEBOUNCE_MS` collapses a burst into one repair,
+`MAX_GEOMETRY_REPAIRS` bounds it. Verified on a chaptered video across three panel
+on/off cycles: the bar spans the player minus its gutters exactly, segments tile to
+within 1px, the scrubber lands within 0.001 of the true playhead, and `ytp-big-mode`
+stays on.
+
+**A third of a pixel wraps the chapter row.** The chapters are LEFT-FLOATED
+segments; YouTube gives each an integer px width in JS, summing with their 4px
+gaps to the bar width it last measured — which it rounds. Sizing the bar from its
+`left`/`right` insets makes it whatever the player leaves, and that is routinely
+fractional: 26vw of panel off a 1536px viewport leaves a 1112.65px bar that
+YouTube lays out for 1113px, and any scaled display produces a fractional
+viewport with no panel involved. A float row over its container by a third of a
+pixel does not overflow, it **wraps**: the last chapter drops onto a second row
+6px lower, inside the controls, and paints there as a stray red line under the
+scrubber. Measured slack is routinely under a pixel (0.40, 0.70, 0.74 at three
+window sizes), so which way YouTube's rounding went decides whether it happens —
+hence "intermittent". `.ytp-chapters-container` gets `calc(100% + 1px)`, which is
+enough because the deficit is always a rounding remainder. It is the only float
+row inside the progress bar; everything else there is overlaid, so nothing else
+needs the slack. `overflow: hidden` hides the wrapped segment instead of keeping
+it on the row, so the last chapter loses its fill — worse. CSS `round()` would
+be the direct fix and needs Chrome 125 against a manifest floor of 116.
 
 **Letterboxing in windowed mode is correct.** A maximized window is
 proportionally wider than 16:9 because the browser chrome and taskbar take height
@@ -306,6 +332,8 @@ actual buttons, and asserts the geometry invariants:
 - the panel's left edge sits exactly on the player's right edge (no overlap)
 - the control bar clears the panel
 - `ytp-big-mode` survives, so the control bar stays at its large size
+- the chapter segments tile the bar on one row, with and without the panel
+  (skipped on an unchaptered video, so pass `--url=` one with chapters)
 - the layers stay ordered player < panel < masthead < popups, none of them clamped
 - the site's own menus and dialogs open above the player and the panel, while a
   closed guide drawer stays below the player so it cannot swallow clicks

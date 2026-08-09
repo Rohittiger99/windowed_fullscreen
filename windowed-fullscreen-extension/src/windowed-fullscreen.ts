@@ -370,6 +370,36 @@ html.wfs-windowed .ytp-chrome-bottom {
   right: 12px !important;
 }
 
+/* Give the chapter row a pixel of slack, or a third of a pixel wraps it.
+
+   The chapters are a row of LEFT-FLOATED segments. YouTube gives each an
+   integer px width in JS, and they sum with their 4px gaps to the bar width it
+   last measured — a width it ROUNDS. The rule above sizes the bar from its
+   insets instead, so the bar is whatever the player's own width leaves, and
+   that is routinely fractional: 26vw of panel off a 1536px viewport leaves a
+   1136.65px player and a 1112.65px bar, which YouTube lays out for 1113px. Any
+   scaled display produces a fractional viewport and does the same with no panel
+   involved.
+
+   A float row that exceeds its container by a third of a pixel does not
+   overflow it — it WRAPS. The last chapter drops onto a second row 6px lower,
+   which is inside the controls, and paints there as a stray red line under the
+   scrubber. Measured slack is routinely under a pixel (0.40, 0.70, 0.74 at
+   three window sizes), so whether it wraps comes down to which way YouTube's
+   rounding went, which is why it looks intermittent.
+
+   One pixel is enough because the deficit is a rounding remainder, always less
+   than one. The segments keep their own widths and stay left-aligned, so the
+   extra pixel is empty space past the last one and nothing visible moves.
+
+   \`overflow: hidden\` on the row was the other candidate and is worse: it hides
+   the wrapped segment instead of keeping it on the row, so the last chapter
+   silently loses its fill. Rounding the bar down with CSS \`round()\` would be
+   the direct fix, but it needs Chrome 125 and the manifest supports 116. */
+html.wfs-windowed .ytp-chapters-container {
+  width: calc(100% + 1px) !important;
+}
+
 /* Hide the in-player top overlay (title, channel, share, cards, gradient).
    The bottom control bar stays fully usable.
 
@@ -1409,12 +1439,6 @@ export class WindowedFullscreenController {
   private playerClassWatcher: MutationObserver | null = null;
   /** Bounds the re-apply loop if the site insists on removing the classes. */
   private classReassertions = 0;
-  /**
-   * Cancels the pending deferred class re-assert, so a burst of mutations costs
-   * one write. A disposer rather than an id because the schedule falls back from
-   * `requestAnimationFrame` to `setTimeout`, which cancel differently.
-   */
-  private classReassertCancel: (() => void) | null = null;
   /** Debounced re-measure after a class contest, and its bound. */
   private geometryRepairTimer: number | null = null;
   private geometryRepairs = 0;
@@ -1748,24 +1772,10 @@ export class WindowedFullscreenController {
    * Re-adding cannot recurse: the observer fires again on our own write, sees
    * nothing missing, and does nothing.
    *
-   * The write is DEFERRED to the end of the current task, and followed by a
-   * reflow nudge. Both matter, and a bug found the hard way is why.
-   *
-   * The site strips these classes *during* its own control-bar relayout, because
-   * it has just decided the player is no longer the size those classes are for.
-   * Writing them back inside that same task means it finishes measuring with the
-   * class absent, and caches geometry for the small control bar — then our class
-   * comes back and the bar renders at the large size against measurements taken
-   * for the small one. Anything the site sizes in JS pixels is then wrong, which
-   * on a chaptered video is glaring: the progress bar breaks into segments that
-   * no longer tile the bar, and the scrubber sits off the true playhead. It only
-   * showed up with the side panel docked, because narrowing the player is what
-   * makes the site disagree about the size in the first place, and only on some
-   * videos, because a bar without chapters has almost no per-pixel geometry to
-   * get wrong.
-   *
-   * So: let the site finish, then put the classes back, then ask it to measure
-   * again. The nudge is the half that actually repairs the geometry.
+   * Why the write is immediate and why a debounced reflow nudge follows it is in
+   * {@link reassertPlayerClasses} and {@link scheduleGeometryRepair}. Both were
+   * learned from the same bug and pull in opposite directions, so read them
+   * together before changing either.
    */
   private startPlayerClassWatcher(player: Element): void {
     if (this.playerClassWatcher || typeof MutationObserver === "undefined") return;
@@ -1774,9 +1784,6 @@ export class WindowedFullscreenController {
     this.geometryRepairs = 0;
     this.playerClassWatcher = new MutationObserver(() => {
       if (!this.active) return;
-      // A re-assert is already queued; the burst of mutations the site makes
-      // while relayouting should cost one write, not one per mutation record.
-      if (this.classReassertCancel !== null) return;
       const missing = this.addedPlayerClasses.filter((cls) => !player.classList.contains(cls));
       if (missing.length === 0) return;
 
@@ -1791,7 +1798,7 @@ export class WindowedFullscreenController {
       }
 
       this.classReassertions += 1;
-      this.queueClassReassert(player);
+      this.reassertPlayerClasses(player, missing);
     });
     this.playerClassWatcher.observe(player, { attributes: true, attributeFilter: ["class"] });
   }
@@ -1801,36 +1808,23 @@ export class WindowedFullscreenController {
    * make it re-measure. See {@link startPlayerClassWatcher} for why the delay and
    * the nudge are both load-bearing.
    */
-  private queueClassReassert(player: Element): void {
-    const view = this.doc.defaultView;
+  private reassertPlayerClasses(player: Element, missing: string[]): void {
+    // Synchronously, inside the observer callback, and that is the point.
+    //
+    // Deferring this by even one animation frame was tried and it broke the
+    // common case. The site strips the class at the START of its relayout and
+    // measures afterwards, so writing back immediately means it measures a player
+    // that already has the class and its own geometry comes out right. Wait a
+    // frame and it is guaranteed to measure without the class, so the geometry is
+    // guaranteed stale and the repair below has to carry every occurrence rather
+    // than the rare one. In windowed mode with no panel that turned a correct
+    // control bar into a broken one.
+    player.classList.add(...missing);
 
-    const reassert = (): void => {
-      this.classReassertCancel = null;
-      if (!this.active) return;
-      const missing = this.addedPlayerClasses.filter((cls) => !player.classList.contains(cls));
-      // The site may have put them back itself while we waited.
-      if (missing.length === 0) return;
-      player.classList.add(...missing);
-      // Debounced, NOT immediate: see GEOMETRY_REPAIR_DEBOUNCE_MS.
-      this.scheduleGeometryRepair();
-    };
-
-    if (!view) {
-      reassert();
-      return;
-    }
-
-    // requestAnimationFrame rather than a timeout: it still runs after the site's
-    // task has finished, so the measurement problem is solved either way, but it
-    // runs BEFORE the next paint — so the control bar never renders a frame at
-    // the small size on its way back to the large one.
-    if (typeof view.requestAnimationFrame === "function") {
-      const frame = view.requestAnimationFrame(reassert);
-      this.classReassertCancel = () => view.cancelAnimationFrame(frame);
-      return;
-    }
-    const timer = view.setTimeout(reassert, 0);
-    this.classReassertCancel = () => view.clearTimeout(timer);
+    // The safety net for when the write above loses the race anyway — the site
+    // had already measured before we ran. Debounced and bounded, because the
+    // nudge is itself a resize the site may answer with another strip.
+    this.scheduleGeometryRepair();
   }
 
   /**
@@ -1867,10 +1861,7 @@ export class WindowedFullscreenController {
     this.playerWatcher = null;
     this.playerClassWatcher?.disconnect();
     this.playerClassWatcher = null;
-    // A queued re-assert would otherwise fire after exit and put a class back on
-    // a player the mode no longer owns.
-    this.classReassertCancel?.();
-    this.classReassertCancel = null;
+    // A pending repair would otherwise nudge a player the mode no longer owns.
     if (this.geometryRepairTimer !== null) {
       this.doc.defaultView?.clearTimeout(this.geometryRepairTimer);
       this.geometryRepairTimer = null;

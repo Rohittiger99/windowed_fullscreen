@@ -128,6 +128,29 @@ const PROBE = `(() => {
           .filter((p) => inline[p] !== '')
       : [],
     bigMode: !!document.querySelector('#movie_player.ytp-big-mode'),
+    // The chapter row is a row of left-floated segments YouTube sizes in integer
+    // px from a bar width it rounds. Sizing the bar from its insets makes it
+    // fractional, so the row can exceed its container by a rounding remainder —
+    // and a float row that overflows wraps, dropping the last chapter onto a
+    // second row over the controls as a stray red line. Negative slack is the
+    // condition for that wrap, so both are measured.
+    chapterRow: (() => {
+      const row = document.querySelector('.ytp-chapters-container');
+      const segments = row ? Array.from(row.children) : [];
+      // One segment is an unchaptered video: there is no tiling to get wrong.
+      if (segments.length < 2) return null;
+      const occupied = segments.reduce(
+        (total, el, i) =>
+          total +
+          el.getBoundingClientRect().width +
+          (i < segments.length - 1 ? Number.parseFloat(getComputedStyle(el).marginRight) || 0 : 0),
+        0,
+      );
+      return {
+        rows: new Set(segments.map((el) => Math.round(el.getBoundingClientRect().top))).size,
+        slack: Math.round((row.getBoundingClientRect().width - occupied) * 100) / 100,
+      };
+    })(),
     // Our controls must sit beside the site's button cluster, not inside it: the
     // cluster is sized to a fixed number of slots, so joining it makes YouTube
     // drop one of its own controls and squeeze the rest.
@@ -208,6 +231,21 @@ const PROBE = `(() => {
     })(),
   });
 })()`;
+
+/**
+ * The chapter segments must tile the bar on ONE row, with the row no narrower
+ * than what they occupy. Skipped rather than failed on an unchaptered video: the
+ * property does not exist there, and the default watch page may well be one.
+ * Pass `--url=` a video with chapters to exercise it.
+ */
+function checkChapterRow(name, measurement) {
+  const row = measurement.chapterRow;
+  if (!row) {
+    skip(name, "the video has no chapters");
+    return;
+  }
+  check(name, row.rows === 1 && row.slack >= 0, `${row.rows} row(s), slack ${row.slack}px`);
+}
 
 /**
  * Is `el` the topmost thing at several points inside its own box?
@@ -338,6 +376,7 @@ async function main() {
     windowed.bigMode && windowed.controlBar.height > baseline.controlBar.height,
     `bigMode=${windowed.bigMode}, bar ${baseline.controlBar.height} -> ${windowed.controlBar.height}`,
   );
+  checkChapterRow("the chapter segments stay on one row", windowed);
 
   // --- comment panel docked -------------------------------------------------
   await click('[data-wfs-button="panel"]');
@@ -360,6 +399,7 @@ async function main() {
     docked.bigMode && docked.controlBar.height === windowed.controlBar.height,
     `bigMode=${docked.bigMode}, bar ${docked.controlBar.height}`,
   );
+  checkChapterRow("the chapter segments stay on one row while docked", docked);
   check(
     "the layers are ordered player < panel < masthead < popups, none clamped",
     Number(docked.layers.player) < Number(docked.layers.panel) &&
