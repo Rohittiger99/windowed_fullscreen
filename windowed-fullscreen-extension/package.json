@@ -1,7 +1,7 @@
 {
   "name": "windowed-fullscreen-extension",
   "//version": "Mirrors manifest.json, which is authoritative. scripts/build.mjs fails if they drift.",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Chromium MV3 extension that adds a windowed-fullscreen viewing mode to YouTube.",
   "private": true,
   "type": "module",

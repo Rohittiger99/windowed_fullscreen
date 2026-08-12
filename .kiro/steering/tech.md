@@ -22,6 +22,7 @@ npm run build:watch   # rebuild on change, with source maps
 npm run check         # typecheck + test + build — run this before shipping
 npm run verify:live   # layout check against a real YouTube watch page (needs Chrome)
 npm run package       # build + release/windowed-fullscreen-v<version>.zip
+                      # fails if that zip already exists; --force to override
 npm run store:assets  # re-render listing screenshots and promo tiles
 npm run store:icons   # regenerate packaged icons in public/icons/
 ```
@@ -32,7 +33,7 @@ Load the build at `chrome://extensions` → Developer mode → Load unpacked →
 
 ## Build model
 
-`scripts/build.mjs` bundles `src/windowed-fullscreen.ts` **four times**, synthesizing a one-line entry per MV3 surface so esbuild tree-shakes away everything that surface cannot reach:
+`scripts/build.mjs` bundles `src/windowed-fullscreen.ts` **once per MV3 surface**, synthesizing a one-line entry for each so esbuild tree-shakes away everything that surface cannot reach:
 
 | Surface | Entry point |
 | --- | --- |
@@ -40,6 +41,7 @@ Load the build at `chrome://extensions` → Developer mode → Load unpacked →
 | Service worker | `startServiceWorker()` |
 | Options page | `startOptionsPage()` |
 | Toolbar popup | `startPopup()` |
+| Welcome page | `startWelcomePage()` |
 
 This is why **the source must have no top-level side effects**. Add one and every surface's bundle inflates with code it cannot use.
 
@@ -49,7 +51,7 @@ This is why **the source must have no top-level side effects**. Add one and ever
 
 ## Testing layers
 
-- `npm test` covers preferences, URL matching, the adapter registry, and the controller's panel state machine (`tests/prefs.test.ts`, `tests/adapters.test.ts`, `tests/panel.test.ts`). It cannot see layout.
+- `npm test` covers URL matching and the registry (`tests/adapters.test.ts`), preferences (`tests/prefs.test.ts`), the controller's panel state machine (`tests/panel.test.ts`), the usage counter (`tests/rating.test.ts`), the pure exit-destination and prompt-scheduling decisions (`tests/prompts.test.ts`), the copy budget (`tests/help-copy.test.ts`), and the settings tree's structure (`tests/settings-dom.test.ts`). It cannot see layout.
 - `npm run verify:live` attaches to Chrome over the DevTools protocol, injects the real content script into a watch page, clicks the real buttons, and asserts geometry: the panel's left edge sits exactly on the player's right edge, the control bar clears the panel, `ytp-big-mode` survives, and fullscreen leaves none of our classes or inline styles behind. Needs a browser and network, so it is **not part of CI**. Run it locally before shipping any change to the site CSS, the controller's geometry, or the fullscreen handoff.
 
 ## CI

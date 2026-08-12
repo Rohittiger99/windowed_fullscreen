@@ -5,6 +5,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
+import { createStubDocument, type StubDocument, type StubElement } from "./support/dom.ts";
 import {
   DEFAULT_SITE_PREFS,
   modeFor,
@@ -108,3 +109,109 @@ test("hidden chrome never includes an ancestor of the player", () => {
   }
 });
 
+
+// ---------------------------------------------------------------------------
+// Page-dependent player-bar controls
+//
+// YouTube's chapter title opens the Chapters engagement panel, and YouTube mounts
+// that panel in `#secondary` — which `chromeAlways` hides in both modes. So the
+// click landed, the panel opened, and it rendered inside a `display: none`
+// container behind a player pinned at the top of the stacking order: the control
+// looked completely dead. §9 now stands the mode down before the site handles the
+// click, so the panel opens on the ordinary page.
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the part of a watch page this matters on: the player, its control bar, and
+ * the chapter title with a text node inside it, which is what a real click event
+ * reports as its target.
+ */
+function stubChapterBar(): {
+  doc: StubDocument;
+  player: StubElement;
+  chapterText: StubElement;
+  elsewhere: StubElement;
+} {
+  const doc = createStubDocument();
+
+  const player = doc.createElement("div");
+  player.setAttribute("id", "movie_player");
+  doc.documentElement.appendChild(player);
+
+  const controls = doc.createElement("div");
+  controls.classList.add("ytp-chrome-bottom");
+  player.appendChild(controls);
+
+  const container = doc.createElement("div");
+  container.classList.add("ytp-chapter-container");
+  controls.appendChild(container);
+
+  const title = doc.createElement("button");
+  title.classList.add("ytp-chapter-title");
+  container.appendChild(title);
+
+  // The deepest node under the pointer. A real click on the chapter name reports
+  // this, not the button — which is why the hit test is `contains` and not an
+  // identity check.
+  const chapterText = doc.createElement("span");
+  chapterText.classList.add("ytp-chapter-title-content");
+  title.appendChild(chapterText);
+
+  // A control in the same bar that has nothing to do with this.
+  const elsewhere = doc.createElement("button");
+  elsewhere.classList.add("ytp-play-button");
+  controls.appendChild(elsewhere);
+
+  return { doc, player, chapterText, elsewhere };
+}
+
+test("the chapter control is recognised from a click on the text inside it", () => {
+  const adapter = resolveAdapter("https://www.youtube.com/watch?v=abc")!;
+  const { doc, chapterText, elsewhere } = stubChapterBar();
+
+  const controls = adapter.findPageDependentControls?.(doc.doc) ?? [];
+  assert.ok(controls.length > 0, "no page-dependent controls resolved");
+
+  // The hit test §9 performs, against the node a real event would carry.
+  assert.ok(
+    controls.some((el) => el.contains(chapterText as unknown as Node)),
+    "a click on the chapter name was not attributed to the chapter control",
+  );
+
+  // And it must not claim unrelated controls, or an ordinary play/pause press
+  // would drop the reader out of windowed mode.
+  assert.ok(
+    !controls.some((el) => el.contains(elsewhere as unknown as Node)),
+    "an unrelated player-bar control was treated as page-dependent",
+  );
+});
+
+test("every page-dependent control lives inside the player", () => {
+  // The invariant recorded on `YT.pageDependentControls`. An entry outside the
+  // player subtree would match clicks the mode has nothing to do with — the whole
+  // page, in the worst case — and exit windowed mode for no reason.
+  const adapter = resolveAdapter("https://www.youtube.com/watch?v=abc")!;
+  const { doc, player } = stubChapterBar();
+
+  const controls = adapter.findPageDependentControls?.(doc.doc) ?? [];
+  const playerAsElement = player as unknown as Element;
+  for (const control of controls) {
+    assert.notEqual(control, playerAsElement, "the player itself is not a control");
+    assert.ok(
+      player.contains(control as unknown as StubElement),
+      "a page-dependent control is not a descendant of the player",
+    );
+  }
+});
+
+test("a page with no chapters resolves no page-dependent controls", () => {
+  // An unchaptered video has no chapter container at all. Resolving nothing is the
+  // correct answer, and it must not throw — this runs on every click.
+  const adapter = resolveAdapter("https://www.youtube.com/watch?v=abc")!;
+  const doc = createStubDocument();
+  const player = doc.createElement("div");
+  player.setAttribute("id", "movie_player");
+  doc.documentElement.appendChild(player);
+
+  assert.deepEqual(adapter.findPageDependentControls?.(doc.doc), []);
+});

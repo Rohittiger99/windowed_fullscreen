@@ -59,6 +59,32 @@ async function main() {
   const manifest = JSON.parse(await readFile(resolve(distDir, "manifest.json"), "utf8"));
   const version = manifest.version;
 
+  // The store will not accept the same version twice, and this script wipes
+  // `release/` before writing, so packaging over an existing zip of the same
+  // version produces an upload that gets rejected at the dashboard — after the
+  // evidence of what was previously packaged has already been deleted. Refuse
+  // instead, and say which number is already taken.
+  //
+  // `--force` exists for the legitimate case: re-packaging a version that was
+  // built but never uploaded.
+  const force = process.argv.includes("--force");
+  let alreadyPackaged = false;
+  try {
+    await stat(resolve(releaseDir, `windowed-fullscreen-v${version}.zip`));
+    alreadyPackaged = true;
+  } catch {
+    // Nothing there, which is the normal case.
+  }
+  if (alreadyPackaged && !force) {
+    console.error(
+      `[package] release/windowed-fullscreen-v${version}.zip already exists.\n` +
+        `          The Web Store will not accept version ${version} twice.\n` +
+        `          Bump "version" in manifest.json (and package.json to match), or\n` +
+        `          pass --force to re-package the same version.`,
+    );
+    process.exit(1);
+  }
+
   await rm(releaseDir, { recursive: true, force: true });
   await mkdir(releaseDir, { recursive: true });
 

@@ -7,11 +7,12 @@ The repository root is a container. The project lives one level down in `windowe
 .kiro/                                 Steering and specs
 windowed-fullscreen-extension/
   AGENTS.md                            Read before editing. Invariants and known traps
+  CHANGELOG.md                         What changed per version. Update as you go
   README.md                            For users of the extension
   manifest.json                        Extension identity and entry points. Owns the version
   package.json                         Mirrors the manifest version; build fails on drift
   src/windowed-fullscreen.ts           ALL extension code, one sectioned file
-  public/                              Shipped static assets (icons, popup + options HTML)
+  public/                              Shipped static assets (icons, page HTML shells)
   scripts/build.mjs                    Bundles the source once per MV3 surface
   scripts/package.mjs                  Zips the build for the Web Store
   scripts/verify-live.mjs              Layout regression check against real YouTube
@@ -34,11 +35,12 @@ All code is in `src/windowed-fullscreen.ts`, split into numbered sections. **Nav
 §4  Adapter registry         §10 Service worker
 §5  Preferences              §11 Settings UI (options + popup)
 §6  Active-mode stylesheet   §12 Popup
+                             §13 Welcome page (post-install)
 ```
 
 ## Architectural rules
 
-**No top-level side effects.** The four `start*` functions are the only way anything runs. This is what makes per-surface tree-shaking safe.
+**No top-level side effects.** The `start*` functions are the only way anything runs. This is what makes per-surface tree-shaking safe.
 
 **Site knowledge lives only in §3.** Every YouTube selector belongs to the `YT` object or `YT_ACTIVE_MODE_CSS`. The controller (§7), injector (§8), and content script (§9) work from a `SiteDescriptor` and must never name a site element. This keeps a YouTube redesign to one blast radius and makes a second site an additive change.
 
@@ -51,9 +53,11 @@ All code is in `src/windowed-fullscreen.ts`, split into numbered sections. **Nav
 | Change | Where |
 | --- | --- |
 | Support another video site | New `SiteAdapter` in §3, register in `ADAPTERS` (§4). Nothing else. |
+| A site control that is inert in the mode because what it opens renders outside the player | Add its selector to `YT.pageDependentControls` (§3). `onPointerCapture` (§9) already stands the mode down for anything on that list. The selector must resolve inside the player subtree. |
 | Add a player-bar control | `ButtonSpec` in `startSession` (§9) + a role in `BUTTON_ROLES` (§8) |
 | Add a preference | `SitePrefs` + `DEFAULT_SITE_PREFS` (§5), then `normalizeSitePrefs` — check the new field independently so older-version values still read as valid |
 | Change the active-mode layout | `YT_ACTIVE_MODE_CSS` (§3), scoped under `html.wfs-windowed` |
+| Change the post-install page | `HELP_COPY.welcome` for the words, `renderWelcome` (§13) for the structure, `public/welcome/index.html` for the styling. It carries no settings on purpose |
 
 ## Before editing
 

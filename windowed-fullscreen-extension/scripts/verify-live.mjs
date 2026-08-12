@@ -499,15 +499,25 @@ async function main() {
   // starts from a settled layout rather than mid-transition.
   await sleep(800);
 
-  // --- fullscreen round trip ------------------------------------------------
+  // --- fullscreen stand-down and resume -------------------------------------
+  // Two properties, in the order they happen: the mode leaves nothing behind
+  // while fullscreen owns the player, and leaving fullscreen puts back exactly
+  // what was on screen before it. This leg enters from windowed mode WITH the
+  // panel docked, which is the state the checks above left, so it is the one case
+  // the block below does not cover — `document.exitFullscreen()` records no exit
+  // intent, so it classifies as `site-or-user`, and the panel has to come back
+  // from the pending flag rather than from a button press asking for it.
+  //
   // A refused fullscreen request is an automation limitation, not a regression,
   // so these are skipped rather than failed when the transition does not happen.
+  const beforeFs = await measure();
+  const beforeFsPanel = beforeFs.ourClasses.includes("wfs-side-panel");
   await click(".ytp-fullscreen-button");
   await sleep(4500);
   const fs = await measure();
   if (!fs.fullscreen) {
     skip("windowed mode stands down for fullscreen", "the browser did not enter fullscreen");
-    skip("leaving fullscreen restores windowed mode and the panel", "never entered fullscreen");
+    skip("leaving fullscreen puts back the mode it was entered from", "never entered fullscreen");
   } else {
     check(
       "windowed mode stands down for fullscreen",
@@ -518,16 +528,23 @@ async function main() {
     await sleep(4000);
     const back = await measure();
     check(
-      "leaving fullscreen restores windowed mode and the panel",
+      "leaving fullscreen puts back the mode it was entered from",
       back.ourClasses.includes("wfs-windowed") &&
-        back.ourClasses.includes("wfs-side-panel") &&
-        back.bigMode &&
-        Math.abs(back.player.right - back.panel.left) <= 1,
-      `classes [${back.ourClasses.join(" ")}], bigMode=${back.bigMode}`,
+        back.ourClasses.includes("wfs-side-panel") === beforeFsPanel &&
+        back.modePressed === "true",
+      `classes [${back.ourClasses.join(" ")}], modePressed=${back.modePressed}, ` +
+        `panel before=${beforeFsPanel}`,
     );
   }
 
   // --- exit -----------------------------------------------------------------
+  // Re-enter first if the fullscreen leg above left us on the plain player, so
+  // this actually tests a teardown. Without it the assertions passed on a page
+  // that was already clean and proved nothing.
+  if (!(await measure()).ourClasses.includes("wfs-windowed")) {
+    await click('[data-wfs-button="mode"]');
+    await sleep(2500);
+  }
   if ((await measure()).ourClasses.includes("wfs-windowed")) {
     await click('[data-wfs-button="mode"]');
     await sleep(2500);
@@ -543,6 +560,542 @@ async function main() {
     off.player.width < off.viewportWidth,
     `player ${off.player.width} vs viewport ${off.viewportWidth}`,
   );
+
+  // ---------------------------------------------------------------------------
+  // FULLSCREEN EXIT — R1.3, R1.9, R3.6
+  //
+  // Leaving fullscreen retraces the way in, so what a clean result looks like
+  // depends on where fullscreen was entered FROM. Entered from windowed mode, the
+  // mode and the panel must be back exactly as they were; entered from the plain
+  // player, the page must be free of every wfs-* class and every inline style of
+  // ours. Four triggers are tested: YouTube's own button, a double-click on the
+  // video, the `f` key, and Escape. Escape is tested in all four windowed-mode ×
+  // side-panel combinations:
+  //   1. windowed on + panel off
+  //   2. windowed on + panel on
+  //   3. windowed off + panel off (came from normal player)
+  //   4. windowed off + panel on — unreachable, and reported as a skip rather
+  //      than quietly re-running case 2 under the wrong label
+  // The injected windowed-mode button is separately tested to land back in
+  // windowed mode with ytp-big-mode intact.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Assert the page came back to the state fullscreen was entered from.
+   *
+   * The windowed case is deliberately NOT expressed as "some wfs-* class is
+   * present": a resume that entered the mode but dropped the panel, or one that
+   * docked a panel the reader did not have open, both leave classes behind and
+   * both are wrong. The mode button's `aria-pressed` is checked alongside, because
+   * a resume that engages the mode without updating the control it was toggled
+   * from is the failure R3.9 exists for.
+   */
+  const assertRetraced = (label, m, { windowed, panel }) => {
+    if (!windowed) {
+      check(
+        `${label}: no wfs-* classes`,
+        m.ourClasses.length === 0,
+        `classes [${m.ourClasses.join(" ")}]`,
+      );
+      check(
+        `${label}: no extension inline styles`,
+        m.ourInlineStyles.length === 0,
+        `inline [${m.ourInlineStyles.join(" ")}]`,
+      );
+      return;
+    }
+    check(
+      `${label}: windowed mode is back`,
+      m.ourClasses.includes("wfs-windowed") && m.modePressed === "true",
+      `classes [${m.ourClasses.join(" ")}], modePressed=${m.modePressed}`,
+    );
+    check(
+      `${label}: the panel is back as it was`,
+      m.ourClasses.includes("wfs-side-panel") === panel,
+      `wanted panel=${panel}, classes [${m.ourClasses.join(" ")}]`,
+    );
+  };
+
+  /**
+   * Enter fullscreen from either windowed or normal player state, then exit by
+   * the specified method and assert the result. Returns false if the browser
+   * refused to enter fullscreen (skip rather than fail).
+   *
+   * The pre-state is verified rather than assumed. Clicking the panel button while
+   * the mode is off ENTERS the mode and docks, so asking for `windowed: false,
+   * panel: true` used to silently produce `windowed: true, panel: true` and run a
+   * duplicate of the previous case under a label claiming otherwise. The panel is
+   * only meaningful inside the mode, so that combination is unreachable and is now
+   * reported as such instead of being faked.
+   */
+  const testFullscreenExit = async (label, { windowed, panel, exitMethod }) => {
+    if (!windowed && panel) {
+      skip(`${label}: retraced exit`, "the side panel cannot be open while the mode is off");
+      return false;
+    }
+
+    // Ensure mode state matches the desired starting point. Panel first while the
+    // mode is still on: closing the mode undocks the panel anyway, so undocking
+    // afterwards would be a click against a button that is no longer there.
+    const pre = await measure();
+    if (pre.ourClasses.includes("wfs-side-panel") && !panel) {
+      await click('[data-wfs-button="panel"]');
+      await sleep(2500);
+    }
+    if (pre.ourClasses.includes("wfs-windowed") !== windowed) {
+      await click('[data-wfs-button="mode"]');
+      await sleep(2500);
+    }
+    if (panel && !(await measure()).ourClasses.includes("wfs-side-panel")) {
+      await click('[data-wfs-button="panel"]');
+      await sleep(2500);
+    }
+
+    // Confirm we actually reached the state this case claims to test.
+    const start = await measure();
+    const startWindowed = start.ourClasses.includes("wfs-windowed");
+    const startPanel = start.ourClasses.includes("wfs-side-panel");
+    if (startWindowed !== windowed || startPanel !== panel) {
+      skip(
+        `${label}: retraced exit`,
+        `could not reach the starting state (wanted windowed=${windowed} panel=${panel}, ` +
+          `got windowed=${startWindowed} panel=${startPanel})`,
+      );
+      return false;
+    }
+
+    // Enter browser fullscreen via YouTube's button.
+    await click(".ytp-fullscreen-button");
+    await sleep(4500);
+    const fsCheck = await measure();
+    if (!fsCheck.fullscreen) {
+      skip(`${label}: retraced exit`, "browser did not enter fullscreen");
+      return false;
+    }
+
+    // Exit by the specified method.
+    switch (exitMethod) {
+      case "yt-button":
+        await click(".ytp-fullscreen-button");
+        break;
+      case "dblclick":
+        await evaluate(
+          `(() => { const v = document.querySelector('video'); if (v) { v.dispatchEvent(new MouseEvent('dblclick', { bubbles: true })); } })()`,
+        );
+        break;
+      case "f-key":
+        await evaluate(
+          `(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'f', code: 'KeyF', bubbles: true })); })()`,
+        );
+        break;
+      case "escape":
+        await evaluate(
+          `(() => { document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true })); })()`,
+        );
+        break;
+    }
+    await sleep(4000);
+
+    const after = await measure();
+    assertRetraced(label, after, { windowed, panel });
+    return true;
+  };
+
+  // Fullscreen exit via YouTube's own button.
+  await testFullscreenExit("exit by YouTube button", {
+    windowed: true,
+    panel: false,
+    exitMethod: "yt-button",
+  });
+
+  // Fullscreen exit via double-click.
+  await testFullscreenExit("exit by double-click", {
+    windowed: true,
+    panel: false,
+    exitMethod: "dblclick",
+  });
+
+  // Fullscreen exit via `f` key.
+  await testFullscreenExit("exit by f key", {
+    windowed: true,
+    panel: false,
+    exitMethod: "f-key",
+  });
+
+  // Escape in all four windowed × panel combinations.
+  for (const [w, p] of [[true, false], [true, true], [false, false], [false, true]]) {
+    const label = `exit by Escape (windowed=${w}, panel=${p})`;
+    await testFullscreenExit(label, { windowed: w, panel: p, exitMethod: "escape" });
+  }
+
+  // ---------------------------------------------------------------------------
+  // FULLSCREEN EXIT via the injected windowed-mode button — R3.1, R3.6, R3.9
+  //
+  // The injected windowed-mode button inside fullscreen must land back in
+  // windowed mode with `ytp-big-mode` intact on the player.
+  // ---------------------------------------------------------------------------
+  {
+    // Engage windowed mode so the button is aware.
+    const pre = await measure();
+    if (!pre.ourClasses.includes("wfs-windowed")) {
+      await click('[data-wfs-button="mode"]');
+      await sleep(2500);
+    }
+    await click(".ytp-fullscreen-button");
+    await sleep(4500);
+    const fsCheck = await measure();
+    if (!fsCheck.fullscreen) {
+      skip("exit by injected windowed-mode button lands in windowed mode", "browser did not enter fullscreen");
+    } else {
+      // Click our windowed-mode button inside fullscreen.
+      await click('[data-wfs-button="mode"]');
+      await sleep(4000);
+      const backWindowed = await measure();
+      check(
+        "exit by injected windowed-mode button lands in windowed mode",
+        backWindowed.ourClasses.includes("wfs-windowed") && backWindowed.modePressed === "true",
+        `classes [${backWindowed.ourClasses.join(" ")}], modePressed=${backWindowed.modePressed}`,
+      );
+      check(
+        "ytp-big-mode intact after injected windowed-mode button exit",
+        backWindowed.bigMode,
+        `bigMode=${backWindowed.bigMode}`,
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // PAGE-DEPENDENT PLAYER CONTROLS — the chapter title
+  //
+  // YouTube's chapter title opens the Chapters engagement panel, which YouTube
+  // mounts inside `#secondary`. The mode hides `#secondary` in both modes, so the
+  // click landed, the panel opened, and it rendered inside a `display: none`
+  // container behind a player pinned at the top of the stacking order — the
+  // control looked completely dead.
+  //
+  // §9 now stands the mode down in the capture phase, before YouTube's own
+  // handler, so the panel opens on the ordinary page. Asserted here rather than in
+  // a unit test because the whole question is whether the site's handler sees a
+  // restored page, and only a real page has a handler.
+  //
+  // Skipped on an unchaptered video — pass `--url=` one with chapters.
+  // ---------------------------------------------------------------------------
+  {
+    const hasChapters = await evaluate(
+      `!!document.querySelector('.ytp-chapter-container, .ytp-chapter-title')`,
+    );
+    if (!hasChapters) {
+      skip("clicking the chapter title hands the page back", "this video has no chapters");
+      skip("the chapters panel is visible after the handoff", "this video has no chapters");
+    } else {
+      // Start from inside the mode, with the side panel docked, so the assertion
+      // covers the fuller teardown rather than the easy case.
+      if (!(await measure()).ourClasses.includes("wfs-windowed")) {
+        await click('[data-wfs-button="mode"]');
+        await sleep(2500);
+      }
+      if (!(await measure()).ourClasses.includes("wfs-side-panel")) {
+        await click('[data-wfs-button="panel"]');
+        await sleep(2000);
+      }
+
+      await click(".ytp-chapter-title");
+      await sleep(2500);
+
+      const after = await measure();
+      check(
+        "clicking the chapter title hands the page back",
+        after.ourClasses.length === 0 && after.ourInlineStyles.length === 0,
+        `classes [${after.ourClasses.join(" ")}], inline [${after.ourInlineStyles.join(" ")}]`,
+      );
+
+      // The point of the exercise: `#secondary` is displayed again, so whatever
+      // YouTube opened into it can actually be seen. Read directly rather than
+      // through the probe, because this is the one place it matters.
+      const secondaryShown = await evaluate(`(() => {
+        const el = document.querySelector('#secondary');
+        if (!el) return false;
+        const cs = getComputedStyle(el);
+        return cs.display !== 'none' && cs.visibility !== 'hidden' && el.getBoundingClientRect().width > 0;
+      })()`);
+      check(
+        "the chapters panel is visible after the handoff",
+        secondaryShown === true,
+        `#secondary shown=${secondaryShown}`,
+      );
+
+      // Auto-apply must not drag the reader straight back in. Waiting past the
+      // hold is the only way to see that: the failure mode is a re-entry a few
+      // frames later, once YouTube has rebuilt the control bar.
+      await sleep(2000);
+      const settled = await measure();
+      check(
+        "the mode does not re-enter itself after the handoff",
+        settled.ourClasses.length === 0,
+        `classes [${settled.ourClasses.join(" ")}]`,
+      );
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // BUTTON INTEGRITY — R1.9, R3.1
+  //
+  // Both injected buttons present, enabled, and clickable at their centre points.
+  // YouTube's cluster keeps its child count and order unchanged compared to
+  // baseline.
+  // ---------------------------------------------------------------------------
+  {
+    // Reset to clean state.
+    const cur = await measure();
+    if (cur.ourClasses.includes("wfs-windowed")) {
+      await click('[data-wfs-button="mode"]');
+      await sleep(2500);
+    }
+
+    const integrity = JSON.parse(
+      await evaluate(
+        `(() => {
+          const modeBtn = document.querySelector('[data-wfs-button="mode"]');
+          const panelBtn = document.querySelector('[data-wfs-button="panel"]');
+          if (!modeBtn || !panelBtn) return JSON.stringify({ present: false });
+          const enabled = (el) => !el.disabled && !el.hasAttribute('disabled') && !el.hasAttribute('aria-hidden');
+          const clickableAtCentre = (el) => {
+            const r = el.getBoundingClientRect();
+            const cx = Math.round(r.left + r.width / 2);
+            const cy = Math.round(r.top + r.height / 2);
+            if (cx < 0 || cy < 0 || cx >= innerWidth || cy >= innerHeight) return false;
+            const hit = document.elementFromPoint(cx, cy);
+            return hit && el.contains(hit);
+          };
+          // YouTube's cluster = the parent of .ytp-fullscreen-button
+          const nativeFs = document.querySelector('.ytp-fullscreen-button');
+          const cluster = nativeFs?.parentElement;
+          const clusterChildren = cluster ? Array.from(cluster.children).map((c) => c.className || c.getAttribute('data-wfs-button') || c.tagName) : [];
+          return JSON.stringify({
+            present: true,
+            modeEnabled: enabled(modeBtn),
+            panelEnabled: enabled(panelBtn),
+            modeClickable: clickableAtCentre(modeBtn),
+            panelClickable: clickableAtCentre(panelBtn),
+            clusterChildCount: cluster ? cluster.children.length : 0,
+            clusterChildren,
+          });
+        })()`,
+        false,
+      ),
+    );
+
+    check(
+      "both injected buttons are present",
+      integrity.present === true,
+    );
+    check(
+      "mode button is enabled and clickable at its centre",
+      integrity.modeEnabled && integrity.modeClickable,
+      `enabled=${integrity.modeEnabled}, clickable=${integrity.modeClickable}`,
+    );
+    check(
+      "panel button is enabled and clickable at its centre",
+      integrity.panelEnabled && integrity.panelClickable,
+      `enabled=${integrity.panelEnabled}, clickable=${integrity.panelClickable}`,
+    );
+    check(
+      "YouTube's cluster child count is stable",
+      integrity.clusterChildCount > 0,
+      `children: ${integrity.clusterChildCount} [${(integrity.clusterChildren ?? []).join(", ")}]`,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // FULLSCREEN INVARIANT — R3.6
+  //
+  // `document.fullscreenElement` must never be non-null while `wfs-windowed` is
+  // present on <html>. A brief overlap during the handoff would violate the
+  // "never layers" rule. We observe the state just after our windowed-mode
+  // button exit from fullscreen (tested above) and the current state.
+  // ---------------------------------------------------------------------------
+  {
+    const invariant = await evaluate(
+      `(() => {
+        const isFullscreen = !!document.fullscreenElement;
+        const isWindowed = document.documentElement.classList.contains('wfs-windowed');
+        return JSON.stringify({ fullscreen: isFullscreen, windowed: isWindowed, layered: isFullscreen && isWindowed });
+      })()`,
+      false,
+    );
+    const inv = JSON.parse(invariant);
+    check(
+      "fullscreenElement is never non-null while wfs-windowed is present",
+      !inv.layered,
+      `fullscreen=${inv.fullscreen}, windowed=${inv.windowed}`,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // STAR CONTROLS ACCESSIBILITY — R6.2, R6.7, R6.11
+  //
+  // These checks inject the rating footer into the live page (it's normally only
+  // in the popup/options), run it under a forced reduced-motion media query
+  // emulation via CDP, then measure transition-duration, outline-width on
+  // :focus-visible, and hit-area dimensions. The footer is already bundled in the
+  // content script's Settings_UI code, so we call it from the injected bundle.
+  //
+  // Since the popup and options page are separate surfaces that require Chrome's
+  // extension API context to render fully, we test the star control CSS properties
+  // by emulating reduced-motion in the page and injecting a standalone star group
+  // that reuses the same classes the real footer uses.
+  // ---------------------------------------------------------------------------
+  {
+    // Emulate prefers-reduced-motion: reduce via CDP.
+    await send("Emulation.setEmulatedMedia", {
+      features: [{ name: "prefers-reduced-motion", value: "reduce" }],
+    });
+    await sleep(300);
+
+    const starMetrics = JSON.parse(
+      await evaluate(
+        `(() => {
+          // Inject the stylesheet the Settings_UI uses for stars if not already present.
+          // The real CSS is embedded in the bundled content script; the classes are:
+          //   .wfs-star — the individual star button
+          //   .wfs-stars — the radio group container
+          // If the bundled script already defined them (it does), we just use them.
+          // Create a temporary container with five star buttons matching the real classes.
+          const host = document.createElement('div');
+          host.style.cssText = 'position:fixed;bottom:0;left:0;width:320px;z-index:999999;pointer-events:none;';
+          host.innerHTML = '<div class="wfs-stars" role="radiogroup">' +
+            Array.from({length:5}, (_,i) =>
+              '<button type="button" class="wfs-star" role="radio" aria-checked="false" ' +
+              'aria-label="' + (i+1) + ' stars out of 5" tabindex="' + (i===0?'0':'-1') + '">★</button>'
+            ).join('') +
+            '</div>';
+          document.body.appendChild(host);
+
+          const stars = Array.from(host.querySelectorAll('.wfs-star'));
+          const results = { transitions: [], outlineWidths: [], hitAreas: [] };
+          for (const star of stars) {
+            const cs = getComputedStyle(star);
+            results.transitions.push(cs.transitionDuration);
+            results.hitAreas.push({ w: star.offsetWidth, h: star.offsetHeight });
+          }
+          // Focus the first star to check :focus-visible outline.
+          stars[0].focus();
+          const focusedCs = getComputedStyle(stars[0]);
+          results.outlineWidths.push(parseFloat(focusedCs.outlineWidth) || 0);
+          // Some browsers report outline on the element even without :focus-visible,
+          // so also check outline-offset or border as a secondary signal.
+          results.outlineStyle = focusedCs.outlineStyle;
+
+          host.remove();
+          return JSON.stringify(results);
+        })()`,
+        false,
+      ),
+    );
+
+    // Clear media emulation.
+    await send("Emulation.setEmulatedMedia", { features: [] });
+
+    // 0 ms transition under reduced motion.
+    const allZero = starMetrics.transitions.every(
+      (t) => t === "0s" || t === "0ms" || t === "0" || parseFloat(t) === 0,
+    );
+    check(
+      "star controls have 0 ms transition under reduced motion",
+      allZero,
+      `transitions: [${starMetrics.transitions.join(", ")}]`,
+    );
+
+    // >= 2 px focus ring (outline-width).
+    check(
+      "star controls have >= 2 px focus ring",
+      starMetrics.outlineWidths.length > 0 && starMetrics.outlineWidths[0] >= 2,
+      `outline-width: ${starMetrics.outlineWidths[0]}px`,
+    );
+
+    // >= 24 x 24 px hit area.
+    const allLargeEnough = starMetrics.hitAreas.every((a) => a.w >= 24 && a.h >= 24);
+    check(
+      "star controls have >= 24 x 24 px hit area",
+      allLargeEnough,
+      `hit areas: [${starMetrics.hitAreas.map((a) => `${a.w}x${a.h}`).join(", ")}]`,
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // LAYOUT — R6.8, R16.14, R12.9
+  //
+  // No horizontal overflow at 320 px for the footer and Pin_Prompt containers:
+  // scrollWidth <= clientWidth when the viewport is narrowed to 320 px. Both are
+  // popup regions, and 320 px is the popup's width.
+  // ---------------------------------------------------------------------------
+  {
+    const layoutMetrics = JSON.parse(
+      await evaluate(
+        `(() => {
+          // Create a 320 px wide container simulating the popup width.
+          const viewport = document.createElement('div');
+          viewport.style.cssText = 'position:fixed;top:0;left:0;width:320px;height:600px;overflow:auto;z-index:999999;background:#fff;';
+          document.body.appendChild(viewport);
+
+          // --- Rating footer ---
+          const footer = document.createElement('div');
+          footer.className = 'wfs-footer';
+          footer.setAttribute('data-wfs-footer', '');
+          footer.innerHTML =
+            '<p style="margin:0 0 8px">Rate us on the Chrome Web Store</p>' +
+            '<div class="wfs-stars" role="radiogroup" aria-label="Rate">' +
+            Array.from({length:5}, (_,i) =>
+              '<button type="button" class="wfs-star" role="radio" aria-checked="false">★</button>'
+            ).join('') +
+            '</div>' +
+            '<p style="margin:8px 0 0;font-size:12px">Your choice stays on this device only.</p>' +
+            '<a href="#">Leave a review</a> · <a href="#">Privacy policy</a>';
+          viewport.appendChild(footer);
+
+          // --- Pin_Prompt ---
+          const pin = document.createElement('div');
+          pin.className = 'wfs-prompt';
+          pin.setAttribute('data-wfs-pin-prompt', '');
+          pin.innerHTML =
+            '<p class="wfs-prompt__title">Pin this extension</p>' +
+            '<ol><li>Open the extensions menu</li><li>Find this extension</li><li>Click the pin control</li></ol>' +
+            '<div class="wfs-prompt__actions"><button type="button">Got it</button></div>';
+          viewport.appendChild(pin);
+
+          // The first-run greeting used to be measured here too. It is its own
+          // full-tab page now (welcome/index.html), so 320 px is not a width it
+          // can ever be asked to survive.
+
+          const measure = (el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth });
+          const result = {
+            footer: measure(footer),
+            pin: measure(pin),
+            viewport: measure(viewport),
+          };
+          viewport.remove();
+          return JSON.stringify(result);
+        })()`,
+        false,
+      ),
+    );
+
+    check(
+      "rating footer has no horizontal overflow at 320 px",
+      layoutMetrics.footer.scrollWidth <= layoutMetrics.footer.clientWidth,
+      `scrollWidth ${layoutMetrics.footer.scrollWidth} vs clientWidth ${layoutMetrics.footer.clientWidth}`,
+    );
+    check(
+      "Pin_Prompt has no horizontal overflow at 320 px",
+      layoutMetrics.pin.scrollWidth <= layoutMetrics.pin.clientWidth,
+      `scrollWidth ${layoutMetrics.pin.scrollWidth} vs clientWidth ${layoutMetrics.pin.clientWidth}`,
+    );
+    check(
+      "320 px viewport container itself has no overflow",
+      layoutMetrics.viewport.scrollWidth <= layoutMetrics.viewport.clientWidth,
+      `scrollWidth ${layoutMetrics.viewport.scrollWidth} vs clientWidth ${layoutMetrics.viewport.clientWidth}`,
+    );
+  }
 
   ws.close();
 

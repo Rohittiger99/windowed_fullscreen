@@ -184,9 +184,348 @@
         background: var(--wfs-danger-bg);
       }
 
+      /*
+       * Prompts and rating footer.
+       *
+       * The shell only carries the empty container and the styling; every string
+       * comes from HELP_COPY in the source, so both surfaces read the same copy
+       * and no wording can drift into an HTML file.
+       *
+       * There is no first-run greeting here any more. It was a card above the
+       * settings that thanked the reader and asked them to pin the extension,
+       * which meant a fresh install opened onto every preference the extension
+       * has in order to say two sentences. It is its own page now
+       * (`welcome/index.html`, rendered by §13), and this page is settings only.
+       */
+
+      /*
+       * Each region is one wrapping column. That is what keeps the popup's 320 px
+       * width free of horizontal scrolling, and the options page uses the same
+       * rules so the two surfaces cannot drift apart visually.
+       */
+      .wfs-prompt {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 10px;
+        min-width: 0;
+        overflow-wrap: break-word;
+      }
+
+      /* --- Footer: one row, stars leading, privacy trailing ----------------- */
+      /* The same two-column shape as the popup, so the surfaces cannot drift.
+         Not sticky here: the options page is a short document in a full tab, so
+         there is nothing to pin the row against. */
+      .wfs-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        width: 100%;
+        margin-top: 28px;
+        padding-top: 20px;
+        border-top: 1px solid var(--wfs-border);
+      }
+
+      /* Feedback and Privacy, together on the trailing edge. */
+      .wfs-footer__links {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex: none;
+      }
+
+      /* Neither wraps nor shrinks: one label, five 24 px controls, and two short
+         links fit any width this page has. Wrapping would put the links under the
+         stars and bring back the stacked block this replaced. Margins are zeroed
+         against the generic `#app a` rule, whose negative insets are meant for the
+         padded links in the settings body. */
+      /* The `#app` prefix is load-bearing: the footer renders inside `#app`, and
+         `#app a` carries an id, so a class-only selector loses to it and both
+         links shipped at accent-blue 600 — the loudest thing in a row whose job
+         is to be quiet. They match the "Rate us" label instead, and take colour
+         only on hover. */
+      #app .wfs-footer__links > a {
+        flex: none;
+        margin: 0;
+        padding: 2px 4px;
+        font-size: 12px;
+        font-weight: 400;
+        color: var(--wfs-muted);
+        white-space: nowrap;
+      }
+
+      #app .wfs-footer__links > a:hover {
+        background: none;
+        color: var(--wfs-text);
+        text-decoration: underline;
+      }
+
+      /* "Rate us" and the stars are one unit on the leading edge. Tighter than the
+         surface's usual 8 px: the first star's 24 px box already contributes ~2 px
+         of side bearing before the glyph starts, so a wider gap reads as two things
+         rather than one labelled group. */
+      .wfs-footer__lead {
+        display: flex;
+        align-items: center;
+        gap: 3px;
+        min-width: 0;
+      }
+
+      /* Small and quiet: it names the stars rather than heading a section. */
+      .wfs-footer__label {
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--wfs-muted);
+        white-space: nowrap;
+      }
+
+      /* --- Tips: a collapsed disclosure ------------------------------------- */
+      /* The summary carries the same uppercase micro-label as every other section
+         heading, so a collapsed Tips row is indistinguishable from a section title
+         until it is opened — which is the point. One line at rest. */
+      .wfs-tips > summary {
+        cursor: pointer;
+        list-style: none;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--wfs-muted);
+        padding: 2px 6px;
+        margin: -2px -6px;
+        border-radius: 6px;
+        transition: background 140ms ease, color 140ms ease;
+      }
+
+      .wfs-tips > summary:hover {
+        background: var(--wfs-accent-dim);
+        color: var(--wfs-accent);
+      }
+
+      .wfs-tips > summary:focus-visible {
+        outline: none;
+        box-shadow: var(--wfs-ring);
+      }
+
+      /* The default triangle is replaced with one that rotates, so the control
+         reads as openable rather than as a bulleted heading. */
+      .wfs-tips > summary::before {
+        content: "▸";
+        display: inline-block;
+        width: 1em;
+        margin-right: 2px;
+        transition: transform 140ms ease;
+      }
+
+      .wfs-tips[open] > summary::before {
+        transform: rotate(90deg);
+      }
+
+      /* `::-webkit-details-marker` is the only way to remove Chrome's own marker;
+         `list-style: none` above covers the standard path. */
+      .wfs-tips > summary::-webkit-details-marker {
+        display: none;
+      }
+
+      .wfs-tips [data-wfs-tip] {
+        margin: 10px 0 0;
+        font-size: 13px;
+        color: var(--wfs-muted);
+        max-width: 58ch;
+      }
+
+      /* --- Shortcut row: always visible, never behind the disclosure -------- */
+      .wfs-shortcut {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+
+      /* The lead-in word only; the keys beside it carry the emphasis. */
+      .wfs-shortcut [data-wfs-help-shortcut] {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--wfs-muted);
+      }
+
+      /* The keys themselves, as a key cap — the one thing in the row the reader is
+         looking for. A uniform "Shortcut: Alt+R" made them read a sentence for it. */
+      .wfs-shortcut [data-wfs-help-combo] {
+        padding: 2px 8px;
+        font-family: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        line-height: 1.5;
+        color: var(--wfs-text);
+        background: var(--wfs-elevated);
+        border: 1px solid var(--wfs-border);
+        border-radius: 6px;
+        /* Tabular figures so a combination containing a digit does not shift the
+           row's width between renders. */
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+
+      .wfs-shortcut button,
+      .wfs-prompt button {
+        min-height: 24px;
+        padding: 4px 10px;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--wfs-accent);
+        background: var(--wfs-accent-dim);
+        border: 1px solid var(--wfs-border);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background 140ms ease, color 140ms ease;
+      }
+
+      .wfs-shortcut button:hover,
+      .wfs-prompt button:hover {
+        background: var(--wfs-accent-dim-hover);
+        color: var(--wfs-accent-hover);
+      }
+
+      .wfs-shortcut button:focus-visible,
+      .wfs-prompt button:focus-visible {
+        outline: none;
+        box-shadow: var(--wfs-ring);
+      }
+
+      /* The rating prompt's two destinations are anchors, not buttons, so
+         middle-click and "open in new tab" work on them. They still have to read as
+         controls in a row of controls, so this gives them the button's box.
+         
+         Scoped by `#app` deliberately. `#app a` above is id-scoped, so a bare
+         `.wfs-prompt__action` class loses to it on specificity no matter where it
+         sits in the file — which is how these first shipped, wearing plain link
+         styling. Worse, `#app a` carries `margin: -4px -8px` to let prose links sit
+         flush in a paragraph, and on two adjacent links in a flex row that negative
+         margin ate the 8 px gap and overlapped them. `margin: 0` is the fix for that
+         half and is not optional. */
+      #app .wfs-prompt__action {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        margin: 0;
+        padding: 4px 10px;
+        font-size: 13px;
+        background: var(--wfs-accent-dim);
+        border: 1px solid var(--wfs-border);
+        border-radius: 6px;
+      }
+
+      #app .wfs-prompt__action:hover {
+        background: var(--wfs-accent-dim-hover);
+        color: var(--wfs-accent-hover);
+      }
+
+      .wfs-prompt {
+        width: 100%;
+        padding: 12px 14px;
+        background: var(--wfs-elevated);
+        border: 1px solid var(--wfs-border);
+        border-radius: 10px;
+      }
+
+      /* Actions and links wrap rather than widening their row. */
+      .wfs-prompt__actions,
+      .wfs-footer__links {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        min-width: 0;
+      }
+
+      .wfs-footer {
+        width: 100%;
+        margin-top: 28px;
+        padding-top: 24px;
+        border-top: 1px solid var(--wfs-border);
+      }
+
+      /* No gap: the 24 px boxes separate the glyphs on their own, and an added gap
+         was what made the row look strung out. */
+      .wfs-stars {
+        display: flex;
+        align-items: center;
+        gap: 0;
+        min-width: 0;
+        /* Cancels the first glyph's own side bearing so the row sits against the
+           label instead of looking indented from it. Only the painted glyph shifts;
+           the 24 px target still starts inside the footer's own padding. */
+        margin-left: -2px;
+      }
+
+      /* 24 x 24 px exactly: the floor WCAG 2.2 target-size (AA) allows, and the
+         floor `npm run verify:live` measures. The box cannot shrink to pull the
+         glyphs together, so the glyph grows into it instead — a 15 px glyph left
+         enough dead space either side to read as five separate controls rather
+         than one star row. The pitch cannot go under 24 px — that needs overlapping
+         boxes, and an overlapped target is only nominally 24 px because the
+         neighbour on top of it takes the clicks — so the remaining gap is closed by
+         the glyph instead. U+2605 inks about 0.83em, so 25 px fills ~21 px of the
+         24 px pitch and leaves ~3 px between painted edges.
+
+         `line-height: 0.8` (20 px) is what keeps the box 24 px tall with a 25 px
+         glyph in it, so `min-height` still decides the height and the row does not
+         grow. */
+      .wfs-star {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 24px;
+        min-height: 24px;
+        padding: 0;
+        font-size: 25px;
+        line-height: 0.8;
+        color: var(--wfs-muted);
+        background: none;
+        border: 0;
+        border-radius: 4px;
+        cursor: pointer;
+        transition: color 140ms ease, background 140ms ease;
+      }
+
+      .wfs-star:hover {
+        background: var(--wfs-accent-dim);
+      }
+
+      .wfs-star.is-filled {
+        color: var(--wfs-accent);
+      }
+
+      /*
+       * An outline rather than the shared box-shadow ring: 2 px is the required
+       * floor and an outline width is what a layout check can read back off the
+       * element.
+       */
+      .wfs-star:focus-visible {
+        outline: 2px solid var(--wfs-accent);
+        outline-offset: 2px;
+      }
+
       @media (prefers-reduced-motion: reduce) {
         * {
           transition: none !important;
+        }
+
+        /*
+         * Stated again for the star controls on purpose: the requirement is a
+         * 0 ms transition duration on them specifically, and the live layout
+         * check reads that value off the element rather than trusting the
+         * blanket rule above.
+         */
+        .wfs-star {
+          transition-duration: 0ms !important;
         }
       }
     </style>

@@ -19,9 +19,10 @@ description, comments) into a column beside the player.
 ## Where everything is
 
 ```
+CHANGELOG.md                 What changed per version. Update it as you go
 src/windowed-fullscreen.ts   ALL extension code, one sectioned file
 manifest.json                Extension identity. THE version source of truth
-public/                      Shipped static assets (icons, popup + options HTML)
+public/                      Shipped static assets (icons, page HTML shells)
 scripts/build.mjs            Bundles the source once per MV3 surface
 scripts/package.mjs          Zips the build for the Web Store
 scripts/verify-live.mjs      Layout regression check against real YouTube
@@ -31,8 +32,8 @@ release/                     The upload zip only
 store-assets/                Not shipped: listing copy, screenshots, tiles
 ```
 
-All the code is in one file on purpose. `scripts/build.mjs` bundles it four
-times, synthesising a one-line entry per surface, and esbuild tree-shakes away
+All the code is in one file on purpose. `scripts/build.mjs` bundles it once per
+surface, synthesising a one-line entry for each, and esbuild tree-shakes away
 what that surface cannot reach:
 
 | Surface | Entry point |
@@ -41,6 +42,13 @@ what that surface cannot reach:
 | Service worker | `startServiceWorker()` |
 | Options page | `startOptionsPage()` |
 | Toolbar popup | `startPopup()` |
+| Welcome page | `startWelcomePage()` |
+
+The welcome page is the tab the install event opens. It thanks the reader, asks
+them to pin the extension, and lists four usage hints — no settings. It used to
+be a dismissible card at the top of the options page, which meant a fresh
+install landed on every preference the extension has in order to say two
+sentences.
 
 Navigate it by section marker — `§3`, `§7` — not by line number. The section
 index is in the file header.
@@ -54,6 +62,7 @@ npm test              # unit tests, no browser needed
 npm run build         # emits extension/
 npm run verify:live   # layout check against a real watch page (see below)
 npm run package       # build + release/windowed-fullscreen-v<version>.zip
+                      # refuses if that zip exists — bump the version, or --force
 ```
 
 Load the unpacked build at `chrome://extensions` → Developer mode → Load
@@ -66,7 +75,7 @@ Before you hand work back: `npm run typecheck && npm test && npm run build`.
 Every one of these was learned from a bug. Breaking one is a regression even if
 nothing appears to fail.
 
-**1. No top-level side effects.** The four `start*` functions are the only way
+**1. No top-level side effects.** The `start*` functions are the only way
 anything runs. Add a side effect and every surface's bundle inflates with code it
 cannot use — the popup would start shipping content-script logic.
 
@@ -85,7 +94,7 @@ capture to `LayoutSnapshot` in the same commit.
 Both want to own the player's box. With both applied, YouTube measures a player
 it does not control, caches a bogus size, and renders its smallest control bar —
 a squashed scrubber with the buttons crammed into a corner. §9 stands the mode
-fully down for fullscreen and brings it back afterwards.
+fully down for fullscreen. Where it lands afterwards is invariant 7.
 
 **5. Bounded loops only.** Detection, re-render, class re-assertion, and resume
 each have an attempt cap and emit a `DIAGNOSTIC` when they give up. Never add an
@@ -95,9 +104,125 @@ unbounded retry or an observer that can fight the page forever.
 (deliberately — sync would replicate settings through the user's browser
 account), no analytics. The privacy policy promises this.
 
+**7. Leaving fullscreen retraces the way in.** `selectExitDestination` is a pure
+lookup, and for every exit the extension did not request it answers from the two
+pending flags the stand-down recorded: **the page comes back to the state
+fullscreen was entered from.** Entered from windowed mode with the panel docked,
+that is what you get back — including on YouTube's own button, a double-click,
+`f`, `Escape`, and the browser's own chrome. Entered from the plain player, the
+plain player is what you get back. Our own two buttons name their destination on
+top of that: the windowed button asks for the mode, and the comment button docks
+the panel whether or not it was open before.
+
+The consequence to keep in mind: `Escape` out of fullscreen gives back **one**
+layer, not all of them. Three presses take a docked windowed session to a bare
+page — out of fullscreen, out of the panel, out of the mode.
+
+Two halves of the intent mechanism are load-bearing:
+
+- **The intent is written *before* `exitFullscreen()` is called.**
+  `fullscreenchange` can arrive synchronously from inside that call, so an intent
+  written afterwards reads as absent. The pending flags still bring the mode back,
+  but the press is then treated as an ordinary retraced exit — the comment button
+  in particular lands with the panel closed, having been pressed to open it.
+- **The intent is cleared unconditionally on the leaving edge**, used or not. An
+  intent that survives one `fullscreenchange` gets consumed by the next exit,
+  which may well be one the reader made for themselves.
+
+An unreleased revision of this made every exit the extension had not requested
+land on the plain player, on the argument that people leave fullscreen expecting
+the ordinary page. It was reverted: fullscreen is entered *from* somewhere, and
+leaving it undoes that one step, not the mode the reader switched on before it and
+never asked to leave. Do not reintroduce it. `tests/prompts.test.ts` pins the
+lookup and `verify:live` pins all four exit triggers plus the resume.
+
 ## Traps that have already bitten
 
 Do not undo these without reading why they are there.
+
+**A player-bar control whose result renders outside the player is dead in the
+mode, silently.** YouTube's chapter title ("View chapter") opens the Chapters
+engagement panel, and YouTube mounts that panel in `#secondary` — the first entry
+in `chromeAlways`, so `display: none` in both modes. The click landed, the panel
+opened, and it rendered inside a hidden container behind a player pinned at the top
+of the stacking order. Nothing appeared, no error, no diagnostic: the control just
+looked broken.
+
+Hiding `#secondary` is not negotiable, so the fix runs the other way. `YT.pageDependentControls`
+lists these controls and `onPointerCapture` (§9) tears the mode down
+**synchronously, in the capture phase, before the site's handler runs** — via
+`exitForPageDependentControl`, which is a real exit, not a stand-down. The ordering
+is the whole fix: the site's handler has to find the chrome already restored,
+because restoring it afterwards would mean the panel had already laid itself out
+inside a `display: none` container, and re-opening it is not something we can do
+without naming the site's internals.
+
+That exit also latches auto-apply off for `PAGE_HANDOFF_GRACE_MS`. Without it, the
+control bar YouTube rebuilds after the click remounts our button, auto-apply
+re-fires, and the reader is back in windowed mode with the panel hidden again one
+frame after opening it.
+
+**When adding to `YT.pageDependentControls`, the selector must resolve inside the
+player subtree.** An entry outside it matches clicks the mode has nothing to do
+with and drops the reader out of the mode for no reason. `adapters.test.ts` asserts
+this.
+
+**The rating prompt must never ask for sentiment before deciding which link to
+show.** "Enjoying it?" with Yes revealing the review page and No revealing the
+support page is **review gating** — the review path is withheld from readers whose
+answer was wrong, so the public score becomes what the question let through rather
+than what users think. The Chrome Web Store's Spam and Abuse policy forbids
+inflating a listing's rating by illegitimate means and the penalty is removal, not
+a warning. This has already been taken out of this extension once, as a 4–5 stars
+→ store / 1–3 stars → support router; see the long note above `ratingPromptDue`.
+
+Both destinations are shown together, to everyone, on one showing. It is also
+simply a better prompt: one press instead of two, and nobody has to pass a
+loyalty check before they are allowed to report a bug. `settings-dom.test.ts`
+asserts the prompt has exactly three controls — two links and one dismiss — so
+adding a yes/no step fails a test.
+
+**The rating prompt asks once, and "once" counts ANSWERS, not renders.** `resolved`
+is written when one of the three controls is used. It used to be written on mount,
+on the grounds that it made "once" true for the reader who closes the popup without
+touching anything and that neither link then needed a write of its own. Both were
+true and it was still wrong: the single lifetime ask was spent on a popup opened to
+flip a checkbox, so the row was gone at the next opening having asked nobody
+anything. Do not move it back. `promptsShown` is written in the same record as an
+independent second guard: if only one of the two survives, gate 5 of
+`ratingPromptDue` still catches the repeat.
+
+Writing on the answer means writing from a context that is about to be destroyed —
+the popup closes as soon as a link opens its tab. So the record is loaded once on
+mount and held, and the handler dispatches **one** `set` call merged into that copy.
+A read-then-write inside the handler is a bug: the read's round trip is what the
+closing popup loses. `auxclick` is handled beside `click` because a middle-click
+opens the destination without firing `click`.
+
+**The rating prompt must not share a host with the rating footer.** The footer
+repaints by calling `host.replaceChildren()` on every Rating_State change, and the
+prompt writes the Rating_State to record the answer. `chrome.storage.onChanged`
+fires in the writing context too, so mounting the prompt in
+`[data-wfs-footer-host]` destroyed it — on mount back when the write was on mount,
+spending a lifetime ask on something nobody saw, and now mid-press instead.
+`renderSettings`
+provides a separate `[data-wfs-prompt-host]` directly above the footer, and
+`settings-dom.test.ts` asserts the two are different nodes. The general rule: any
+node a `watchRatingState` subscriber repaints wholesale belongs to that subscriber
+alone.
+
+**§11 renders one tree into two hand-written stylesheets, so a CSS fix lands
+twice or it has not landed.** `public/options/index.html` and
+`public/popup/index.html` each carry their own copy of the shared region styles,
+and nothing checks that they agree — the unit tests see structure, not layout.
+Both files scope link styling by id (`#app a`, `#settings a`) with
+`margin: -4px -8px` so prose links sit flush in a paragraph, which a bare
+`.wfs-prompt__action` class cannot outrank. On a row of adjacent controls those
+insets cancel the gap and then pull each control 8 px under the one before it.
+`margin: 0` on the id-scoped override is the fix and is not optional; the options
+page carried it and the popup did not, which shipped a rating prompt whose
+"Rate it" sat half-hidden behind "Something is wrong". When you touch a shared
+region, open both files.
 
 **`box-sizing` on the panel.** `#below` is `content-box` on YouTube, so a
 `width` plus padding renders wider than asked. The panel overhung the video and
@@ -321,9 +446,13 @@ an extra `:not()` to win by class count rather than source order.
 
 ## Verifying layout changes
 
-`npm test` covers preferences, URL matching, the adapter registry, and the
-controller's panel state machine. It cannot see layout, because layout only
-exists inside a real YouTube page.
+`npm test` covers, one file each: URL matching and the adapter registry
+(`adapters.test.ts`), preference storage (`prefs.test.ts`), the controller's panel
+state machine (`panel.test.ts`), the usage counter (`rating.test.ts`), the pure
+exit-destination and prompt-scheduling decisions (`prompts.test.ts`), the
+user-facing copy budget (`help-copy.test.ts`), and the structure the settings tree
+builds (`settings-dom.test.ts`). It cannot see layout, because layout only exists
+inside a real YouTube page.
 
 `npm run verify:live` fills that gap. It attaches to a Chrome instance over the
 DevTools protocol, injects the real content script into a watch page, clicks the
@@ -339,8 +468,15 @@ actual buttons, and asserts the geometry invariants:
   closed guide drawer stays below the player so it cannot swallow clicks
 - the panel is opaque and legible in both the light and the dark theme
 - the revealed masthead owns the top edge, rather than the player's overlay
+- clicking the chapter title hands the page back, `#secondary` is visible again so
+  the Chapters panel can be seen, and auto-apply does not pull the mode back on
+  (skipped on an unchaptered video)
 - entering fullscreen leaves no class or inline style of ours behind
-- leaving fullscreen restores the mode and the panel
+- every way out of fullscreen lands where invariant 7 says it should: YouTube's
+  button, a double-click, `f`, and `Escape` all hand back the state fullscreen was
+  entered from — the mode and the panel exactly as they were, or a clean page when
+  it was entered from the plain player — and our own buttons return to windowed
+  mode with `ytp-big-mode` intact
 
 Run it before shipping any change to §3's CSS, the controller's geometry, or the
 fullscreen handoff. It needs a browser and a network, so it is not part of CI.

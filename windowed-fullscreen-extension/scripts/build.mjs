@@ -1,18 +1,18 @@
 // Build: bundle the single source file once per Manifest V3 surface and
 // assemble a loadable extension in `extension/`.
 //
-// All the code lives in `src/windowed-fullscreen.ts`. Rather than keeping four
-// near-empty entry files around just to satisfy the manifest, each surface is
-// built from a synthesized one-line entry that calls its exported start
-// function. esbuild then tree-shakes everything that surface does not reach, so
-// the popup bundle carries no content-script code and vice versa.
+// All the code lives in `src/windowed-fullscreen.ts`. Rather than keeping a
+// near-empty entry file per surface around just to satisfy the manifest, each
+// surface is built from a synthesized one-line entry that calls its exported
+// start function. esbuild then tree-shakes everything that surface does not
+// reach, so the popup bundle carries no content-script code and vice versa.
 //
 // Output format is not a free choice:
 // - The content script is injected by Chrome as a CLASSIC script, so it must be
 //   an IIFE. A top-level `export` is a syntax error in that context and would
 //   stop the entire content script from running.
-// - The service worker is declared `"type": "module"`, and the options/popup
-//   pages load their bundles with `<script type="module">`, so those are ESM.
+// - The service worker is declared `"type": "module"`, and the extension pages
+//   load their bundles with `<script type="module">`, so those are ESM.
 import { build, context } from "esbuild";
 import { cp, mkdir, readFile, rm } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
@@ -33,6 +33,7 @@ const surfaces = [
   { start: "startServiceWorker", outfile: "background/service-worker.js", format: "esm" },
   { start: "startOptionsPage", outfile: "options/main.js", format: "esm" },
   { start: "startPopup", outfile: "popup/main.js", format: "esm" },
+  { start: "startWelcomePage", outfile: "welcome/main.js", format: "esm" },
 ];
 
 /** @returns {import("esbuild").BuildOptions} */

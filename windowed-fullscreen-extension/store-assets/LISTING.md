@@ -4,9 +4,9 @@ Copy-paste answers for the Developer Dashboard. Asset files live in `marketing/o
 
 ## Submission state
 
-Current package version: **1.2.0** (`release/windowed-fullscreen-v1.2.0.zip`).
+Current package version: **1.3.0** (`release/windowed-fullscreen-v1.3.0.zip`).
 
-Nothing has been published yet, so 1.2.0 is the **first submission** and the version stays there until it is live. Everything below describes it. The number only has to move once the store holds a build carrying it — a listing will not accept the same version twice.
+**1.3.0 is live on the store.** See `CHANGELOG.md` for the full diff from 1.2.0.
 
 ## Name and store search
 
@@ -132,8 +132,8 @@ exactly the state it was in before you entered.
 
 IT NEVER FIGHTS YOUTUBE'S OWN FULLSCREEN
 Press YouTube's fullscreen button while the mode is on and you get plain,
-untouched YouTube fullscreen. Leave fullscreen and the mode comes back, with the
-side panel as you left it. Each button always does its own job.
+untouched YouTube fullscreen. Leave it and you come straight back to windowed
+mode, comments and all, exactly as you left it. Nothing to set up again.
 
 ALSO
 • Optional per-site auto-apply: enter the mode automatically when a video loads
