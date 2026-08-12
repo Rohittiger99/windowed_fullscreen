@@ -162,6 +162,26 @@ export interface SiteAdapter {
    * disposer.
    */
   onNavigationHint?(doc: Document, onHint: () => void): () => void;
+  /**
+   * Optional signal that the SITE changed how much room it is giving the player —
+   * a panel of its own docking or undocking beside the video, in a way the mode's
+   * CSS answers with a different player width.
+   *
+   * On YouTube this is live chat. That dock is driven entirely off the site's own
+   * collapsed state (§3), which is what makes it free of JS — and also means
+   * nothing in the extension is called when the reader closes it. The player
+   * widens from CSS alone, and the site, which sizes its scrubber in JS pixels
+   * from the width it last measured, never re-measures: the bar keeps a
+   * chat-width scrubber on a full-width player. Toggling our own comment panel
+   * appeared to fix it, because that path already nudges — which is how the bug
+   * was found.
+   *
+   * The core is not told what moved. It answers with exactly the re-measure it
+   * already runs for its own width changes, so there is no second repair path to
+   * keep in step. Returns a disposer. An adapter whose site has no dock of its
+   * own omits this and pays for nothing.
+   */
+  onSiteDockChange?(doc: Document, onChange: () => void): () => void;
 }
 
 /** What an adapter resolves to at one moment in time. */
@@ -395,6 +415,24 @@ const YT = {
    */
   sideContent: "ytd-watch-flexy #below",
   /**
+   * Live chat on a stream. Absent entirely on an ordinary video, which is the
+   * signal "this page has no chat" rather than a failure.
+   *
+   * Named here as well as in the stylesheet because the dock being CSS-only is
+   * what hid the bug it is read for: see `onSiteDockChange` below.
+   */
+  liveChat: "#chat",
+  /**
+   * The attribute YouTube puts on {@link liveChat} while the reader has chat shut.
+   * Its ABSENCE is what `:has(#chat:not([collapsed]))` keys the whole dock off, so
+   * this is the site's own state and not ours.
+   *
+   * Not unique to chat: YouTube uses the same attribute name on its description
+   * and comment expanders, so anything watching for it has to confirm what
+   * actually changed. `onSiteDockChange` does.
+   */
+  chatCollapsedAttr: "collapsed",
+  /**
    * Page chrome hidden in every mode. Both masthead forms are listed so a
    * missing one is simply tolerated. The masthead is fixed to the top of the
    * viewport, and the related-videos rail steals width the player wants, so
@@ -455,8 +493,20 @@ html.wfs-windowed {
   --wfs-edge: rgba(0, 0, 0, 0.14);
   --wfs-scrim: rgba(255, 255, 255, 0.94);
 
+  /* How much of the window's right edge is currently given to a dock — the
+     comment panel, the live-chat panel, or both. Zero when nothing is docked,
+     which is what makes it safe for the masthead below to read unconditionally.
+     Every rule that narrows something to clear a dock reads this one property, so
+     the docks cannot disagree about where their shared edge is. */
+  --wfs-docked-width: 0px;
+
   --wfs-z-player: 2147483630;
   --wfs-z-panel: 2147483634;
+  /* The panel's own close button, which has to clear the panel's scrolling
+     content without reaching the masthead's layer. A token rather than
+     \`--wfs-z-panel + 1\` written inline, for the reason in the stacking note
+     above: a layer is a rank, and ranks belong in one list. */
+  --wfs-z-panel-control: 2147483635;
   --wfs-z-chrome: 2147483638;
   /* Above the masthead, because that is where YouTube puts its own popups
      relative to it, and because a menu anchored to a masthead button opens
@@ -626,7 +676,26 @@ html.wfs-windowed #masthead-container {
   position: fixed !important;
   top: 0 !important;
   left: 0 !important;
-  right: 0 !important;
+  /* The bar ends where a dock begins, and spans the window when nothing is
+     docked (--wfs-docked-width is 0px then, so this is the plain right: 0 it
+     used to be).
+
+     It used to span the window unconditionally and reveal ACROSS the docked
+     panel, which was defended as harmless because the bar is transient and the
+     panel scrolls under it. That stopped being true the moment either panel grew
+     a close button in its top-right corner: the bar reveals into exactly that
+     strip, so moving the cursor up to press the X summoned the bar on top of it
+     and the panel could not be closed at all.
+
+     Raising the panels above the bar is the obvious alternative and the wrong
+     one — see the note on --wfs-z-chrome in the stacking comment above: the
+     masthead's own account, notifications and Create buttons live at the
+     right-hand end of the bar, which is exactly where the docks are, so
+     inverting the order simply moves the unreachable controls. Ending the bar
+     early removes the overlap instead, and costs nothing: it keeps every one of
+     its controls and just lays them out across the width the video has. */
+  right: var(--wfs-docked-width) !important;
+  width: auto !important;
   z-index: var(--wfs-z-chrome) !important;
   transform: translateY(var(--wfs-chrome-shift)) !important;
   opacity: var(--wfs-chrome-opacity) !important;
@@ -643,6 +712,15 @@ html.wfs-windowed #masthead-container {
   transition:
     transform var(--wfs-chrome-duration) var(--wfs-chrome-ease) var(--wfs-chrome-delay),
     opacity var(--wfs-chrome-duration) var(--wfs-chrome-ease) var(--wfs-chrome-delay) !important;
+}
+
+/* The bar's inner layout is sized by the site to its host's width. Releasing any
+   explicit width lets the right-hand cluster reflow to the inset edge above
+   instead of staying out past it, under the dock. */
+html.wfs-windowed #masthead-container #masthead {
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
 }
 
 /* Revealed. .wfs-reveal-chrome is the controller's pointer-proximity signal;
@@ -745,13 +823,32 @@ html.wfs-windowed.wfs-scrollable .html5-video-player {
   background: #000 !important;
 }
 
-/* Flatten the container chain between #primary-inner and the player. */
-html.wfs-windowed.wfs-scrollable ytd-watch-flexy #player,
-html.wfs-windowed.wfs-scrollable ytd-watch-flexy #player-container-outer,
-html.wfs-windowed.wfs-scrollable ytd-watch-flexy #player-container-inner,
-html.wfs-windowed.wfs-scrollable ytd-watch-flexy #player-container,
-html.wfs-windowed.wfs-scrollable ytd-watch-flexy ytd-player,
-html.wfs-windowed.wfs-scrollable ytd-watch-flexy ytd-player > #container {
+/* Flatten the container chain between #primary-inner and the player.
+   In the non-side-panel case, #columns is a flex row and #primary is narrower
+   than the viewport because #secondary takes space. The player must still span
+   the full viewport, so #player (outermost wrapper inside #primary-inner) gets
+   a width that overflows into #secondary's territory. overflow:visible on
+   #primary-inner lets it paint there; the visual result is a full-width player
+   followed by two narrower columns.
+   --wfs-secondary-width is defined alongside the flex layout below. */
+html.wfs-windowed.wfs-scrollable:not(.wfs-side-panel) ytd-watch-flexy #player {
+  position: static !important;
+  /* Span the full #columns width: #primary's own width plus #secondary's. */
+  width: calc(100% + var(--wfs-secondary-width)) !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  height: 100vh !important;
+  min-height: 0 !important;
+  max-height: 100vh !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+html.wfs-windowed.wfs-scrollable:not(.wfs-side-panel) ytd-watch-flexy #player-container-outer,
+html.wfs-windowed.wfs-scrollable:not(.wfs-side-panel) ytd-watch-flexy #player-container-inner,
+html.wfs-windowed.wfs-scrollable:not(.wfs-side-panel) ytd-watch-flexy #player-container,
+html.wfs-windowed.wfs-scrollable:not(.wfs-side-panel) ytd-watch-flexy ytd-player,
+html.wfs-windowed.wfs-scrollable:not(.wfs-side-panel) ytd-watch-flexy ytd-player > #container {
   position: static !important;
   width: 100% !important;
   min-width: 0 !important;
@@ -763,11 +860,145 @@ html.wfs-windowed.wfs-scrollable ytd-watch-flexy ytd-player > #container {
   margin: 0 !important;
 }
 
-/* #columns is a flex row of #primary and #secondary. With the related rail
-   hidden, make it a plain block so #primary takes the full width. */
-html.wfs-windowed.wfs-scrollable ytd-watch-flexy #columns,
-html.wfs-windowed.wfs-scrollable ytd-watch-flexy #primary,
-html.wfs-windowed.wfs-scrollable ytd-watch-flexy #primary-inner {
+/* Side-panel case: #columns is block, #primary is full-width, no breakout
+   needed. The original full-width flattening applies. */
+html.wfs-windowed.wfs-scrollable.wfs-side-panel ytd-watch-flexy #player,
+html.wfs-windowed.wfs-scrollable.wfs-side-panel ytd-watch-flexy #player-container-outer,
+html.wfs-windowed.wfs-scrollable.wfs-side-panel ytd-watch-flexy #player-container-inner,
+html.wfs-windowed.wfs-scrollable.wfs-side-panel ytd-watch-flexy #player-container,
+html.wfs-windowed.wfs-scrollable.wfs-side-panel ytd-watch-flexy ytd-player,
+html.wfs-windowed.wfs-scrollable.wfs-side-panel ytd-watch-flexy ytd-player > #container {
+  position: static !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  height: 100vh !important;
+  min-height: 0 !important;
+  max-height: 100vh !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* #columns is YouTube's flex row of #primary and #secondary. In scrollable mode
+   without the side panel, keep it as a flex row so the related-videos rail sits
+   beside the comments — the same two-column layout YouTube uses natively. The
+   player still spans full width because the container chain above is given a
+   width that breaks it out of #primary's narrowed box.
+
+   With the side panel open, #secondary stays hidden (the panel replaces it) and
+   #columns reverts to a block so #primary takes the full width. */
+html.wfs-windowed.wfs-scrollable:not(.wfs-side-panel) ytd-watch-flexy #columns {
+  /* The secondary rail width. YouTube uses 402px on wide viewports. Clamped so
+     it does not eat too much on small windows or expand past usefulness. */
+  --wfs-secondary-width: clamp(300px, 26vw, 402px);
+  display: flex !important;
+  flex-direction: row !important;
+  flex-wrap: nowrap !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+html.wfs-windowed.wfs-scrollable:not(.wfs-side-panel) ytd-watch-flexy #primary {
+  flex: 1 1 0% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  /* The player inside overflows into #secondary's horizontal territory; let it
+     paint there. */
+  overflow: visible !important;
+}
+
+html.wfs-windowed.wfs-scrollable:not(.wfs-side-panel) ytd-watch-flexy #primary-inner {
+  display: block !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  /* The player container chain overflows #primary into #secondary's space. Let
+     it paint there rather than clipping. This is only the player row; #below
+     stays within #primary's bounds. */
+  overflow: visible !important;
+}
+
+/* Un-hide the suggestions rail in scrollable mode without the side panel. It
+   carries the "All / From the series" chip bar and related-video cards. The
+   blanket hide in the rule above (html.wfs-windowed #secondary) must be
+   overridden with a more specific selector — the extra :not() wins by class
+   count. */
+html.wfs-windowed.wfs-scrollable:not(.wfs-side-panel) #secondary,
+html.wfs-windowed.wfs-scrollable:not(.wfs-side-panel) #secondary-inner {
+  display: block !important;
+  visibility: visible !important;
+}
+
+html.wfs-windowed.wfs-scrollable:not(.wfs-side-panel) #secondary {
+  flex: 0 0 var(--wfs-secondary-width) !important;
+  width: var(--wfs-secondary-width) !important;
+  min-width: 0 !important;
+  max-width: var(--wfs-secondary-width) !important;
+  /* Push below the player. The player overflows #primary into #secondary's
+     horizontal space for its full 100vh height, so the rail must not start
+     until after that. The extra 20px matches #below's top margin so both
+     columns start at the same baseline. */
+  margin-top: calc(100vh + 20px) !important;
+  margin-bottom: 64px !important;
+  /* Left gutter only. A right gutter here reads as a dead vertical strip the
+     full height of the rail, between the last card and the page's scrollbar —
+     which is exactly what a 24px value looked like, and what the rail's own
+     scrollbar used to sit in. YouTube runs its cards to the edge; so do we.
+     The 8px pairs with #below's 24px right padding for a 32px column gap. */
+  padding: 0 0 0 8px !important;
+  /* Plain flow, exactly as YouTube ships it. An earlier revision made this
+     sticky with a 100vh max-height and overflow-y: auto, which gave the rail
+     its OWN scrollbar — two scrollbars on the page, the rail scrolling out of
+     step with the comments beside it, and the page's own scrollbar no longer
+     reaching the end of the suggestions. YouTube's rail is ordinary flow
+     content and the page's single scrollbar moves the whole column; anything
+     that nests a scroll container here reintroduces that. */
+  position: static !important;
+  align-self: flex-start !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+html.wfs-windowed.wfs-scrollable:not(.wfs-side-panel) #secondary-inner {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  /* Same reason as #secondary above: no nested scroll container, or the page
+     grows a second scrollbar. */
+  position: static !important;
+  height: auto !important;
+  max-height: none !important;
+  overflow: visible !important;
+}
+
+/* The rail's contents carry YouTube's own rail width, which is sized for the
+   stock watch page rather than for whatever width this mode gives it. Left
+   alone the cards keep that width and leave a blank strip beside them, which is
+   the same failure the right padding above caused. Same treatment as the
+   #below > * release further up. */
+html.wfs-windowed.wfs-scrollable:not(.wfs-side-panel) #secondary-inner > *,
+html.wfs-windowed.wfs-scrollable:not(.wfs-side-panel) #secondary ytd-watch-next-secondary-results-renderer,
+html.wfs-windowed.wfs-scrollable:not(.wfs-side-panel) #secondary #related {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+/* When the side panel is docked, #secondary stays hidden and the layout is a
+   plain block column so #primary keeps the full width for the panel geometry. */
+html.wfs-windowed.wfs-scrollable.wfs-side-panel ytd-watch-flexy #columns,
+html.wfs-windowed.wfs-scrollable.wfs-side-panel ytd-watch-flexy #primary,
+html.wfs-windowed.wfs-scrollable.wfs-side-panel ytd-watch-flexy #primary-inner {
   display: block !important;
   width: 100% !important;
   min-width: 0 !important;
@@ -833,9 +1064,10 @@ html.wfs-windowed:is(.wfs-scrollable, .wfs-side-panel) ytd-item-section-renderer
    from the video rather than overlaying it, so nothing covers the picture.
 
    The panel IS the page's own #below element, positioned rather than moved.
-   Re-parenting it into the player would be the other way to do this, and it is
-   the reason live-stream chat is out of scope for now: #chat lives in a
-   different container (#secondary). Leaving #below where YouTube put it means
+   Re-parenting it into the player would be the other way to do this, and not
+   re-parenting is what let live chat be added without touching this code at all:
+   #chat lives in a different container (#secondary), so it gets its own dock
+   further down rather than sharing this one. Leaving #below where YouTube put it means
    Polymer keeps owning it — the like button, subscribe, comment sorting, and
    lazy comment continuations all keep working, and exit needs to undo nothing
    but a class.
@@ -851,6 +1083,14 @@ html.wfs-windowed.wfs-side-panel {
      what keeps it flush with the space the player gives back. */
   --wfs-panel-width: clamp(320px, 26vw, 440px);
   --wfs-panel-pad: 16px;
+  /* How far in from the window's right edge the panel sits. Zero on its own;
+     chat's width when chat is docked outboard of it. Both the panel and its close
+     button read this, so the button cannot drift off the panel's corner. */
+  --wfs-panel-right: 0px;
+  /* What the window's right edge has given up, which the masthead reads so it
+     stops short of the panel rather than revealing over its close button. The
+     chat section overrides this where chat is docked as well. */
+  --wfs-docked-width: var(--wfs-panel-width);
 }
 
 /* Browser fullscreen belongs to YouTube: it sets display:none on #columns, the
@@ -908,7 +1148,7 @@ html.wfs-windowed.wfs-side-panel.wfs-scrollable ytd-watch-flexy #below {
   box-sizing: border-box !important;
   position: fixed !important;
   top: 0 !important;
-  right: 0 !important;
+  right: var(--wfs-panel-right) !important;
   bottom: 0 !important;
   left: auto !important;
   width: var(--wfs-panel-width) !important;
@@ -916,7 +1156,8 @@ html.wfs-windowed.wfs-side-panel.wfs-scrollable ytd-watch-flexy #below {
   max-width: var(--wfs-panel-width) !important;
   height: auto !important;
   margin: 0 !important;
-  padding: var(--wfs-panel-pad) var(--wfs-panel-pad) 96px !important;
+  /* Top padding clears the close button, which is pinned to this corner. */
+  padding: 52px var(--wfs-panel-pad) 96px !important;
   overflow-y: auto !important;
   overflow-x: hidden !important;
   /* Keep a flick at the end of the comment list from scrolling the page. */
@@ -928,6 +1169,78 @@ html.wfs-windowed.wfs-side-panel.wfs-scrollable ytd-watch-flexy #below {
      YouTube's own token. */
   background: var(--wfs-surface) !important;
   box-shadow: -1px 0 0 0 var(--wfs-edge) !important;
+}
+
+/* The panel's close button, matching the one the site puts on its own chat panel.
+   The panel had no affordance of its own: closing it meant knowing that the
+   comment button in the player bar toggles, or that Escape gives back one layer.
+   Both are true and neither is visible.
+
+   It is NOT injected into #below. That subtree belongs to the site's own renderer,
+   which rebuilds it on a video change and on lazy comment loads, and anything of
+   ours inside it would be discarded at some point we do not control. It hangs off
+   <body> instead and is positioned onto the panel's corner, so the panel stays
+   the site's element and this stays ours.
+
+   Hidden by default, so the element can exist for the whole session and the
+   docked/undocked question stays a pure CSS one — the same reasoning as every
+   other panel rule being nested under a class. */
+.wfs-panel-close {
+  display: none;
+}
+
+html.wfs-windowed.wfs-side-panel .wfs-panel-close {
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  box-sizing: border-box !important;
+  position: fixed !important;
+  top: 10px !important;
+  /* Sits inside the panel's own right edge, wherever that edge currently is. */
+  right: calc(var(--wfs-panel-right) + 10px) !important;
+  width: 32px !important;
+  height: 32px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  border-radius: 50% !important;
+  background: transparent !important;
+  color: inherit !important;
+  cursor: pointer !important;
+  /* Clears the panel's scrolling content without reaching the masthead's rank. */
+  z-index: var(--wfs-z-panel-control) !important;
+  opacity: 0.85 !important;
+  transition: background-color 120ms ease, opacity 120ms ease !important;
+}
+
+html.wfs-windowed.wfs-side-panel .wfs-panel-close:hover {
+  background: var(--wfs-edge) !important;
+  opacity: 1 !important;
+}
+
+/* The site's own focus ring does not apply to an element outside its tree, and a
+   control reachable by keyboard has to show where the focus is. */
+html.wfs-windowed.wfs-side-panel .wfs-panel-close:focus-visible {
+  outline: 2px solid currentColor !important;
+  outline-offset: 2px !important;
+  opacity: 1 !important;
+}
+
+/* The glyph inherits the theme's text colour rather than being painted white, so
+   it stays legible on the light theme's panel. */
+html.wfs-windowed.wfs-side-panel .wfs-panel-close svg {
+  width: 24px !important;
+  height: 24px !important;
+  display: block !important;
+  stroke: currentColor !important;
+}
+
+html.wfs-windowed.wfs-side-panel .wfs-panel-close {
+  color: #0f0f0f !important;
+}
+
+html[dark].wfs-windowed.wfs-side-panel .wfs-panel-close {
+  color: #f1f1f1 !important;
 }
 
 /* Cover mode hides #comments with an inline style, and the metadata block is
@@ -963,10 +1276,240 @@ html.wfs-windowed.wfs-side-panel #comments #header {
   position: static !important;
 }
 
-/* The masthead reveals over the top of the panel on hover, the same way it
-   reveals over the top of the video. Nudging the panel's padding to compensate
-   would shift the text mid-read, so it does not: the bar is transient, and the
-   panel scrolls under it. */
+/* The masthead stops at the panel's outer edge rather than revealing across it.
+   See the inset note in the #masthead-container rule for why that changed, and why
+   raising the panel above the bar instead would be worse. */
+
+/* -------------------------------------------------------------------------
+   Live chat dock.
+
+   A livestream's chat gets the same treatment the comment panel gets: a column
+   beside the player, taking width from the video rather than covering it. On a
+   livestream the chat IS the reason to keep the page open, so leaving it in the
+   rail below a viewport-tall player means scrolling away from the stream to read
+   it.
+
+   Driven entirely off YouTube's own state, with no class of ours and no JS.
+   #chat carries a \`collapsed\` attribute while the reader has the panel shut, so
+   \`:has(#chat:not([collapsed]))\` is exactly "the site is showing chat". The
+   consequences are worth spelling out:
+
+   - Pressing YouTube's own "Open panel" / chat toggle is all it takes. We do not
+     add a control, and we do not need one.
+   - Collapsing chat unwinds the dock on its own. There is no state to keep and
+     nothing for exit() to restore — every rule here is nested under
+     .wfs-windowed, so leaving the mode drops the whole lot.
+   - On a video with no chat, #chat is absent, nothing matches, and this section
+     costs nothing.
+
+   \`:has()\` is Chrome 105; the manifest floor is 116, so it is safe to depend on.
+
+   Chat and the comment panel COEXIST, chat on the outside. An earlier revision
+   stood chat down whenever the panel was docked, on the argument that two docks
+   on one strip leave neither usable. That was wrong in the one case that matters:
+   the site's own "Open panel" chat button is reachable from inside the docked
+   panel, so pressing it expanded a chat that then had nowhere to render and
+   simply never appeared. Refusing to show what the reader just asked for is worse
+   than a narrow video, and the reader can always close one of the two.
+   ------------------------------------------------------------------------- */
+html.wfs-windowed:has(#chat:not([collapsed])) {
+  /* The same width as the comment panel, so the two docks are interchangeable
+     and the video's width does not jump between them. */
+  --wfs-chat-width: clamp(320px, 26vw, 440px);
+  /* What the video gives up in total. Chat alone unless the comment panel is
+     docked too, in which case the next rule adds it. Every rule that narrows the
+     video reads this one property, so the two docks cannot disagree about where
+     the video's right edge is. */
+  --wfs-docked-width: var(--wfs-chat-width);
+}
+
+html.wfs-windowed.wfs-side-panel:has(#chat:not([collapsed])) {
+  --wfs-docked-width: calc(var(--wfs-panel-width) + var(--wfs-chat-width));
+}
+
+/* Browser fullscreen belongs to YouTube, including its own chat drawer. The mode
+   stands down in JS (§9); this covers the few frames before that runs, for the
+   same reason the comment panel does it — a player still holding a chat-sized
+   gap is how the site ends up measuring itself into its smallest control bar. */
+html.wfs-windowed:has(#chat:not([collapsed])):is(:fullscreen, :has(:fullscreen)) {
+  --wfs-chat-width: 0px;
+}
+
+/* Cover mode: the player is already fixed, so the two insets size it. Sized from
+   left/right rather than calc(100vw - width) for the scrollbar reason recorded
+   against the comment panel. */
+html.wfs-windowed:not(.wfs-scrollable):has(#chat:not([collapsed])) #movie_player,
+html.wfs-windowed:not(.wfs-scrollable):has(#chat:not([collapsed])) .html5-video-player {
+  left: 0 !important;
+  right: var(--wfs-docked-width) !important;
+  width: auto !important;
+  max-width: none !important;
+}
+
+/* Scrollable mode: the two-column layout below the player folds back to one, and
+   the whole left column is inset by the chat's width. Narrowing #primary rather
+   than the player means the player, the metadata and the comments are all
+   measured off the same edge and cannot drift apart — and it undoes the
+   #player breakout further up in one place, since #primary is full-width again
+   as far as its own children are concerned. */
+html.wfs-windowed.wfs-scrollable:has(#chat:not([collapsed])) ytd-watch-flexy #columns {
+  display: block !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+html.wfs-windowed.wfs-scrollable:has(#chat:not([collapsed])) ytd-watch-flexy #primary {
+  display: block !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  padding: 0 !important;
+  margin: 0 var(--wfs-docked-width) 0 0 !important;
+  overflow: visible !important;
+}
+
+html.wfs-windowed.wfs-scrollable:has(#chat:not([collapsed])) ytd-watch-flexy #primary-inner,
+html.wfs-windowed.wfs-scrollable:has(#chat:not([collapsed])) ytd-watch-flexy #player {
+  display: block !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* #primary's margin above is the ONLY thing narrowing the video in this mode, so
+   the player must fill it. Without this the comment panel's own
+   calc(100% - --wfs-panel-width) applies on top of a column that has already
+   given that width up, and the video ends up a panel-width short of its box. */
+html.wfs-windowed.wfs-scrollable:has(#chat:not([collapsed])) #movie_player,
+html.wfs-windowed.wfs-scrollable:has(#chat:not([collapsed])) .html5-video-player {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+/* Both docked: the comment panel moves inboard to sit beside chat rather than
+   under it. Chat keeps the outer edge because it is the site's own panel with
+   its own close button — burying that is what made it unclosable.
+
+   Set on <html> rather than on #below directly so the panel's close button, which
+   reads the same property, travels with it. */
+html.wfs-windowed.wfs-side-panel:has(#chat:not([collapsed])) {
+  --wfs-panel-right: var(--wfs-chat-width);
+}
+
+/* #secondary holds the chat, so it cannot be display:none the way it is the rest
+   of the time — display:none on an ancestor takes a position:fixed descendant
+   with it. It is revealed as a bare host instead: every rail role stripped, and
+   its only remaining in-flow content removed below, so it collapses to nothing
+   and the fixed chat inside is all that paints.
+
+   This also overrides the inline display:none/visibility:hidden the controller
+   writes onto #secondary as a chrome element. A stylesheet !important outranks
+   an inline declaration that has none, so the JS and the CSS do not fight. */
+html.wfs-windowed:has(#chat:not([collapsed])) #secondary,
+html.wfs-windowed:has(#chat:not([collapsed])) #secondary-inner,
+html.wfs-windowed:has(#chat:not([collapsed])) #chat-container {
+  display: block !important;
+  visibility: visible !important;
+  position: static !important;
+  flex: none !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  height: auto !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: visible !important;
+}
+
+/* The related-videos rail, while chat is docked. It competes for the same strip,
+   and in scrollable mode it is the thing that was beside the comments before
+   chat took that column. Named outright rather than reached by :not(), so a
+   YouTube change adds a rail we can see rather than silently hiding a chat we
+   cannot. */
+html.wfs-windowed:has(#chat:not([collapsed])) #related,
+html.wfs-windowed:has(#chat:not([collapsed])) ytd-watch-next-secondary-results-renderer {
+  display: none !important;
+}
+
+/* The dock itself. Same geometry as the comment panel, so switching between them
+   moves nothing but the contents. */
+html.wfs-windowed:has(#chat:not([collapsed])) #chat {
+  /* A column, so the chat iframe can be told to take the remaining height
+     without being given a pixel value we would have to keep in step. */
+  display: flex !important;
+  flex-direction: column !important;
+  /* Same trap as #below: content-box plus a width renders wider than asked and
+     overhangs the video, swallowing the right end of the control bar. */
+  box-sizing: border-box !important;
+  position: fixed !important;
+  top: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  left: auto !important;
+  width: var(--wfs-chat-width) !important;
+  min-width: 0 !important;
+  max-width: var(--wfs-chat-width) !important;
+  /* YouTube gives #chat a pixel height from its own JS. The insets above are the
+     height here, so that value has to go. */
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  overflow: hidden !important;
+  /* Above the player, below the masthead — the same rank the comment panel
+     holds. See the stacking note at the top of this stylesheet. */
+  z-index: var(--wfs-z-panel) !important;
+  background: var(--wfs-surface) !important;
+  box-shadow: -1px 0 0 0 var(--wfs-edge) !important;
+}
+
+/* Chat renders inside an iframe, which carries its own inline width and height
+   from the site. Both have to be released or the dock is a tall box with a
+   short chat sitting at the top of it. */
+html.wfs-windowed:has(#chat:not([collapsed])) #chat > iframe,
+html.wfs-windowed:has(#chat:not([collapsed])) #chat #chatframe {
+  flex: 1 1 auto !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  margin: 0 !important;
+  border: 0 !important;
+}
+
+/* Same reason as the comment panel's equivalent rule: a fixed element anchors to
+   the nearest ancestor carrying a transform, filter, or paint containment rather
+   than to the viewport. The chain here is longer because #chat sits two levels
+   deeper than #below. */
+html.wfs-windowed:has(#chat:not([collapsed])) ytd-app,
+html.wfs-windowed:has(#chat:not([collapsed])) #content,
+html.wfs-windowed:has(#chat:not([collapsed])) #page-manager,
+html.wfs-windowed:has(#chat:not([collapsed])) ytd-watch-flexy,
+html.wfs-windowed:has(#chat:not([collapsed])) ytd-watch-flexy #columns,
+html.wfs-windowed:has(#chat:not([collapsed])) ytd-watch-flexy #secondary,
+html.wfs-windowed:has(#chat:not([collapsed])) ytd-watch-flexy #secondary-inner,
+html.wfs-windowed:has(#chat:not([collapsed])) #chat-container {
+  transform: none !important;
+  filter: none !important;
+  perspective: none !important;
+  contain: none !important;
+  content-visibility: visible !important;
+}
+
+/* The masthead needs no rule of its own here. It reads --wfs-docked-width, which
+   the tokens at the top of this section already widened to cover chat, so the bar
+   stops short of whichever docks are up. */
 
 /* -------------------------------------------------------------------------
    Page-level overlay hosts.
@@ -1174,6 +1717,58 @@ const youtubeAdapter: SiteAdapter = {
   onNavigationHint(doc, onHint) {
     doc.addEventListener("yt-navigate-finish", onHint);
     return () => doc.removeEventListener("yt-navigate-finish", onHint);
+  },
+
+  /**
+   * Live chat docking or undocking, which changes the player's width with nothing
+   * in the extension being called. See {@link SiteAdapter.onSiteDockChange} for
+   * what the core does about it and why it has to be told.
+   *
+   * Watches {@link YT.chatCollapsedAttr} across the document — the same shape
+   * `onVideoChange` uses for `video-id`, and for the same reason: an
+   * attribute-filtered subtree observer is cheap, and `#chat` may not exist yet, or
+   * at all, so there is no element to attach to up front.
+   *
+   * The filter cannot be the whole test. YouTube puts `collapsed` on its
+   * description and comment expanders too, and each of those would otherwise buy a
+   * re-measure the layout did not need — a reader opening ten comment replies would
+   * spend ten. So every mutation is answered by re-reading chat's state, and only a
+   * real change is reported.
+   *
+   * That state is a pair, not a boolean, and both halves are load-bearing:
+   *
+   *  - The element is compared, so a livestream-to-livestream navigation that
+   *    swaps the chat frame counts as a change even when both frames were open.
+   *  - `docked` distinguishes "shut" from "not on this page", because a chat
+   *    MOUNTING is not an attribute mutation and is therefore invisible here. With
+   *    a plain boolean, a chat that mounted already open — which is what YouTube
+   *    does on a stream — would leave the cached value `false`, and the reader's
+   *    first collapse would read `false` again and report nothing. That is the exact
+   *    bug this hook exists to fix, so the dedupe must not reintroduce it.
+   */
+  onSiteDockChange(doc, onChange) {
+    if (typeof MutationObserver === "undefined") return () => {};
+
+    /** Chat's dock state now: which frame, and whether the site is showing it. */
+    const readDockState = (): { chat: Element | null; docked: boolean } => {
+      const chat = doc.querySelector(YT.liveChat);
+      return { chat, docked: chat !== null && !chat.hasAttribute(YT.chatCollapsedAttr) };
+    };
+
+    let last = readDockState();
+    const observer = new MutationObserver(() => {
+      const current = readDockState();
+      if (current.chat === last.chat && current.docked === last.docked) return;
+      last = current;
+      onChange();
+    });
+    observer.observe(doc.documentElement ?? doc, {
+      subtree: true,
+      attributes: true,
+      attributeFilter: [YT.chatCollapsedAttr],
+    });
+
+    return () => observer.disconnect();
   },
 };
 
@@ -2097,21 +2692,45 @@ export class WindowedFullscreenController {
     this.panelOpen = open;
     this.doc.documentElement.classList.toggle(PANEL_CLASS, open);
     this.applyPanelButtonState(open);
-    // A deliberate width change earns a fresh repair budget: this is the moment
-    // the site is most likely to disagree about the player's size, and the reader
-    // is looking straight at the control bar when it does. A fresh budget means a
-    // fresh right to report exhausting it.
-    this.geometryRepairs = 0;
-    this.geometryRepairAbandonReported = false;
-    // The player just changed width, and YouTube derives its control-bar
-    // geometry from that in JS — the same reason entry and exit nudge it.
-    this.scheduleReflowNudge();
+    // The player just changed width, and the site derives its control-bar geometry
+    // from that in JS — the same reason entry and exit nudge it.
+    this.refreshGeometry();
     return true;
   }
 
   /** Flip the side panel. */
   togglePanel(): boolean {
     return this.setPanelOpen(!this.panelOpen);
+  }
+
+  /**
+   * Re-measure after the player's width changed, whoever changed it.
+   *
+   * Public because the controller is not the only thing that moves that edge. Every
+   * rule narrowing the video reads one custom property, so a dock belonging to the
+   * SITE — live chat on YouTube — re-lays the player out from CSS alone with nothing
+   * here being called. The site sizes the parts of its control bar it cannot express
+   * in CSS from the width it last measured and only recomputes on a resize, so
+   * without this the bar keeps the geometry it had before the dock moved: a scrubber
+   * a dock's width short of the bar it sits in, on an otherwise full-width player.
+   *
+   * {@link setPanelOpen} calls through here rather than repeating it, so one width
+   * change gets one answer regardless of which side caused it. `SiteAdapter`'s
+   * `onSiteDockChange` is what supplies the other side.
+   *
+   * Ignored while the mode is off: there is no geometry of ours to repair, and a
+   * nudge at a page this session does not own is what {@link dispose} exists to
+   * prevent.
+   */
+  refreshGeometry(): void {
+    if (!this.active) return;
+    // A deliberate width change earns a fresh repair budget: this is the moment
+    // the site is most likely to disagree about the player's size, and the reader
+    // is looking straight at the control bar when it does. A fresh budget means a
+    // fresh right to report exhausting it.
+    this.geometryRepairs = 0;
+    this.geometryRepairAbandonReported = false;
+    this.scheduleReflowNudge();
   }
 
   /** Enter the mode. Returns false when it refused, having changed nothing. */
@@ -2604,6 +3223,17 @@ const BUTTON_LABEL_FALLBACK = "Windowed fullscreen (extension)";
 const PANEL_BUTTON_LABEL = "Comments and video info";
 
 /**
+ * Accessible name for the close button on the docked panel itself. Names the
+ * action and the thing, because the panel toggle in the player bar already
+ * carries the panel's name and a bare "Close" beside it would be ambiguous to
+ * anyone reading the two out of context.
+ */
+const PANEL_CLOSE_LABEL = "Close comments";
+
+/** Class on the panel's close button. Styled by the adapter's stylesheet. */
+const PANEL_CLOSE_CLASS = "wfs-panel-close";
+
+/**
  * The controls we inject, in on-screen order starting immediately to the right
  * of the site's own fullscreen button. The value doubles as the marker
  * attribute's value, which is how a re-render is de-duplicated per control.
@@ -2739,6 +3369,52 @@ function buildPanelIcon(doc: Document): Element {
     fill: "#ffffff",
   });
   return svg;
+}
+
+/**
+ * A plain X for the panel's close button.
+ *
+ * Stroked with `currentColor` rather than the flat white the player-bar icons
+ * use: those sit on video, this sits on the panel, which is white on the light
+ * theme. The stylesheet sets the colour from the theme.
+ */
+function buildCloseIcon(doc: Document): Element {
+  const svg = createIconSvg(doc);
+  appendShape(doc, svg, "path", {
+    d: "M11 11l14 14M25 11L11 25",
+    fill: "none",
+    stroke: "currentColor",
+    "stroke-width": "2",
+    "stroke-linecap": "round",
+  });
+  return svg;
+}
+
+/**
+ * Build the panel's close button. Hangs off `<body>` rather than being injected
+ * into the panel, because the panel is the site's own element and its renderer
+ * rebuilds that subtree — see the stylesheet's note on `.wfs-panel-close`.
+ *
+ * Created once per session and left in place; the stylesheet decides whether it
+ * shows, from the same class that docks the panel.
+ */
+function buildPanelCloseButton(doc: Document, onActivate: () => void): HTMLElement {
+  const button = doc.createElement("button");
+  button.type = "button";
+  button.className = PANEL_CLOSE_CLASS;
+  button.setAttribute("aria-label", PANEL_CLOSE_LABEL);
+  button.title = PANEL_CLOSE_LABEL;
+  button.appendChild(buildCloseIcon(doc));
+  button.addEventListener("click", (event) => {
+    // The button is outside the site's tree, so nothing of the site's is
+    // listening — but the page has document-level handlers, and a click that
+    // reaches them from a control the site does not know about is a good way to
+    // trip something unrelated.
+    event.preventDefault();
+    event.stopPropagation();
+    onActivate();
+  });
+  return button;
 }
 
 /**
@@ -3965,6 +4641,17 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
     reapplyMode();
   });
 
+  /**
+   * The close button on the docked panel. Mounted once for the session and shown
+   * or hidden entirely by the stylesheet, so there is no state here to keep in
+   * step with the panel's — pressing it just asks for the panel to close, and
+   * `setPanelOpen` refusing (mode already off) changes nothing.
+   */
+  const panelCloseButton = buildPanelCloseButton(doc, () => {
+    controller.setPanelOpen(false);
+  });
+  doc.body.appendChild(panelCloseButton);
+
   const injector = new ButtonInjector({
     adapter,
     document: doc,
@@ -4019,6 +4706,21 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
     maybeAutoApply();
   });
 
+  /**
+   * A dock of the site's own opening or closing beside the player — live chat on
+   * YouTube. The mode answers those in CSS with no JS at all, which is the whole
+   * appeal and also why the site is never told to re-measure: see
+   * `onSiteDockChange` (§1) for the stale scrubber that left behind.
+   *
+   * Nothing is decided here. The adapter says the player's width moved, the
+   * controller runs the same re-measure it runs for its own panel, and it ignores
+   * the call when the mode is off — so this stays one line and neither side learns
+   * anything about the other.
+   */
+  const disposeSiteDockChange = adapter.onSiteDockChange?.(doc, () => {
+    controller.refreshGeometry();
+  });
+
   void getSitePrefs(adapter.siteId).then(({ prefs: stored }) => {
     prefs = stored;
     autoApplyEnabled = stored.autoApply;
@@ -4042,6 +4744,7 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
     stop() {
       disposePrefWatch();
       disposeVideoChange();
+      disposeSiteDockChange?.();
       doc.removeEventListener("fullscreenchange", onFullscreenChange);
       doc.removeEventListener("click", onPointerCapture, true);
       doc.removeEventListener("dblclick", onPointerCapture, true);
@@ -4054,6 +4757,7 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
       // fullscreenchange could read.
       exitIntent = null;
       injector.stop();
+      panelCloseButton.remove();
       if (controller.isActive) {
         // Navigating away ends the visit as surely as pressing the button does,
         // so it is counted the same way (R9.1) — by the controller's mode-end
@@ -4605,13 +5309,13 @@ export const HELP_COPY = {
      * link the answer has earned is the thing that gets an extension removed from
      * the store.
      */
-    prompt: "Enjoying it? Rate it, or tell me what is not working.",
+    prompt: "Enjoying it? Rate it, or share a suggestion.",
     /** Opens the store's review page. Same destination as the star row. */
     promptRate: "Rate it",
     /** Opens the support page. Offered to everyone, never as a consolation. */
-    promptFeedback: "Something is wrong",
+    promptFeedback: "Any suggestions?",
     /** Closes the prompt. It is already resolved by the time this is pressed. */
-    promptDismiss: "No thanks",
+    promptDismiss: "Cancel",
     /** The support page, always visible — never gated behind a low score. */
     feedbackLink: "Feedback",
     privacyLink: "Privacy",
@@ -5218,8 +5922,8 @@ function renderRatingFooter(
  *
  * One question and both answers, together:
  *
- *     Enjoying it? Rate it, or tell me what is not working.
- *     [ Rate it ]  [ Something is wrong ]  [ No thanks ]
+ *     Enjoying it? Rate it, or share a suggestion.
+ *     [ Rate it ]  [ Any suggestions? ]  [ Cancel ]
  *
  * Both destinations are visible to every reader on the one showing. **This must
  * not become a two-step that asks first and then decides which link the answer
@@ -5370,11 +6074,11 @@ export function renderRatingPrompt(
   // Rate it. The same destination the star row opens, and the same destination
   // the other link's reader could take if they wanted to.
   addLink(REVIEW_URL, HELP_COPY.rating.promptRate, "data-wfs-prompt-rate");
-  // Something is wrong. Not a consolation prize for a low opinion — it is offered
+  // Any suggestions? Not a consolation prize for a low opinion — it is offered
   // on equal footing, to everyone, on the same showing.
   addLink(SUPPORT_URL, HELP_COPY.rating.promptFeedback, "data-wfs-prompt-feedback");
 
-  // No thanks. The third real answer, not a way of postponing: it records like the
+  // Cancel. The third real answer, not a way of postponing: it records like the
   // other two and clears the row from the surface in front of the reader. The
   // removal is unconditional — a rejected write is not the reader's problem, and
   // leaving the row up after they declined it would be the worse failure.

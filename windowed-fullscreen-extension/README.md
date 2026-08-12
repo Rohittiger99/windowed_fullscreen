@@ -7,7 +7,7 @@ A Manifest V3 Chromium extension that adds a **windowed-fullscreen** mode next t
 - A dedicated button beside YouTube's native fullscreen control.
 - Toggle from the button, the toolbar popup, or `Alt+Shift+F` (rebindable at `chrome://extensions/shortcuts`).
 - A **comment button** next to it docks everything from below the video — channel, subscribe, likes, description, comments — into a column beside the player, in either mode. Beside, never on top: the panel takes width from the video instead of covering it.
-- The masthead is not removed, only slid away: move the cursor to the top edge and the search bar, hamburger menu, and notifications slide back in.
+- The masthead is not removed, only slid away: move the cursor to the top edge and the search bar, hamburger menu, and notifications slide back in. When a dock is open the revealed bar ends where the dock begins, so it never covers the dock's close button or overflow menu.
 - Controls whose result lives outside the player hand the page back rather than doing nothing. Clicking the chapter title in the control bar leaves the mode and opens YouTube's Chapters panel on the ordinary page, because that panel renders in a column the mode hides.
 - `Escape` dismisses one layer at a time — browser fullscreen first if it is up, then the side panel, then the mode, restoring the page to its exact previous state.
 - Never fights YouTube's own fullscreen: entering it stands the mode down completely, and leaving it puts back whatever was on screen before. Go in from windowed mode with the comments docked and that is what you come back to, however you leave — YouTube's button, a double-click, `f`, `Escape`. Go in from the plain player and the plain player is what you get back.
@@ -25,14 +25,16 @@ Both are the same feature — a CSS-expanded player, no Fullscreen API — diffe
 | Player | Fixed to the viewport | Viewport-sized block at the top of the page |
 | Page scrolling | Locked | Normal |
 | Below the player | Nothing reachable | Title, description, comments |
-| Related videos rail | Hidden | Hidden (the player owns the full width) |
+| Related videos rail | Hidden | Shown beside comments (two-column layout) |
 | Comment button | Docks the panel beside the video | Docks the panel beside the video |
 
 ### The side panel
 
 The comment button is session state, not a preference: entering the mode always starts with the video alone, and exiting closes the panel. Pressing it from a watch page that is not in the mode yet enters the mode and docks the panel in one press.
 
-The panel is YouTube's own `#below` element, positioned rather than moved, so Polymer keeps owning it — the like button, subscribe, comment sorting, and lazy-loaded comment continuations all keep working, and closing the panel undoes a single class. Live-stream chat is not included: `#chat` lives in a different container, and hosting both would mean re-parenting site DOM.
+The panel is YouTube's own `#below` element, positioned rather than moved, so Polymer keeps owning it — the like button, subscribe, comment sorting, and lazy-loaded comment continuations all keep working, and closing the panel undoes a single class.
+
+On a livestream, **chat docks beside the player** the same way — taking width from the video, never covering it. It follows YouTube's own chat toggle: open the panel and it docks, collapse it and the dock unwinds. The comment panel can stay docked alongside it, with chat on the outside. A close button on the docked comment panel matches the one the site puts on its own chat panel.
 
 Two edges of the layout are worth knowing, because both were bugs first:
 

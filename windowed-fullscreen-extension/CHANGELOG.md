@@ -4,6 +4,43 @@ Notable changes per released version. `manifest.json` owns the version number an
 is bumped immediately before packaging, so the top section here is unreleased work
 until that bump happens.
 
+## Unreleased
+
+### Added
+
+- **The suggestions rail is back in scrollable mode.** Scrolling past the player
+  used to give one wide column of comments and nothing else. It now lays out the
+  way the ordinary watch page does — comments left, the chip bar and related
+  videos right — while the player above still fills the window. The rail is plain
+  flow content, so the page's single scrollbar moves both columns together.
+- **Live chat docks beside the player on a livestream**, taking width from the
+  video rather than covering it, the same as the comment panel. It follows
+  YouTube's own chat toggle: open the panel and it docks, collapse it and the dock
+  unwinds. The comment panel can stay docked alongside it, chat on the outside.
+- The masthead now ends where a dock begins, so the revealed bar no longer covers
+  chat's close button and overflow menu — which made a docked chat impossible to
+  close — while keeping the bar's own account and notification buttons reachable.
+
+### Fixed
+
+- **Closing live chat now gives the whole bar back to the player.** The video
+  widened but YouTube kept the scrubber at its chat-width size, so the progress bar
+  stopped short of the controls beside it. It only looked right after toggling the
+  comment panel, which happened to make YouTube re-measure. Chat's own toggle now
+  asks for that re-measure directly.
+
+- **A close button on the docked comment panel**, matching the one the site puts
+  on its own chat panel. Closing the panel previously meant knowing that the
+  player-bar comment button toggles, or that `Escape` gives back one layer — both
+  true, neither visible.
+
+### Changed
+
+- The rating prompt reads "Enjoying it? Rate it, or share a suggestion." The
+  feedback control is now **"Any suggestions?"** rather than "Something is wrong",
+  which presumed a fault, and the dismiss control is **"Cancel"**.
+- "Rate it" is now the prompt's primary control, in blue.
+
 ## 1.3.0
 
 ### Changed

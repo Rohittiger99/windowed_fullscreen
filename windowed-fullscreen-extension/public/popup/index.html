@@ -624,6 +624,19 @@
         text-decoration: none;
       }
 
+      /* The primary CTA in the rating prompt stands out in blue so the reader's
+         eye lands there first. */
+      #settings .wfs-prompt__action[data-wfs-prompt-rate] {
+        color: #fff;
+        background: #3b82f6;
+        border-color: #3b82f6;
+      }
+
+      #settings .wfs-prompt__action[data-wfs-prompt-rate]:hover {
+        background: #2563eb;
+        border-color: #2563eb;
+      }
+
       /* Ordered pin steps: the marker sits inside the column, not outside it. */
       .wfs-prompt ol,
       .wfs-help ul {

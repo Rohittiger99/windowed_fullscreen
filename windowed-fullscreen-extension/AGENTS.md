@@ -16,6 +16,9 @@ clock, and taskbar stay visible.
 A second control docks everything below the video (channel, subscribe, likes,
 description, comments) into a column beside the player.
 
+On a livestream, chat docks into that same column off the site's own state — no
+control of ours, no JS. See "Live chat docks off the site's state" below.
+
 ## Where everything is
 
 ```
@@ -281,6 +284,69 @@ snapshot; if you add a field, decide which kind it is and say so in the comment.
 `#page-manager`. `display: none` on an ancestor takes the video with it — a
 `position: fixed` descendant is not spared. That produced a black screen. Only
 elements outside the player subtree may go in `chromeAlways` / `chromeCoverOnly`.
+
+**Live chat docks off the site's state, not ours.** `#chat` carries a `collapsed`
+attribute while the reader has the panel shut, so `:has(#chat:not([collapsed]))`
+is exactly "the site is showing chat". The whole feature is that one selector:
+pressing YouTube's own chat toggle is all it takes, collapsing it unwinds the dock,
+and on a video with no chat nothing matches and the section costs nothing. There is
+no class of ours, no state, and nothing for `exit()` to restore — every rule is
+nested under `.wfs-windowed`.
+
+Two parts of it are load-bearing. **`#secondary` has to be revealed**, because
+`#chat` lives inside it and `display: none` on an ancestor takes a `position: fixed`
+descendant with it — the black-screen trap above, in miniature. It is revealed as a
+bare host with every rail role stripped and `#related` hidden, so it collapses to
+nothing and only the fixed chat paints. That `!important` also has to outrank the
+inline `display: none` the controller writes onto `#secondary` as a chrome element;
+a stylesheet `!important` beats an inline declaration without one, which is why the
+JS and the CSS do not fight.
+
+**A CSS-only dock still has to tell the core it moved.** Being free of JS is the
+appeal of the section above and it is also what broke the control bar: YouTube sizes
+its scrubber in JS pixels from the width it last measured and only recomputes on a
+resize, so closing chat widened the player from CSS alone and left a chat-width
+scrubber sitting in a full-width bar. Toggling our own comment panel appeared to fix
+it, because `setPanelOpen` already nudges — which is how the bug was found. The
+adapter's `onSiteDockChange` (§3) watches the `collapsed` attribute and calls
+`controller.refreshGeometry()` (§7), the same re-measure the comment panel earns, so
+one width change gets one answer whichever side caused it. Two traps in that
+watcher: `collapsed` is **not unique to chat** — the description and comment
+expanders carry it too, so the mutation only counts after re-reading chat's actual
+state — and the state it caches is a **pair** (which frame, and whether it is
+showing) rather than a boolean, because a chat *mounting* is not an attribute
+mutation. Cache a bare `false` for "no chat here" and the reader's first collapse
+reads `false` again, reports nothing, and the bug is back.
+
+And **chat and the comment panel coexist, chat on the outside.** The first version
+stood chat down whenever the panel was docked, reasoning that two docks on one
+strip leave neither usable. It failed in the one case that matters: the site's
+"Open panel" chat button is reachable from inside the docked panel, so pressing it
+expanded a chat that had nowhere to render and never appeared — the reader pressed
+a button and nothing happened. Both dock now, the video giving up
+`--wfs-docked-width`, which is the one property every narrowing rule reads so the
+two cannot disagree about where the video's right edge is. Chat keeps the outer
+edge because it owns its own close button.
+
+**The panel's close button hangs off `<body>`, not off the panel.** `#below` is the
+site's own subtree and its renderer rebuilds it — on a video change and on every
+lazy comment load — so anything of ours inside it is discarded at a moment we do
+not control. The button is positioned onto the panel's corner instead, which keeps
+the panel the site's element and the button ours. It is mounted once per session
+and shown by the stylesheet from the same class that docks the panel, so there is
+no second piece of state to keep in step. Both the panel and the button read
+`--wfs-panel-right` for their distance from the window edge, which is what stops
+the button drifting off the corner when chat docks outboard of the panel.
+
+**The masthead ends where the dock starts.** Chat's close button and overflow menu
+sit in the strip the masthead reveals into, so the revealed bar landed on top of
+them and chat could not be closed. Raising the panel above the bar is the obvious
+fix and the wrong one: `--wfs-z-chrome` outranks `--wfs-z-panel` deliberately, and
+inverting it buries the masthead's own account, notifications and Create buttons,
+which live at the right-hand end of the bar — exactly where the dock is. That
+trades one unreachable control set for another. Insetting
+`#masthead-container`'s `right` by `--wfs-docked-width` removes the overlap
+instead, so there is no z-index contest and both control sets stay reachable.
 
 **`z-index: 2147483647` is a ceiling, not a rank.** z-index is a 32-bit signed
 integer, so a rule asking for 2147483648 is clamped back onto the maximum. The
