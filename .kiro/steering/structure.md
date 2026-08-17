@@ -29,13 +29,13 @@ windowed-fullscreen-extension/
 All code is in `src/windowed-fullscreen.ts`, split into numbered sections. **Navigate by section marker (`§3`, `§7`), not by line number.** The section index is in the file header.
 
 ```
-§1  Types                    §7  Controller (generic core)
-§2  Diagnostics              §8  Button injector
-§3  Site adapters (YouTube)  §9  Content script
-§4  Adapter registry         §10 Service worker
-§5  Preferences              §11 Settings UI (options + popup)
-§6  Active-mode stylesheet   §12 Popup
-                             §13 Welcome page (post-install)
+§1  Types                    §8  Button injector
+§2  Diagnostics              §9  Content script
+§3  Site adapters (YouTube)  §10 Service worker
+§4  Adapter registry         §11 Settings UI (options + popup)
+§5  Preferences              §12 Popup
+§6  Active-mode stylesheet   §13 Welcome page (post-install)
+§7  Controller (generic core) §14 Entitlement (Pro tier)
 ```
 
 ## Architectural rules
@@ -52,6 +52,8 @@ All code is in `src/windowed-fullscreen.ts`, split into numbered sections. **Nav
 
 | Change | Where |
 | --- | --- |
+| Gate a new feature behind Pro | Ask `isPro(pro)` (§14) at the one place that decides. Never store a second copy of the answer |
+| Change what a licence check does | `activateLicence` / `validateLicenceKey` / `deactivateLicence` (§14). There is no server; read invariant 8 in `AGENTS.md` first |
 | Support another video site | New `SiteAdapter` in §3, register in `ADAPTERS` (§4). Nothing else. |
 | A site control that is inert in the mode because what it opens renders outside the player | Add its selector to `YT.pageDependentControls` (§3). `onPointerCapture` (§9) already stands the mode down for anything on that list. The selector must resolve inside the player subtree. |
 | Add a player-bar control | `ButtonSpec` in `startSession` (§9) + a role in `BUTTON_ROLES` (§8) |

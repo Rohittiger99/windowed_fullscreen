@@ -415,6 +415,76 @@ async function main() {
     `closed drawer z ${docked.closedDrawerZ} vs player ${docked.layers.player}`,
   );
 
+  // --- a resized dock keeps every edge agreeing ------------------------------
+  //
+  // Resizing is what this script exists to guard: it moves the one number every
+  // narrowing rule reads, so a mistake there desynchronises the panel, the player
+  // and the control bar all at once — the class of bug that produced the
+  // box-sizing and 100vw traps in AGENTS.md.
+  //
+  // The width is written by hand rather than by dragging a grip. The grips are
+  // only mounted for an entitled reader, and this script injects the content
+  // script into a plain page where `chrome.storage` does not exist, so there is no
+  // entitlement to be had and a drag-driven check would fail for a reason that has
+  // nothing to do with layout. What is checked instead is the thing that can
+  // actually break: the same stylesheet the adapter emits, applied at a width
+  // nothing else in the sheet would produce, and every edge measured against it.
+  const RESIZED_PANEL_PX = 520;
+  await evaluate(
+    // Existing elements are cleared first, and the cleanup below clears by the same
+    // query. The session has already created one of these — empty, because there is
+    // no `chrome.storage` here for a stored width to come from — and appending a
+    // second with the same id would make `getElementById` return the empty one, so
+    // the cleanup would remove the wrong element and leave the override in force.
+    `(() => {
+      for (const stale of document.querySelectorAll('style#wfs-dock-widths')) stale.remove();
+      const style = document.createElement('style');
+      style.id = 'wfs-dock-widths';
+      style.textContent = 'html.wfs-windowed.wfs-side-panel { --wfs-panel-width: ${RESIZED_PANEL_PX}px; }';
+      (document.head || document.documentElement).appendChild(style);
+      return 'ok';
+    })()`,
+  );
+  await sleep(1500);
+  const resized = await measure();
+  check(
+    "a written dock width is the width the panel takes",
+    Math.abs(resized.panel.width - RESIZED_PANEL_PX) <= 1,
+    `panel ${resized.panel.width} vs requested ${RESIZED_PANEL_PX}`,
+  );
+  check(
+    "the player still ends exactly where the resized panel starts",
+    Math.abs(resized.player.right - resized.panel.left) <= 1,
+    `player right ${resized.player.right} vs panel left ${resized.panel.left}`,
+  );
+  check(
+    "the control bar still clears the resized panel",
+    resized.rightControls.right <= resized.panel.left,
+    `controls end ${resized.rightControls.right} vs panel left ${resized.panel.left}`,
+  );
+  check(
+    "the control bar keeps its large size at the new width",
+    resized.bigMode && resized.controlBar.height === windowed.controlBar.height,
+    `bigMode=${resized.bigMode}, bar ${resized.controlBar.height}`,
+  );
+  checkChapterRow("the chapter segments stay on one row at the new width", resized);
+
+  // Removing the sheet has to give the responsive default back, or a reader who
+  // drags a dock has no way to return to the width that follows the window.
+  await evaluate(
+    `(() => {
+      for (const el of document.querySelectorAll('style#wfs-dock-widths')) el.remove();
+      return 'ok';
+    })()`,
+  );
+  await sleep(1500);
+  const unresized = await measure();
+  check(
+    "removing the width restores the stylesheet's own responsive one",
+    Math.abs(unresized.panel.width - docked.panel.width) <= 1,
+    `panel ${unresized.panel.width} vs original ${docked.panel.width}`,
+  );
+
   // --- the site's own popups open over the mode ------------------------------
   // Everything YouTube opens over its page — notification and account menus, a
   // comment's overflow menu, dialogs, toasts — is appended to a host hanging off

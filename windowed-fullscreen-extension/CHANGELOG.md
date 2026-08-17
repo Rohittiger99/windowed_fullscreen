@@ -4,10 +4,70 @@ Notable changes per released version. `manifest.json` owns the version number an
 is bumped immediately before packaging, so the top section here is unreleased work
 until that bump happens.
 
-## Unreleased
+## 1.4.0
+
+### Added — Pro
+
+A paid tier, $5 once. No subscription, no account, no login: a licence key is the
+only credential, entered on the options page's **Pro** tab. It covers a limited
+number of devices, and **Remove key** hands that device's slot back so the key can
+be used elsewhere.
+
+**Nothing that was free has moved.** The comment panel, both modes, the live-chat
+dock, the suggestions rail, and per-site auto-apply have all been free since
+1.2.0, and stay free. All three Pro features below are new work.
+
+- **Drag either docked column as wide as you like.** A grip appears on the dock's
+  inboard edge; drag it, or focus it and use the arrow keys — `Shift` for a bigger
+  step. The width is remembered per site. Comments and live chat both resize, and
+  either one can take almost the whole window — down to a sliver of video, if that
+  is how you want to read chat. The same grip drags it back. Widening is all the
+  drag does: it stops at the default width on the way in, so it cannot make a dock
+  narrower than it is without a licence. With both columns docked they share one
+  budget, so the two together always leave the grips reachable.
+- **Save the current frame as an image**, from a new button to the left of the
+  windowed one, at the video's own resolution. A per-site setting copies it to the
+  clipboard instead of downloading it. Protected videos cannot be captured — the
+  browser hands back a blank frame — and the extension says so rather than saving
+  a black rectangle.
+- **Switch the mode on automatically for chosen channels**, rather than for the
+  whole site. Open the popup on a video and the channel is filled in for you. The
+  rules are matched on the channel's handle, so a rename does not quietly break
+  one, and are capped at 50 per site.
+
+The capture button is shown whether or not you have a licence: pressing it without
+one opens a prompt that names the price rather than doing nothing. The drag grips
+and the rules list are simply absent without one.
+
+**The options page is two tabs now: Settings and Pro.** Your preferences are the
+first tab and Pro is the second, so changing a setting no longer means scrolling
+past a price. The Pro tab says what the three features are and what they cost, and
+entering a key — a once-per-device job — is folded into a row underneath called
+**Already bought Pro?**, which opens on its own if a check is running or a key was
+refused. The popup carries one line about Pro and a button that opens that tab; it
+holds neither the feature list nor the key field, because a 36-character key is not
+something to paste into a 320px window over the video you are watching.
+
+**Buy** goes straight to the payment provider's checkout. An earlier revision sent
+it to a page on the product site that handed off to the provider, which kept the
+freedom to change provider without an extension release; that freedom was traded for
+one fewer step in front of a $5 purchase. It is one string, so the hop can come back
+if there is ever a page worth it.
+
+**A refused key now says which kind of refusal it was.** Three, where there had been
+one sentence covering all of them: check what you pasted, this key is on the maximum
+number of devices, or this key is no longer active. The single message was a real
+cost, not a cosmetic one — a key refused for the activation limit read as a key typed
+wrongly, so the natural response was to paste it again, and every attempt consumed
+another activation. The split reads the provider's documented error code, never its
+message: a code is part of the API contract, prose is not, and an unrecognised code
+falls back to the general refusal. Entitlement is still decided by the status alone,
+before any of this is looked at.
 
 ### Added
 
+- A keyboard shortcut for the comment button, `Alt+Shift+D`, and an unbound one
+  for saving a frame. Both rebindable at `chrome://extensions/shortcuts`.
 - **The suggestions rail is back in scrollable mode.** Scrolling past the player
   used to give one wide column of comments and nothing else. It now lays out the
   way the ordinary watch page does — comments left, the chip bar and related
@@ -23,6 +83,17 @@ until that bump happens.
 
 ### Fixed
 
+- **Per-channel auto-apply now actually fires.** A rule was checked at four
+  moments — preferences loading, the licence record arriving, the player-bar button
+  appearing, and the video changing — and all four happen before YouTube has put
+  the channel name on the page. The channel read as unknown, so no rule matched,
+  and nothing looked a second time. It now waits up to eight seconds for the page
+  to name its channel, and gives up in the console rather than watching forever.
+
+- **The padlock beside a Pro setting now disappears once Pro is active.** The
+  checkbox unlocked and became usable, but the padlock next to it stayed, so a
+  setting you had paid for still looked locked.
+
 - **Closing live chat now gives the whole bar back to the player.** The video
   widened but YouTube kept the scrubber at its chat-width size, so the progress bar
   stopped short of the controls beside it. It only looked right after toggling the
@@ -36,6 +107,16 @@ until that bump happens.
 
 ### Changed
 
+- **The privacy position has one exception now, and it is worth stating outright.**
+  Up to 1.3.0 the extension made no network requests at all. It still makes none
+  unless you have entered a licence key — in which case that key, and an id for
+  this device's activation, is sent to the payment provider that issued it: when
+  you enter the key, roughly once every 14 days after, and once more if you remove
+  it. Nothing else. No account, no identifier of ours, no page you were on, no
+  video, no history, and no fingerprint of your machine. There is no server on our
+  side at all, so there is nowhere for anything to be kept. If the check cannot
+  complete, nothing changes and you keep every feature. Saving a frame is entirely
+  local.
 - The rating prompt reads "Enjoying it? Rate it, or share a suggestion." The
   feedback control is now **"Any suggestions?"** rather than "Something is wrong",
   which presumed a fault, and the dismiss control is **"Cancel"**.

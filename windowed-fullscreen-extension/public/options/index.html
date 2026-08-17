@@ -526,6 +526,698 @@
         outline-offset: 2px;
       }
 
+      /*
+       * Pro: the licence field, and the per-channel rules.
+       *
+       * This block exists TWICE — here and in `popup/index.html` — because §11
+       * renders one tree into two hand-written stylesheets and nothing checks that
+       * they agree. The unit tests see structure, not layout. If you change
+       * anything here, change it there: the two files use different id prefixes
+       * (`#app` here, `#settings` there), so the selectors are not copy-pasteable
+       * and the temptation to fix only one is real. That is how the rating prompt
+       * once shipped with its primary control half-hidden behind its sibling.
+       *
+       * The `#app` prefix is load-bearing on every rule that touches a link, a
+       * label, or a paragraph, for the reason recorded against
+       * `.wfs-prompt__action`: `#app a`, `#app label` and `#app p` carry an id, so
+       * a class-only or attribute-only selector loses to them wherever it sits in
+       * the file.
+       */
+
+      /*
+       * The tab strip, and the two panels it switches.
+       *
+       * The strip sits directly under the page heading and above everything else,
+       * so the reader chooses between "my settings" and "Pro" before reading either.
+       * It is styled as an underlined row rather than as two buttons, because two
+       * accent-filled buttons side by side read as two actions to take rather than
+       * as one choice already made.
+       */
+      #app [data-wfs-tabs] {
+        display: flex;
+        gap: 4px;
+        margin: 16px 0 0;
+        border-bottom: 1px solid var(--wfs-border);
+      }
+
+      #app [data-wfs-tab] {
+        min-height: 32px;
+        padding: 6px 12px;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--wfs-muted);
+        background: none;
+        border: 0;
+        /* The selected tab's underline sits on top of the strip's own border, so
+           the two lines are the same 1 px rule rather than a 2 px stack. */
+        border-bottom: 2px solid transparent;
+        margin-bottom: -1px;
+        cursor: pointer;
+        transition: color 140ms ease, border-color 140ms ease;
+      }
+
+      #app [data-wfs-tab]:hover {
+        color: var(--wfs-text);
+      }
+
+      #app [data-wfs-tab][aria-selected="true"] {
+        color: var(--wfs-accent);
+        border-bottom-color: var(--wfs-accent);
+      }
+
+      #app [data-wfs-tab]:focus-visible {
+        outline: none;
+        box-shadow: var(--wfs-ring);
+        border-radius: 6px 6px 0 0;
+      }
+
+      /* Stated rather than left to the browser's default: `#app section` and the
+         panel rules below both set `display`, and a `display` that wins over the
+         `hidden` attribute is how a hidden panel shows through. */
+      #app [data-wfs-panel][hidden] {
+        display: none;
+      }
+
+      /* A panel opens straight into its first region, so that region drops the
+         divider it would otherwise draw immediately under the tab strip. */
+      #app [data-wfs-panel] > section:first-child,
+      #app [data-wfs-panel] > *:first-child > section:first-child {
+        margin-top: 20px;
+        padding-top: 0;
+        border-top: 0;
+      }
+
+      /* A tabpanel is focusable so a keyboard reader lands inside the panel they
+         just chose; it must not draw a focus ring for a pointer user's click. */
+      #app [data-wfs-panel]:focus {
+        outline: none;
+      }
+
+      #app [data-wfs-panel]:focus-visible {
+        outline: none;
+        box-shadow: var(--wfs-ring);
+        border-radius: 10px;
+      }
+
+      /* The status line reads as a statement of fact rather than as a heading. */
+      #app [data-wfs-pro-status] {
+        margin: 0 0 10px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--wfs-text);
+      }
+
+      #app [data-wfs-pro-body] {
+        margin: 0 0 12px;
+      }
+
+      /* The price, alone on its line and the largest thing in the panel. A paywall
+         that makes the reader hunt for the number is the thing everybody hates
+         about paywalls. */
+      #app [data-wfs-pro-price] {
+        margin: 0 0 4px;
+        font-size: 26px;
+        font-weight: 700;
+        letter-spacing: -0.01em;
+        color: var(--wfs-text);
+      }
+
+      /* --- What is being sold ----------------------------------------------- */
+      #app [data-wfs-pro-features] {
+        margin: 0 0 16px;
+        padding: 0;
+        list-style: none;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      /* Name over detail, not name-colon-detail on one line: three rows of running
+         prose is a paragraph pretending to be a list, and the reader is scanning
+         for whether one of the three is worth $5. */
+      #app [data-wfs-pro-feature] {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        padding: 10px 12px;
+        background: var(--wfs-elevated);
+        border: 1px solid var(--wfs-border);
+        border-radius: 10px;
+      }
+
+      #app [data-wfs-pro-feature-name] {
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--wfs-text);
+      }
+
+      #app [data-wfs-pro-feature-detail] {
+        font-size: 13px;
+        color: var(--wfs-muted);
+      }
+
+      #app [data-wfs-pro-have] {
+        margin: 16px 0 10px;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--wfs-muted);
+      }
+
+      /* --- The two collapsed jobs: enter a key, and give it back ------------- */
+      /* Same disclosure treatment as Tips, by attribute rather than by class: both
+         of these are one quiet row at rest and neither should read as a section
+         heading competing with the pitch above it. */
+      #app [data-wfs-pro-activate-details],
+      #app [data-wfs-pro-remove-details] {
+        margin-top: 8px;
+        padding-top: 16px;
+        border-top: 1px solid var(--wfs-border);
+      }
+
+      #app [data-wfs-pro-activate-details] > summary,
+      #app [data-wfs-pro-remove-details] > summary {
+        cursor: pointer;
+        list-style: none;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--wfs-muted);
+        padding: 2px 6px;
+        margin: -2px -6px 0;
+        border-radius: 6px;
+        transition: background 140ms ease, color 140ms ease;
+      }
+
+      #app [data-wfs-pro-activate-details] > summary:hover,
+      #app [data-wfs-pro-remove-details] > summary:hover {
+        background: var(--wfs-accent-dim);
+        color: var(--wfs-accent);
+      }
+
+      #app [data-wfs-pro-activate-details] > summary:focus-visible,
+      #app [data-wfs-pro-remove-details] > summary:focus-visible {
+        outline: none;
+        box-shadow: var(--wfs-ring);
+      }
+
+      #app [data-wfs-pro-activate-details] > summary::before,
+      #app [data-wfs-pro-remove-details] > summary::before {
+        content: "▸";
+        display: inline-block;
+        width: 1em;
+        margin-right: 2px;
+        transition: transform 140ms ease;
+      }
+
+      #app [data-wfs-pro-activate-details][open] > summary::before,
+      #app [data-wfs-pro-remove-details][open] > summary::before {
+        transform: rotate(90deg);
+      }
+
+      #app [data-wfs-pro-activate-details] > summary::-webkit-details-marker,
+      #app [data-wfs-pro-remove-details] > summary::-webkit-details-marker {
+        display: none;
+      }
+
+      /* Inside the disclosure the status line is an answer to the button below it,
+         not the panel's headline, so it loses the headline's weight. */
+      #app [data-wfs-pro-activate-details] [data-wfs-pro-status] {
+        margin: 10px 0 0;
+        font-weight: 500;
+      }
+
+      #app [data-wfs-pro-once] {
+        margin: 6px 0 12px;
+        font-size: 12px;
+      }
+
+      /* The buy link is the loudest thing in the section, and the only place on
+         either surface that carries a price. Overrides `#app a`'s negative insets,
+         which are meant for prose links and would pull this under its neighbour. */
+      #app [data-wfs-pro-buy] {
+        display: inline-flex;
+        align-items: center;
+        min-height: 28px;
+        margin: 0 0 14px;
+        padding: 5px 12px;
+        font-size: 13px;
+        color: #fff;
+        background: #3b82f6;
+        border: 1px solid #3b82f6;
+        border-radius: 6px;
+      }
+
+      #app [data-wfs-pro-buy]:hover {
+        color: #fff;
+        background: #2563eb;
+        border-color: #2563eb;
+      }
+
+      /* A column, not the checkbox row `#app label` sets up: this label captions a
+         text field rather than sitting beside a box. The hover tint is dropped for
+         the same reason — nothing here is clickable except the field itself. */
+      #app [data-wfs-pro-field],
+      #app [data-wfs-channel-field] {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 4px;
+        margin: 0;
+        padding: 0;
+        cursor: default;
+      }
+
+      #app [data-wfs-pro-field]:hover,
+      #app [data-wfs-channel-field]:hover {
+        background: none;
+      }
+
+      #app [data-wfs-pro-field] > span,
+      #app [data-wfs-channel-field] > span {
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--wfs-muted);
+      }
+
+      /* Monospace and tabular, because both fields hold an identifier the reader
+         has to be able to compare against something they were sent. */
+      #app input[type="text"] {
+        width: 100%;
+        min-height: 32px;
+        padding: 6px 10px;
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        font-size: 13px;
+        color: var(--wfs-text);
+        background: var(--wfs-bg);
+        border: 1px solid var(--wfs-border);
+        border-radius: 6px;
+      }
+
+      #app input[type="text"]:focus-visible {
+        outline: none;
+        box-shadow: var(--wfs-ring);
+      }
+
+      #app [data-wfs-pro-activate],
+      #app [data-wfs-pro-remove],
+      #app [data-wfs-channel-add],
+      #app [data-wfs-channel-remove] {
+        min-height: 28px;
+        margin-top: 10px;
+        padding: 5px 12px;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--wfs-accent);
+        background: var(--wfs-accent-dim);
+        border: 1px solid var(--wfs-border);
+        border-radius: 6px;
+        cursor: pointer;
+      }
+
+      #app [data-wfs-pro-activate]:hover,
+      #app [data-wfs-pro-remove]:hover,
+      #app [data-wfs-channel-add]:hover,
+      #app [data-wfs-channel-remove]:hover {
+        background: var(--wfs-accent-dim-hover);
+        color: var(--wfs-accent-hover);
+      }
+
+      #app [data-wfs-pro-activate]:focus-visible,
+      #app [data-wfs-pro-remove]:focus-visible,
+      #app [data-wfs-channel-add]:focus-visible,
+      #app [data-wfs-channel-remove]:focus-visible {
+        outline: none;
+        box-shadow: var(--wfs-ring);
+      }
+
+      /* Quiet, and small: it is a note about what leaves the device, not a warning. */
+      #app [data-wfs-pro-privacy] {
+        font-size: 12px;
+      }
+
+      /* --- Per-channel rules ------------------------------------------------ */
+      #app [data-wfs-channel-section] {
+        margin-top: 20px;
+      }
+
+      #app [data-wfs-channel-section] h3 {
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--wfs-muted);
+      }
+
+      #app [data-wfs-channel-list] {
+        margin: 10px 0 12px;
+        padding: 0;
+        list-style: none;
+      }
+
+      /* Each rule is a row: the identifier, then the way to take it off. The
+         identifier is allowed to wrap and the button is not, so a long handle never
+         pushes Remove off the popup's 320 px. */
+      #app [data-wfs-channel-item] {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        min-width: 0;
+        padding: 6px 0;
+        border-bottom: 1px solid var(--wfs-border);
+      }
+
+      #app [data-wfs-channel-item] > span {
+        min-width: 0;
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        font-size: 13px;
+        overflow-wrap: anywhere;
+      }
+
+      #app [data-wfs-channel-remove] {
+        flex: none;
+        margin-top: 0;
+        padding: 3px 9px;
+        font-size: 12px;
+      }
+
+      /* --- Pro showcase card ------------------------------------------------ */
+      /* The same visual language as the popup's Pro card, scaled to the
+         wider options surface. The gradient stripe, feature grid, and inline
+         activation form share data attributes and intent with the popup
+         version, but the selectors here are `#app`-scoped because of the
+         specificity war documented above. */
+      #app [data-wfs-pro-card] {
+        position: relative;
+        padding: 24px;
+        background: var(--wfs-elevated);
+        border: 1px solid var(--wfs-border);
+        border-radius: 14px;
+        overflow: hidden;
+        box-shadow: var(--wfs-glow);
+      }
+
+      /* Gradient top stripe — the "this is premium" signal. */
+      #app [data-wfs-pro-card]::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 4px;
+        background: linear-gradient(90deg, #6366f1, #8b5cf6, #ec4899);
+        border-radius: 14px 14px 0 0;
+      }
+
+      #app [data-wfs-pro-card].is-active::before {
+        background: linear-gradient(90deg, #10b981, #06b6d4, #3b82f6);
+      }
+
+      /* Header: emoji badge + title + price pill */
+      #app [data-wfs-pro-header] {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 14px;
+      }
+
+      #app [data-wfs-pro-badge] {
+        font-size: 22px;
+        line-height: 1;
+      }
+
+      #app [data-wfs-pro-title] {
+        font-size: 18px;
+        font-weight: 700;
+        color: var(--wfs-text);
+      }
+
+      #app [data-wfs-pro-pill] {
+        margin-left: auto;
+        padding: 3px 10px;
+        font-size: 12px;
+        font-weight: 700;
+        color: #7c3aed;
+        background: rgba(139, 92, 246, 0.1);
+        border-radius: 20px;
+        white-space: nowrap;
+      }
+
+      /* Pitch line */
+      #app [data-wfs-pro-pitch] {
+        margin: 0 0 16px;
+        font-size: 14px;
+        color: var(--wfs-muted);
+        line-height: 1.5;
+      }
+
+      /* Feature grid: three cards, vertical stack */
+      #app [data-wfs-pro-features-grid] {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        margin-bottom: 20px;
+      }
+
+      #app [data-wfs-pro-feature-card] {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 14px 16px;
+        background: var(--wfs-bg);
+        border: 1px solid var(--wfs-border);
+        border-radius: 10px;
+        transition: border-color 140ms ease, box-shadow 140ms ease;
+      }
+
+      #app [data-wfs-pro-feature-card]:hover {
+        border-color: rgba(139, 92, 246, 0.3);
+        box-shadow: 0 2px 8px rgba(139, 92, 246, 0.06);
+      }
+
+      #app [data-wfs-pro-feature-icon] {
+        flex: none;
+        font-size: 20px;
+        line-height: 1.3;
+      }
+
+      #app [data-wfs-pro-feature-card] [data-wfs-pro-feature-name] {
+        display: block;
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--wfs-text);
+        line-height: 1.4;
+      }
+
+      #app [data-wfs-pro-feature-card] [data-wfs-pro-feature-detail] {
+        display: block;
+        font-size: 13px;
+        color: var(--wfs-muted);
+        line-height: 1.4;
+        margin-top: 2px;
+      }
+
+      /* Actions row: Buy CTA */
+      #app [data-wfs-pro-actions] {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-bottom: 16px;
+      }
+
+      /* Primary buy button — vivid gradient */
+      #app [data-wfs-pro-buy-cta] {
+        display: inline-flex;
+        align-items: center;
+        min-height: 36px;
+        margin: 0;
+        padding: 8px 20px;
+        font-size: 14px;
+        font-weight: 700;
+        color: #fff;
+        background: linear-gradient(135deg, #6366f1, #8b5cf6);
+        border: none;
+        border-radius: 8px;
+        text-decoration: none;
+        cursor: pointer;
+        transition: transform 100ms ease, box-shadow 140ms ease;
+      }
+
+      #app [data-wfs-pro-buy-cta]:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 20px rgba(99, 102, 241, 0.3);
+        text-decoration: none;
+        color: #fff;
+        background: linear-gradient(135deg, #4f46e5, #7c3aed);
+      }
+
+      /* What you unlocked heading */
+      #app [data-wfs-pro-have] {
+        margin: 16px 0 10px;
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--wfs-muted);
+      }
+
+      /* Remove details disclosure */
+      #app [data-wfs-pro-remove-details] {
+        margin-top: 16px;
+        padding-top: 16px;
+        border-top: 1px solid var(--wfs-border);
+      }
+
+      #app [data-wfs-pro-remove-details] > summary {
+        cursor: pointer;
+        list-style: none;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--wfs-muted);
+        padding: 2px 6px;
+        margin: -2px -6px 0;
+        border-radius: 6px;
+        transition: background 140ms ease, color 140ms ease;
+      }
+
+      #app [data-wfs-pro-remove-details] > summary:hover {
+        background: var(--wfs-accent-dim);
+        color: var(--wfs-accent);
+      }
+
+      #app [data-wfs-pro-remove-details] > summary:focus-visible {
+        outline: none;
+        box-shadow: var(--wfs-ring);
+      }
+
+      #app [data-wfs-pro-remove-details] > summary::before {
+        content: "\u25B8";
+        display: inline-block;
+        width: 1em;
+        margin-right: 2px;
+        transition: transform 140ms ease;
+      }
+
+      #app [data-wfs-pro-remove-details][open] > summary::before {
+        transform: rotate(90deg);
+      }
+
+      #app [data-wfs-pro-remove-details] > summary::-webkit-details-marker {
+        display: none;
+      }
+
+      #app [data-wfs-pro-remove] {
+        min-height: 28px;
+        margin-top: 10px;
+        padding: 5px 12px;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--wfs-danger);
+        background: var(--wfs-danger-bg);
+        border: 1px solid var(--wfs-border);
+        border-radius: 6px;
+        cursor: pointer;
+      }
+
+      #app [data-wfs-pro-remove]:hover {
+        background: rgba(240, 112, 104, 0.15);
+      }
+
+      /* Inline activation form */
+      #app [data-wfs-pro-form] {
+        margin-top: 20px;
+        padding-top: 20px;
+        border-top: 1px solid var(--wfs-border);
+      }
+
+      #app [data-wfs-pro-form-heading] {
+        font-size: 12px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--wfs-muted);
+        margin: 0 0 10px;
+      }
+
+      #app [data-wfs-pro-inline-status] {
+        margin: 0 0 10px;
+        padding: 8px 12px;
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--wfs-danger);
+        background: var(--wfs-danger-bg);
+        border-radius: 8px;
+      }
+
+      #app [data-wfs-pro-field] {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 4px;
+        margin: 0;
+        padding: 0;
+        cursor: default;
+      }
+
+      #app [data-wfs-pro-field]:hover {
+        background: none;
+      }
+
+      #app [data-wfs-pro-field] > span {
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--wfs-muted);
+      }
+
+      #app [data-wfs-pro-activate] {
+        min-height: 32px;
+        margin-top: 10px;
+        padding: 6px 16px;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        color: #fff;
+        background: var(--wfs-accent);
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background 140ms ease;
+      }
+
+      #app [data-wfs-pro-activate]:hover {
+        background: var(--wfs-accent-hover);
+      }
+
+      #app [data-wfs-pro-privacy] {
+        margin-top: 10px;
+        font-size: 12px;
+        color: var(--wfs-muted);
+      }
+
+      @media (prefers-color-scheme: light) {
+        #app [data-wfs-pro-pill] {
+          color: #6d28d9;
+          background: rgba(109, 40, 217, 0.08);
+        }
+      }
+
+      @media (prefers-color-scheme: light) {
+        #app input[type="text"] {
+          background: var(--wfs-surface);
+        }
+      }
+
       @media (prefers-reduced-motion: reduce) {
         * {
           transition: none !important;

@@ -76,11 +76,22 @@ test("every registered adapter is complete and uniquely identified", () => {
 });
 
 test("the mode a preference selects", () => {
-  assert.equal(modeFor({ autoApply: false, scrollable: false }), "cover");
-  assert.equal(modeFor({ autoApply: false, scrollable: true }), "scrollable");
+  // Spread from the defaults rather than written out: `modeFor` reads one field,
+  // and a literal here would have to be edited every time an unrelated preference
+  // is added, which is how a test starts asserting the shape of a record instead
+  // of the behaviour it was written for.
+  assert.equal(modeFor({ ...DEFAULT_SITE_PREFS, scrollable: false }), "cover");
+  assert.equal(modeFor({ ...DEFAULT_SITE_PREFS, scrollable: true }), "scrollable");
   // Documented default: the safe, least surprising one.
   assert.equal(modeFor(DEFAULT_SITE_PREFS), "cover");
-  assert.deepEqual(DEFAULT_SITE_PREFS, { autoApply: false, scrollable: false });
+  assert.equal(DEFAULT_SITE_PREFS.autoApply, false);
+  assert.equal(DEFAULT_SITE_PREFS.scrollable, false);
+  // The Pro fields default to "nothing chosen", which is what a free install has
+  // and what the free behaviour reads as.
+  assert.equal(DEFAULT_SITE_PREFS.panelWidth, 0);
+  assert.equal(DEFAULT_SITE_PREFS.chatWidth, 0);
+  assert.deepEqual(DEFAULT_SITE_PREFS.channels, []);
+  assert.equal(DEFAULT_SITE_PREFS.captureToClipboard, false);
 });
 
 test("chrome selectors differ per mode, and callers cannot mutate the shared list", () => {

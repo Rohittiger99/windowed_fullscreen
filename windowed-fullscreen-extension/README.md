@@ -5,7 +5,7 @@ A Manifest V3 Chromium extension that adds a **windowed-fullscreen** mode next t
 ## Features
 
 - A dedicated button beside YouTube's native fullscreen control.
-- Toggle from the button, the toolbar popup, or `Alt+Shift+F` (rebindable at `chrome://extensions/shortcuts`).
+- Toggle from the button, the toolbar popup, or `Alt+Shift+F`. `Alt+Shift+D` docks the comments. Both are rebindable at `chrome://extensions/shortcuts`, along with an unbound one for saving a frame.
 - A **comment button** next to it docks everything from below the video — channel, subscribe, likes, description, comments — into a column beside the player, in either mode. Beside, never on top: the panel takes width from the video instead of covering it.
 - The masthead is not removed, only slid away: move the cursor to the top edge and the search bar, hamburger menu, and notifications slide back in. When a dock is open the revealed bar ends where the dock begins, so it never covers the dock's close button or overflow menu.
 - Controls whose result lives outside the player hand the page back rather than doing nothing. Clicking the chapter title in the control bar leaves the mode and opens YouTube's Chapters panel on the ordinary page, because that panel renders in a column the mode hides.
@@ -15,6 +15,34 @@ A Manifest V3 Chromium extension that adds a **windowed-fullscreen** mode next t
 - Optional per-site **scrollable mode**: the video still fills the screen on entry, but the page keeps scrolling, so the description and comments are one scroll away instead of requiring you to leave the mode. Scroll back up and the video fills the screen again.
 - Optional per-site auto-apply: enter the mode automatically when a video loads.
 - Survives YouTube's in-app navigations without a reload.
+
+### Free and Pro
+
+Everything above is free and always has been. The comment panel, both modes, the live-chat dock, the suggestions rail, and per-site auto-apply all shipped in 1.2.0 — the first public release — so **nothing that was free has moved behind the paywall**, and nothing ever will. Every Pro feature is new work added in 1.4.0.
+
+| | Free | Pro — $5 once |
+| --- | --- | --- |
+| Windowed mode, both cover and scrollable | Yes | — |
+| Docking the comment panel | Yes | — |
+| Docking live chat | Yes | — |
+| Suggestions rail in scrollable mode | Yes | — |
+| Masthead reveal, `Escape` layering, fullscreen handoff | Yes | — |
+| Auto-apply for a whole site | Yes | — |
+| Shortcuts for the windowed and comment buttons | Yes | — |
+| **Dragging either dock as wide as you like** | No | Yes |
+| **Auto-apply for chosen channels** | No | Yes |
+| **Saving the current frame as an image** | No | Yes |
+| A shortcut for the capture button | No | Yes, because capture itself is |
+
+One purchase, no renewal, no account, and no login: a licence key is the only credential. Enter it on the options page's **Pro** tab, under **Already bought Pro?** — it is a once-per-device job, so it is folded away rather than sitting open under the price. It covers a limited number of devices — **Remove key** hands that device's slot back so you can use it somewhere else. The key is re-checked roughly once a fortnight, and **the check fails open**: if it cannot complete, nothing changes and you keep every feature.
+
+**Dragging a dock** puts a grip on the dock's inboard edge. Drag it, or focus it and use the arrow keys (`Shift` for a bigger step). Comments and live chat both resize, and either can take almost the whole window — down to a sliver of video, if that is how you want to read chat. The same grip drags it back. Widening is all it does: the drag stops at the default width on the way in, so it never makes a dock narrower than it is without a licence. With both columns docked they share one budget, so the two together always leave both grips reachable.
+
+**Saving a frame** writes a PNG at the video's own resolution, named for the video and the time. There is a per-site setting to copy it to the clipboard instead. Protected videos — rentals and films — cannot be captured: the browser hands back a blank frame, and the extension says so rather than saving a black rectangle.
+
+**Per-channel rules** switch the mode on for chosen channels even with the site-wide setting off. Open the popup on a video and the channel is filled in for you; the rules themselves live under the site's own section on the options page's **Settings** tab, capped at 50 per site. They are matched on the channel's handle, not its display name, so a rename does not quietly break a rule.
+
+The capture button is shown to everyone. Pressing it without a licence opens a prompt that names the price; it does not silently do nothing. The drag grips and the rules list are simply absent without one.
 
 ### The two modes
 
@@ -134,10 +162,24 @@ Do **not** zip the build by hand with Windows tooling. `Compress-Archive` and .N
 
 ## Permissions
 
-- `storage` — two booleans per site (auto-apply and scrollable mode), plus the local-only bookkeeping behind the rating row and the prompts: a star count, how many times each prompt has been shown, a usage counter, and the install timestamp. All written to `chrome.storage.local` only. `chrome.storage.sync` is deliberately unused, so settings never leave the device, and the star count is never transmitted anywhere — selecting a star opens the store's own review page and nothing else.
+- `storage` — the per-site settings (auto-apply, scrollable mode, the two dock widths, the channel rules, and the clipboard option), your licence key if you have one, and the local-only bookkeeping behind the rating row and the prompts: a star count, how many times each prompt has been shown, a usage counter, and the install timestamp. All written to `chrome.storage.local` only. `chrome.storage.sync` is deliberately unused, so settings never leave the device, and the star count is never transmitted anywhere — selecting a star opens the store's own review page and nothing else.
 - `*://*.youtube.com/*` — to inject the buttons, apply the CSS that expands the player and docks the side panel beside it, and read the active tab's URL so the popup can report whether the page is supported.
 
-No other permissions. No runtime dependencies, no network requests, no remote code, no analytics or telemetry.
+No other permissions, no runtime dependencies, no remote code, and no analytics or telemetry.
+
+### The one network request
+
+Since 1.4.0 there is exactly one, and only if you have entered a licence key: the key is sent to **Dodo Payments**, the payment provider that issued it, to confirm it is valid. It happens when you enter the key and roughly once a fortnight afterwards.
+
+What that request carries is the licence key and an id for this device's activation. Nothing else — no account, no identifier of ours, no page you were on, no video, no browsing history, no settings. There is no server on our side at all: the extension talks to the provider directly, so there is nowhere for us to keep anything even if we wanted to.
+
+The activation id is issued by the provider when you enter your key, and exists so one purchase can cover a limited number of devices. It is not a fingerprint: it carries nothing about your machine, and the name this install registers under is a fixed string identical on every install, deliberately.
+
+Saving a frame is entirely local: the image is drawn from the video already playing in your browser and written straight to your downloads or your clipboard. It is never uploaded anywhere.
+
+Without a licence key the extension makes no network requests at all.
+
+**Why there is no server of ours.** Dodo's licence endpoints are public — no API key — and they send CORS headers, which was worth measuring rather than assuming: a preflight from a `chrome-extension://` origin comes back 200 with the origin reflected. So the extension can call them directly and needs no host permission, which means this update carries no new permission warning. An earlier draft of 1.4.0 proxied the check through a small service of ours; once the endpoints turned out to be public it had exactly one benefit left — being able to change payment provider without shipping a release — and that is not worth a service to run. The cost of dropping it is stated plainly: these URLs are baked into every install, so leaving Dodo would mean a release, and installs that never update would keep calling Dodo.
 
 Store listing copy and Developer Dashboard answers: `store-assets/LISTING.md`.
 

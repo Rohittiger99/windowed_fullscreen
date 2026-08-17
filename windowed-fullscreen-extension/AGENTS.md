@@ -35,6 +35,12 @@ release/                     The upload zip only
 store-assets/                Not shipped: listing copy, screenshots, tiles
 ```
 
+There is **no server component**. The Pro licence check talks straight to Dodo
+Payments' public licence API from §14. An earlier draft of 1.4.0 had a `licence-api/`
+Vercel project beside this folder; it was deleted once the endpoints turned out to be
+public and CORS-enabled, and it should not come back without a reason the note in §14
+does not already answer.
+
 All the code is in one file on purpose. `scripts/build.mjs` bundles it once per
 surface, synthesising a one-line entry for each, and esbuild tree-shakes away
 what that surface cannot reach:
@@ -103,9 +109,25 @@ fully down for fullscreen. Where it lands afterwards is invariant 7.
 each have an attempt cap and emit a `DIAGNOSTIC` when they give up. Never add an
 unbounded retry or an observer that can fight the page forever.
 
-**6. Nothing leaves the device.** No network requests, no `chrome.storage.sync`
-(deliberately — sync would replicate settings through the user's browser
-account), no analytics. The privacy policy promises this.
+**6. One thing leaves the device, and it is the licence key.** No
+`chrome.storage.sync` (deliberately — sync would replicate settings through the
+user's browser account), no analytics, and **no network request of any kind for a
+reader without a licence key**. The single exception, added in 1.4.0: a reader who
+has entered a key has that key, plus the provider's activation id for this device,
+sent to Dodo Payments' own public licence API — on entry, roughly every 14 days
+after, and once more on removal. Nothing else: no account, no identifier of ours,
+no page, no video, no history, and no device fingerprint. Frame capture is
+entirely local. **There is no server on our side**, so there is nowhere for
+anything to accumulate.
+
+This invariant used to read "nothing leaves the device", and changing it is not a
+free edit. The same promise is made in `README.md`, `store-assets/LISTING.md`, the
+published store listing, the store's data-disclosure answers, and the published
+privacy policy at
+`rohittiger.vercel.app/product/windowedfullscreen/privacy`. Widening what the
+extension sends means changing every one of those in the same commit. Submitting a
+build that sends something the published policy says it does not is a worse
+problem than any feature is worth.
 
 **7. Leaving fullscreen retraces the way in.** `selectExitDestination` is a pure
 lookup, and for every exit the extension did not request it answers from the two
@@ -139,9 +161,157 @@ leaving it undoes that one step, not the mode the reader switched on before it a
 never asked to leave. Do not reintroduce it. `tests/prompts.test.ts` pins the
 lookup and `verify:live` pins all four exit triggers plus the resume.
 
+**7 (Pro). Nothing that was free may move behind the paywall.** The comment panel,
+both modes, the live-chat dock, the suggestions rail, and per-site auto-apply had
+all been public for two versions before the tier existed. That is what makes the
+tier free of grandfathering code, and there must never be any: the moment one
+existing feature is gated, every install needs a "was this person here before?"
+answer, and getting that wrong takes a feature off somebody who has been using it
+for a year. Exactly three things are gated — dock resizing, per-channel rules, and
+frame capture. Live chat docking is free on purpose, and keyboard shortcuts are not
+a paid category.
+
+**8 (Pro). Entitlement fails open on re-validation and never on activation.** The
+line is **4xx versus everything else**. A 4xx means the provider read the request
+and said no, and that is the only thing that revokes. A 5xx, a timeout, no network,
+a refused connection, or a body in an unexpected shape all come back as
+`unreachable`, which leaves an already-entitled reader entitled — a paying reader
+losing features on a flaky connection is worse than a pirate getting a free
+fortnight. And fail-open never *grants*: an install that has never had a definite
+answer is not Pro, whatever the network did. `dodoPost` owns the status split so it
+is not re-derived per call, and `applyValidation` is a reducer over the previous
+record rather than a mapping from an outcome precisely so that asymmetry has
+somewhere to live.
+
+The boundary was measured, not assumed. Against the live host: `activate` with a
+wrong key answers **404**, `validate` answers **200 `{"valid":false}"`**, and
+`deactivate` with a wrong instance answers **403**. If any of those ever moves into
+the 5xx range, a wrong key starts being tolerated instead of reported.
+
 ## Traps that have already bitten
 
 Do not undo these without reading why they are there.
+
+**Anything read out of the below-video block is not there yet when you first ask.**
+`#below` mounts several seconds after the player, and the owner row that names the
+channel is inside it. `hasSideContent` already carries this rule for the panel — that
+is why it is a predicate and not a snapshot — and per-channel auto-apply was bitten by
+the same thing from the other direction: every trigger that runs `maybeAutoApply`
+(preferences resolving, the entitlement record arriving, our button appearing, the
+video changing) fires before the channel is readable, so `readChannel` returned null,
+no rule matched, and the `autoApplied` latch meant nothing looked again. The rule
+never fired for anyone. It now retries on a bounded schedule
+(`MAX_CHANNEL_RULE_ATTEMPTS`, `CHANNEL_RULE_RETRY_MS`) and gives up with
+`channel-rule-abandoned`. Anything else that has to read from `#below` needs the same
+treatment: ask again later, with a cap, never once and never forever.
+
+**A Pro badge has to be removable, not just paintable.** The padlock beside a
+Pro-gated setting was appended once while the row was built, so it survived the
+entitlement arriving: the checkbox unlocked and the icon beside it still said locked.
+The badge is registered in `proGatedControls` with its checkbox and cleared by
+`applyProGateToToggles`, which is the only place the gate is applied. Any new locked
+affordance goes through that function — whatever it turns off, it must be able to turn
+back on, because entitlement arrives asynchronously and can also be revoked.
+
+**A dock width written inline on `<html>` breaks the fullscreen handoff.** The
+active-mode stylesheet sets `--wfs-panel-width: 0px` while fullscreen is up, so the
+site measures an honest layout in the frames before the mode stands down. An inline
+custom property on `<html>` outranks every stylesheet rule, `!important` or not, so
+writing the reader's chosen width there beats that collapse and hands YouTube a
+player still holding a panel-sized gap — which is invariant 4's broken control bar,
+reached by a new route. The widths go into a second `<style>` element instead
+(`getDockWidthCss` in §3, `writeDockWidthCss` in §6), whose selectors are one class
+short of the fullscreen ones so they lose to them and beat the `clamp()` defaults on
+source order. It must also carry no `!important`, for the same reason.
+
+**Nudge the site to re-measure on drag END only.** `refreshGeometry()` dispatches a
+synthetic resize, YouTube answers a resize with a relayout, and a relayout is when it
+strips `ytp-big-mode` — so one nudge per `pointermove` turns a single width change
+into a contest that burns all 50 class reassertions in a couple of seconds and leaves
+the small control bar for the rest of the session. Same reasoning as
+`GEOMETRY_REPAIR_DEBOUNCE_MS`, one level up. The drag previews in CSS only, coalesced
+to one write per animation frame, and asks for exactly one re-measure when the
+pointer is released.
+
+**The drag opens a dock up and nothing else. Do not reserve width for the video.**
+The only ceiling is `DOCK_DRAG_RESERVE_PX` (24px), which exists so the grip stays on
+screen and the drag stays reversible — not to protect the picture. A dock may take
+almost the whole window and leave the video a sliver, because the same grip drags it
+straight back and a reader who wants chat at full width has asked for exactly that.
+An earlier revision reserved 480px for the player, the width at which YouTube starts
+dropping control-bar buttons; on a 1366px window with both docks up that left the
+second dock a few pixels of travel, so the paid feature read as broken to the people
+who had bought it. It was removed and must not come back. The floor is the other
+half of the same rule: `getDefaultDockWidth` (§3) mirrors the stylesheet's
+`clamp(320px, 26vw, 440px)`, and a drag stops there — the paid control never makes a
+dock narrower than the free default. Change that `clamp()` and change the function in
+the same commit.
+
+**The width budget has to read the OTHER dock.** With chat and the comments both
+docked, each can pass its own ceiling and the two together can add up to more than the
+window. `clampDockWidth` takes `otherDockPx` for that reason, and it is the argument
+that is easy to drop when the function looks like it only needs its own dock's width.
+
+**A stored width outlives the window it was chosen in.** 1500px chosen on a monitor,
+reopened on a 1200px laptop, would paint a dock wider than the viewport and put its
+grip off the left edge — a width nobody can undo. `applyDockWidths` (§9) clamps what
+is PAINTED on entry, on a preference change, and on `resize`, while leaving the stored
+number alone so a wider window gets the full width back. Do not "simplify" this by
+clamping the stored value instead.
+
+**A drag grip belongs to `<body>`, not to the dock it moves.** `#below` and `#chat`
+are the site's own subtrees and its renderer rebuilds them — the same trap as
+`.wfs-panel-close`, and the grips are positioned onto the dock's inboard edge for the
+same reason.
+
+**Do not add a suggested key for the capture command.** It has none on purpose.
+Chrome lists every manifest command at `chrome://extensions/shortcuts` whatever the
+reader's tier, so a default binding would take a key combination away from every free
+install for a feature they do not have. The command is still relayed for a free
+reader rather than declined in the worker — a key that does nothing at all reads as
+broken, so the page shows the Pro prompt instead.
+
+**The capture blank check is not a claim about why.** Protected playback yields either
+a canvas that throws on read or a frame of pure black, and a video that has genuinely
+faded to black is indistinguishable from both. `captureVideoFrame` returns `blank` for
+all three and the message names the likely cause without asserting it. Do not "improve"
+this into "this video is protected": telling someone their unprotected video is
+protected is worse than being vague.
+
+**Never ship a build pointed at the provider's test host.** It is the one mistake in
+the licence path with no symptom on your own machine: a test build validates
+test-mode keys perfectly and rejects every real one, so the first person to find out
+is somebody who paid $5 and was told their key was not accepted. `DODO_API_BASE` in
+§14 is a single string for exactly this reason — a mode flag with a lookup table
+would put both hosts in every bundle and leave the guards nothing to look for.
+`tests/entitlement.test.ts` asserts the live host and `scripts/package.mjs` refuses
+to write a release zip containing the test one.
+
+**There are two of those constants, and they flip together.** `PRO_PURCHASE_URL` is
+the provider's checkout link, so a test-mode build has a second way to go wrong and
+it is the quieter one: a test checkout accepts a test card, charges nothing, and
+issues a key no live validate call will recognise. Nothing errors anywhere. Both the
+test suite and the package guard check each constant separately, because
+`test.checkout.dodopayments.com` does not contain `test.dodopayments.com` — a single
+substring check for the API host lets the checkout link straight through.
+
+**The activation response contains the buyer's name and email.** `activateLicence`
+reads `id` out of it and drops the rest, at the point of receipt, so there is no
+place in the code where the customer record sits in a variable something could
+persist by accident. Do not widen that destructuring to "keep the customer for
+later" — there is no later, and every published privacy claim says the extension
+holds nothing of the kind.
+
+**A refused activation deliberately does not say which reason.** A wrong key and a
+key already used on its maximum number of devices are both 4xx, and the provider's
+own error prose is the only thing separating them. Branching on a third party's
+wording is how a copy edit on their side becomes a silent unlock on ours, so one
+message names both things for the reader to check.
+
+**A per-channel rule is keyed on the handle, never the display name.** A channel can
+rename itself, and a rule that followed the name would stop applying with nothing said
+about it. `readChannel` returns both: `id` is what a rule matches, `label` is only ever
+printed.
 
 **A player-bar control whose result renders outside the player is dead in the
 mode, silently.** YouTube's chapter title ("View chapter") opens the Chapters
@@ -213,6 +383,28 @@ provides a separate `[data-wfs-prompt-host]` directly above the footer, and
 `settings-dom.test.ts` asserts the two are different nodes. The general rule: any
 node a `watchRatingState` subscriber repaints wholesale belongs to that subscriber
 alone.
+
+**The options page is two panels, and the four message regions live outside
+both.** `renderSettings` builds a `role="tablist"` with `Settings` and `Pro`, and
+puts the preference sections in the first panel and `renderProSection` in the
+second. `[data-wfs-status]`, `[data-wfs-error]`, `[data-wfs-prompt-host]` and
+`[data-wfs-footer-host]` stay direct children of the root, in that order, because
+the messages belong to whichever panel is showing — activation reports into the
+same region a checkbox does — and because `startPopup` finds all four by marker on
+the tree it was handed. `settings-dom.test.ts` asserts the order against
+`root.children`, so moving one inside a panel fails a test rather than shipping.
+Panels are hidden with the `hidden` attribute and never unmounted: a hidden panel
+keeps its entitlement subscriptions, its loaded preference values, and a
+half-typed licence key.
+
+**`surface` decides the shape, and the popup is not a narrow options page.** The
+popup gets no tab strip, no feature list, and no licence field — only
+`renderProSummary`, one sentence and a button that opens the settings page on
+`#pro`. A licence key is 36 characters and the popup is 320 px wide over a video
+the reader is part-way through. The fragment is how the panel is selected;
+`chrome.runtime.openOptionsPage()` cannot carry one, which is why the worker's
+`OPEN_PAGE` / `licence` branch creates a tab at an explicit address instead and
+accepts that a second settings tab may appear.
 
 **§11 renders one tree into two hand-written stylesheets, so a CSS fix lands
 twice or it has not landed.** `public/options/index.html` and

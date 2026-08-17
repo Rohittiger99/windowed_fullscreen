@@ -52,12 +52,18 @@ function fakeChrome(initial: Store = {}): Store {
 /**
  * Render the settings tree into a fresh stub document and hand back the document,
  * the tree, and the backing store, so a test can ask what was persisted.
+ *
+ * The `options` surface, because it is the one with the tab strip: the regions
+ * these tests are about sit outside both panels, and building the shape that has
+ * panels is the only way to prove they stayed outside them.
  */
 function render(): { doc: StubDocument; root: StubElement; store: Store } {
   const store = fakeChrome();
   const doc = createStubDocument();
   const root = doc.createElement("div");
-  renderSettings(doc as unknown as Document, root as unknown as Element, { showHeading: true });
+  renderSettings(doc as unknown as Document, root as unknown as Element, {
+    surface: "options",
+  });
   return { doc, root, store };
 }
 

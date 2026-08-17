@@ -132,12 +132,44 @@
       }
 
       /* --- Header ---------------------------------------------------------- */
+      .wfs-popup__header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 16px;
+      }
+
       .wfs-popup__title {
         font-size: 22px;
         font-weight: 700;
         letter-spacing: -0.25px;
         color: var(--wfs-text);
-        margin-bottom: 16px;
+      }
+
+      /* "Get Pro" button in the popup header */
+      [data-wfs-pro-header-btn] {
+        padding: 4px 10px;
+        font: inherit;
+        font-size: 11px;
+        font-weight: 700;
+        color: #fff;
+        background: linear-gradient(135deg, #6366f1, #8b5cf6);
+        border: none;
+        border-radius: 14px;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: transform 100ms ease, box-shadow 140ms ease;
+      }
+
+      [data-wfs-pro-header-btn]:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 3px 8px rgba(99, 102, 241, 0.3);
+      }
+
+      [data-wfs-pro-header-btn]:focus-visible {
+        outline: none;
+        box-shadow: var(--wfs-ring);
       }
 
       /* --- Status card ------------------------------------------------------ */
@@ -741,6 +773,486 @@
         outline-offset: 2px;
       }
 
+      /*
+       * Pro: one row, and the per-channel rules.
+       *
+       * The MIRROR of the block in `options/index.html`, and deliberately a much
+       * shorter one. §11 renders one tree into two hand-written stylesheets and
+       * nothing checks that they agree — the unit tests see structure, not layout —
+       * so a change here has to be made there too. The selectors are not
+       * copy-pasteable between the files: this one scopes by `#settings` and the
+       * options page by `#app`, which is exactly the asymmetry that once shipped a
+       * rating prompt whose primary control sat half-hidden behind its sibling on
+       * one surface and not the other.
+       *
+       * WHAT THIS FILE NO LONGER NEEDS: the price, the feature list, the licence
+       * field, the Activate and Remove buttons, and the privacy note. The popup
+       * renders `renderProSummary` — one sentence and one button — because at 320 px
+       * over a video the reader is part-way through, a feature list is unreadable
+       * and a 36-character key is unpasteable. All of that lives on the settings
+       * page's Pro panel now, and this row is the door to it. Styling for a control
+       * this surface does not render is dead weight that reads as a promise.
+       *
+       * The id prefix is load-bearing wherever a link, a label, or a paragraph is
+       * involved: `#settings a`, `#settings label` and `#settings p` carry an id, so
+       * a class-only or attribute-only selector loses to them wherever it sits.
+       */
+
+      /* A column, not the checkbox row `#settings label` sets up. */
+      #settings [data-wfs-channel-field] {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 4px;
+        margin: 0;
+        padding: 0;
+        cursor: default;
+      }
+
+      #settings [data-wfs-channel-field]:hover {
+        background: none;
+      }
+
+      #settings [data-wfs-channel-field] > span {
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--wfs-muted);
+      }
+
+      /* `width: 100%` with `box-sizing` already global: at 320 px there is no room
+         for a field that overflows its column, and a horizontal scrollbar in a popup
+         is the one layout failure a reader cannot work around. */
+      #settings input[type="text"] {
+        width: 100%;
+        min-height: 32px;
+        padding: 6px 10px;
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        font-size: 13px;
+        color: var(--wfs-text);
+        background: var(--wfs-bg);
+        border: 1px solid var(--wfs-border);
+        border-radius: 6px;
+      }
+
+      #settings input[type="text"]:focus-visible {
+        outline: none;
+        box-shadow: var(--wfs-ring);
+      }
+
+      #settings [data-wfs-channel-add],
+      #settings [data-wfs-channel-remove] {
+        min-height: 28px;
+        margin-top: 10px;
+        padding: 5px 12px;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--wfs-accent);
+        background: var(--wfs-accent-dim);
+        border: 1px solid var(--wfs-border);
+        border-radius: 6px;
+        cursor: pointer;
+      }
+
+      #settings [data-wfs-channel-add]:hover,
+      #settings [data-wfs-channel-remove]:hover {
+        background: var(--wfs-accent-dim-hover);
+      }
+
+      #settings [data-wfs-channel-add]:focus-visible,
+      #settings [data-wfs-channel-remove]:focus-visible {
+        outline: none;
+        box-shadow: var(--wfs-ring);
+      }
+
+      /* --- Per-channel rules ------------------------------------------------ */
+      #settings [data-wfs-channel-section] {
+        margin-top: 20px;
+      }
+
+      #settings [data-wfs-channel-section] h3 {
+        font-size: 11px;
+        font-weight: 700;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--wfs-muted);
+      }
+
+      #settings [data-wfs-channel-list] {
+        margin: 10px 0 12px;
+        padding: 0;
+        list-style: none;
+      }
+
+      /* The identifier wraps, the button does not, so a long handle never pushes
+         Remove off the popup's width. */
+      #settings [data-wfs-channel-item] {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        min-width: 0;
+        padding: 6px 0;
+        border-bottom: 1px solid var(--wfs-border);
+      }
+
+      #settings [data-wfs-channel-item] > span {
+        min-width: 0;
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        font-size: 13px;
+        overflow-wrap: anywhere;
+      }
+
+      #settings [data-wfs-channel-remove] {
+        flex: none;
+        margin-top: 0;
+        padding: 3px 9px;
+        font-size: 12px;
+      }
+
+      /* --- Pro teaser card (in settings) ------------------------------------- */
+      /* A clickable row that hints at Pro and navigates to the showcase view.
+         Visually distinct from a checkbox row: it has a gradient left stripe and
+         reads as a card rather than a setting. */
+      #settings [data-wfs-pro-teaser] {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        padding: 12px 14px;
+        background: var(--wfs-alt);
+        border: 1px solid var(--wfs-border);
+        border-radius: 10px;
+        cursor: pointer;
+        font: inherit;
+        text-align: left;
+        position: relative;
+        overflow: hidden;
+        transition: border-color 140ms ease, box-shadow 140ms ease;
+      }
+
+      #settings [data-wfs-pro-teaser]::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        width: 3px;
+        background: linear-gradient(180deg, #6366f1, #ec4899);
+        border-radius: 10px 0 0 10px;
+      }
+
+      #settings [data-wfs-pro-teaser].is-active::before {
+        background: linear-gradient(180deg, #10b981, #3b82f6);
+      }
+
+      #settings [data-wfs-pro-teaser]:hover {
+        border-color: rgba(139, 92, 246, 0.3);
+        box-shadow: 0 2px 8px rgba(139, 92, 246, 0.08);
+      }
+
+      #settings [data-wfs-pro-teaser]:focus-visible {
+        outline: none;
+        box-shadow: var(--wfs-ring);
+      }
+
+      #settings [data-wfs-pro-teaser-badge] {
+        font-size: 16px;
+        line-height: 1;
+        flex: none;
+      }
+
+      #settings [data-wfs-pro-teaser-text] {
+        flex: 1;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--wfs-text);
+      }
+
+      #settings [data-wfs-pro-teaser-arrow] {
+        flex: none;
+        font-size: 18px;
+        font-weight: 300;
+        color: var(--wfs-muted);
+      }
+
+      /* --- Pro showcase view (#pro-view) ----------------------------------- */
+      /* The full Pro view takes over the popup. It carries its own padding and
+         the same 320 px width constraint the main view uses. */
+      #pro-view {
+        padding: 16px 18px 20px;
+      }
+
+      #pro-view[hidden] {
+        display: none;
+      }
+
+      /* Back button at the top of the Pro view */
+      #pro-view [data-wfs-pro-back-nav] {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        margin-bottom: 14px;
+        padding: 4px 8px;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--wfs-secondary);
+        background: none;
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        transition: color 140ms ease, background 140ms ease;
+      }
+
+      #pro-view [data-wfs-pro-back-nav]:hover {
+        color: var(--wfs-text);
+        background: var(--wfs-alt);
+      }
+
+      #pro-view [data-wfs-pro-back-nav]:focus-visible {
+        outline: none;
+        box-shadow: var(--wfs-ring);
+      }
+
+      /* Pro card inside the Pro view */
+      #pro-view [data-wfs-pro-card] {
+        position: relative;
+        padding: 14px;
+        background: var(--wfs-alt);
+        border: 1px solid var(--wfs-border);
+        border-radius: 12px;
+        overflow: hidden;
+      }
+
+      #pro-view [data-wfs-pro-card]::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 3px;
+        background: linear-gradient(90deg, #6366f1, #8b5cf6, #ec4899);
+        border-radius: 12px 12px 0 0;
+      }
+
+      #pro-view [data-wfs-pro-card].is-active::before {
+        background: linear-gradient(90deg, #10b981, #06b6d4, #3b82f6);
+      }
+
+      /* Header */
+      #pro-view [data-wfs-pro-header] {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 10px;
+      }
+
+      #pro-view [data-wfs-pro-badge] {
+        font-size: 18px;
+        line-height: 1;
+      }
+
+      #pro-view [data-wfs-pro-title] {
+        font-size: 15px;
+        font-weight: 700;
+        color: var(--wfs-text);
+      }
+
+      #pro-view [data-wfs-pro-pill] {
+        margin-left: auto;
+        padding: 2px 8px;
+        font-size: 11px;
+        font-weight: 700;
+        color: #7c3aed;
+        background: rgba(139, 92, 246, 0.1);
+        border-radius: 20px;
+        white-space: nowrap;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        #pro-view [data-wfs-pro-pill] {
+          color: #a78bfa;
+          background: rgba(167, 139, 250, 0.15);
+        }
+      }
+
+      /* Pitch */
+      #pro-view [data-wfs-pro-pitch] {
+        margin: 0 0 12px;
+        font-size: 12px;
+        color: var(--wfs-secondary);
+        line-height: 1.5;
+      }
+
+      /* Feature grid — compact horizontal cards */
+      #pro-view [data-wfs-pro-features-grid] {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-bottom: 12px;
+      }
+
+      #pro-view [data-wfs-pro-feature-card] {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 6px 8px;
+        background: var(--wfs-elevated);
+        border: 1px solid var(--wfs-border);
+        border-radius: 6px;
+        transition: border-color 120ms ease;
+      }
+
+      #pro-view [data-wfs-pro-feature-card]:hover {
+        border-color: rgba(139, 92, 246, 0.3);
+      }
+
+      #pro-view [data-wfs-pro-feature-icon] {
+        flex: none;
+        font-size: 16px;
+        line-height: 1;
+      }
+
+      #pro-view [data-wfs-pro-feature-text] {
+        flex: 1;
+        min-width: 0;
+      }
+
+      #pro-view [data-wfs-pro-feature-card] [data-wfs-pro-feature-name] {
+        display: block;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--wfs-text);
+        line-height: 1.3;
+      }
+
+      #pro-view [data-wfs-pro-feature-card] [data-wfs-pro-feature-detail] {
+        display: block;
+        font-size: 11px;
+        color: var(--wfs-secondary);
+        line-height: 1.3;
+      }
+
+      /* Actions */
+      #pro-view [data-wfs-pro-actions] {
+        margin-bottom: 0;
+      }
+
+      #pro-view [data-wfs-pro-buy-cta] {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        min-height: 34px;
+        padding: 7px 16px;
+        font-size: 13px;
+        font-weight: 700;
+        color: #fff;
+        background: linear-gradient(135deg, #6366f1, #8b5cf6);
+        border: none;
+        border-radius: 8px;
+        text-decoration: none;
+        cursor: pointer;
+        transition: transform 80ms ease, box-shadow 140ms ease;
+      }
+
+      #pro-view [data-wfs-pro-buy-cta]:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 14px rgba(99, 102, 241, 0.35);
+        text-decoration: none;
+        color: #fff;
+        background: linear-gradient(135deg, #4f46e5, #7c3aed);
+      }
+
+      /* Manage button */
+      #pro-view [data-wfs-pro-manage] {
+        min-height: 28px;
+        padding: 5px 12px;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--wfs-accent-text);
+        background: var(--wfs-accent-dim);
+        border: 1px solid var(--wfs-border);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background 140ms ease;
+      }
+
+      #pro-view [data-wfs-pro-manage]:hover {
+        background: var(--wfs-accent-dim-hover);
+      }
+
+      /* Activation form — always visible, secondary below CTA */
+      #pro-view [data-wfs-pro-form] {
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px solid var(--wfs-border);
+      }
+
+      #pro-view [data-wfs-pro-form-label] {
+        margin: 0 0 6px;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--wfs-muted);
+      }
+
+      #pro-view [data-wfs-pro-inline-status] {
+        margin: 0 0 6px;
+        padding: 5px 8px;
+        font-size: 11px;
+        font-weight: 500;
+        color: var(--wfs-danger);
+        background: var(--wfs-danger-bg);
+        border-radius: 5px;
+      }
+
+      #pro-view [data-wfs-pro-key] {
+        width: 100%;
+        min-height: 30px;
+        padding: 5px 8px;
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        font-size: 12px;
+        color: var(--wfs-text);
+        background: var(--wfs-bg);
+        border: 1px solid var(--wfs-border);
+        border-radius: 5px;
+      }
+
+      #pro-view [data-wfs-pro-key]:focus-visible {
+        outline: none;
+        box-shadow: var(--wfs-ring);
+      }
+
+      #pro-view [data-wfs-pro-activate-inline] {
+        margin-top: 6px;
+        min-height: 28px;
+        padding: 5px 12px;
+        font: inherit;
+        font-size: 12px;
+        font-weight: 600;
+        color: #fff;
+        background: var(--wfs-accent);
+        border: none;
+        border-radius: 5px;
+        cursor: pointer;
+        transition: background 140ms ease;
+      }
+
+      #pro-view [data-wfs-pro-activate-inline]:hover {
+        background: var(--wfs-accent-hover);
+      }
+
+      /* Lock icon on Pro-gated settings */
+      [data-wfs-pro-lock] {
+        font-size: 12px;
+        opacity: 0.6;
+        margin-left: 2px;
+      }
+
       /* --- Motion respect --------------------------------------------------- */
       /* The blanket rule below covers the star controls too, which is why they
          carry no reduced-motion override of their own. */
@@ -755,6 +1267,7 @@
     <main id="app"></main>
     <section id="pin-prompt"></section>
     <section id="settings"></section>
+    <section id="pro-view" hidden></section>
     <script type="module" src="./main.js"></script>
   </body>
 </html>

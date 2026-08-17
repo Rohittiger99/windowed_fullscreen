@@ -44,8 +44,12 @@
  *     panel come back if they were up, and the plain player stays plain.
  *  5. Every retry loop and every contest with the site is bounded, and gives up
  *     with a diagnostic rather than spinning.
- *  6. Nothing leaves the device. No network calls, no `chrome.storage.sync`,
- *     no analytics.
+ *  6. One thing leaves the device: the licence key, and only for a reader who has
+ *     entered one. No `chrome.storage.sync`, no analytics, and no network request
+ *     at all without a key. See §14 — and note that the same promise is published
+ *     in `README.md`, `store-assets/LISTING.md`, the store listing, the store's
+ *     data disclosure, and the privacy policy, so widening it means changing all
+ *     of them in the same commit.
  *
  * SECTIONS
  *   §1  Types
@@ -61,6 +65,7 @@
  *   §11 Settings UI (shared by options page and popup)
  *   §12 Popup
  *   §13 Welcome page (post-install)
+ *   §14 Entitlement (Pro tier)
  *
  * Copyright (c) 2026 Rohit Tiger. All rights reserved.
  */
@@ -111,6 +116,83 @@ export interface SiteAdapter {
   findSideContent(doc: Document): Element | null;
   /** Locate the control cluster holding the native fullscreen button. */
   findControlsContainer(doc: Document): Element | null;
+
+  /**
+   * Locate the media element being watched, for frame capture. Null while it has
+   * not mounted, which simply leaves the capture control unavailable.
+   *
+   * Optional: a site the extension cannot capture from omits it, and the capture
+   * control is never injected there.
+   */
+  findVideo?(doc: Document): HTMLVideoElement | null;
+
+  /**
+   * Which channel, author, or uploader this page belongs to, for the per-channel
+   * auto-apply rules. Null when the page has not rendered it yet.
+   *
+   * The `id` must be something the site will still report identically next month —
+   * a handle or an account id, never a display name and never a URL. A rule keyed
+   * on anything renameable stops applying with nothing said about it.
+   *
+   * Optional: a site with no notion of a channel omits it, and the rules list is
+   * simply not offered for that site.
+   */
+  readChannel?(doc: Document): ChannelRef | null;
+
+  /**
+   * A filename stem for a captured frame — no extension, no path, no spaces.
+   * Null falls back to a generic timestamped name.
+   *
+   * Site knowledge, hence here: it is the site's own id for the thing being
+   * watched that makes a saved frame findable again.
+   */
+  readCaptureName?(doc: Document): string | null;
+
+  /**
+   * The CSS declaring the reader's chosen dock widths, or `""` when both are at
+   * their defaults.
+   *
+   * The core owns the `<style>` element and when to rewrite it; the adapter owns
+   * what goes in it, because the custom properties being overridden are declared
+   * by this adapter's own selectors. Returning CSS rather than accepting a width
+   * is what keeps invariant 2 intact: the generic resize code never learns that a
+   * dock is `#below` or `#chat`.
+   *
+   * An adapter whose docks are not resizable omits this, and the resize grips are
+   * never mounted.
+   */
+  getDockWidthCss?(widths: { panelPx: number; chatPx: number }): string;
+
+  /**
+   * The width one dock is occupying right now, in CSS px, or null when that dock
+   * is not on screen.
+   *
+   * A drag has to start from what the reader can see, and until they have chosen a
+   * width there is nothing stored to start from — the sheet's own responsive
+   * default is a `clamp()`, and a custom property holding one reads back as the
+   * literal `clamp(...)` text rather than a number, so it cannot be measured from
+   * the outside. Measuring the docked element is the only honest answer, and which
+   * element that is belongs here.
+   */
+  measureDockWidth?(doc: Document, dock: "panel" | "chat"): number | null;
+
+  /**
+   * The width this adapter's own stylesheet would give a dock at this viewport
+   * width — the free default, in CSS px.
+   *
+   * It is the FLOOR a drag may shrink to. A paid width control that can make the
+   * dock narrower than the free default sells the reader a way to make the product
+   * worse, so the narrow half of the range is not on offer: the drag opens the dock
+   * up from the default and stops there on the way back.
+   *
+   * Site knowledge, hence here: the number is whatever the `clamp()` in this
+   * adapter's stylesheet works out to, and a custom property holding a `clamp()`
+   * reads back as the literal text rather than a number, so it cannot be measured
+   * from the outside. An adapter without resizable docks omits this and the core
+   * falls back to {@link MIN_DOCK_WIDTH_PX}.
+   */
+  getDefaultDockWidth?(viewportPx: number): number;
+
   /** Locate the site's own fullscreen button; we inject ours next to it. */
   findNativeFullscreenButton(doc: Document): Element | null;
   /**
@@ -234,21 +316,96 @@ export interface SitePrefs {
   autoApply: boolean;
   /** Use {@link WindowedMode} `scrollable` instead of `cover`. */
   scrollable: boolean;
+  /**
+   * The reader's chosen comment-panel width in CSS px, or 0 for the stylesheet's
+   * own responsive default. Pro; a free install never writes anything but 0.
+   *
+   * 0 rather than `null` for "unset", so the field passes the same whole-number
+   * check every other stored count uses and the coercion needs no special case.
+   * The distinction matters: a stored 0 means "let the sheet's `clamp()` decide",
+   * which follows the window, where a stored number is a fixed px width that does
+   * not.
+   */
+  panelWidth: number;
+  /** The same for the live-chat dock. */
+  chatWidth: number;
+  /**
+   * Channels the mode enters on automatically, whatever {@link autoApply} says.
+   * Pro. Identifiers as the adapter reports them, so nothing here is a URL.
+   *
+   * Capped at {@link MAX_CHANNEL_RULES} on write, because this is the one stored
+   * field a reader can grow without bound.
+   */
+  channels: readonly string[];
+  /**
+   * Put a captured frame on the clipboard instead of downloading it. Only reached
+   * by a Pro install, since capture itself is Pro.
+   */
+  captureToClipboard: boolean;
 }
 
 /** Documented defaults applied when nothing is stored. */
-export const DEFAULT_SITE_PREFS: SitePrefs = { autoApply: false, scrollable: false };
+export const DEFAULT_SITE_PREFS: SitePrefs = {
+  autoApply: false,
+  scrollable: false,
+  panelWidth: 0,
+  chatWidth: 0,
+  channels: [],
+  captureToClipboard: false,
+};
 
 /** The mode a site's preferences select. */
 export function modeFor(prefs: SitePrefs): WindowedMode {
   return prefs.scrollable ? "scrollable" : "cover";
 }
 
-/** Messages exchanged between the surfaces. */
-export type ExtMessage = { type: "TOGGLE" } | { type: "GET_STATUS" };
+/**
+ * Which channel the page is showing, as the adapter reports it.
+ *
+ * `id` is what gets stored and compared — a stable handle, never a URL. `label` is
+ * for the settings UI to print, and is deliberately not what a rule matches on: a
+ * channel can rename itself and a rule that followed the display name would
+ * silently stop applying.
+ */
+export interface ChannelRef {
+  readonly id: string;
+  readonly label: string;
+}
 
-/** Reply to an {@link ExtMessage}. */
-export type ExtResponse = { ok: true; active: boolean } | { ok: false; error: string };
+/**
+ * A request from the page to the service worker.
+ *
+ * Separate from {@link ExtMessage}, which travels the other way, and deliberately
+ * an enumerated intent rather than a URL: a content script asking the worker to
+ * open an arbitrary address would make the worker a redirector for whatever could
+ * reach it. The worker owns both destinations.
+ *
+ * `licence` is the settings page opened on its Pro panel, which is where the key
+ * field lives. It used to be `options`, meaning the settings page with no
+ * destination inside it; that stopped being enough once activation moved behind a
+ * panel, because a reader who pressed `I have a key` would have landed on the
+ * settings panel with no key field in sight.
+ */
+export type WorkerMessage = { type: "OPEN_PAGE"; page: "pro" | "licence" };
+
+/** Messages exchanged between the surfaces. */
+export type ExtMessage =
+  | { type: "TOGGLE" }
+  | { type: "GET_STATUS" }
+  | { type: "TOGGLE_PANEL" }
+  | { type: "CAPTURE" };
+
+/**
+ * Reply to an {@link ExtMessage}.
+ *
+ * `channel` rides along on the success case rather than getting a message of its
+ * own: the popup already asks for the status on every opening, and a second round
+ * trip to learn the channel would double the window in which the popup is
+ * waiting on a page that may not answer at all.
+ */
+export type ExtResponse =
+  | { ok: true; active: boolean; channel?: ChannelRef | null }
+  | { ok: false; error: string };
 
 /**
  * What the extension recorded about an exit from browser fullscreen that it
@@ -343,6 +500,10 @@ const DIAGNOSTIC = {
   /** The debounced geometry repair hit its attempt cap. Emitted once, on the
    * transition to the cap, not on every subsequent request. */
   geometryRepairAbandoned: "geometry-repair-abandoned",
+  /** A per-channel auto-apply rule gave up waiting for the page to name the
+   * channel. Only reached with rules stored and an entitlement to use them, so it
+   * always means a rule that could not be evaluated, never an absent feature. */
+  channelRuleAbandoned: "channel-rule-abandoned",
   /** `exitFullscreen()` threw or rejected after an exit intent was recorded. */
   exitFullscreenRefused: "exit-fullscreen-refused",
   /** Teardown found a snapshotted element the page had detached. One line per
@@ -352,6 +513,23 @@ const DIAGNOSTIC = {
    * retry would fire whenever the worker next woke, so the reader would get a
    * welcome tab out of nowhere hours after installing. */
   firstRunOpenFailed: "first-run-open-failed",
+  /** A licence check did not confirm the key — either a definite refusal at
+   * activation, or a scheduled revalidation that could not be completed, in which
+   * case entitlement is left as it was (§14 rule 2). Carries the provider's status
+   * and the host it was asked, because on screen every refusal is one sentence and
+   * a test-mode build is indistinguishable from an exhausted activation limit. */
+  proValidationFailed: "pro-validation-failed",
+  /** Frame capture threw. One line per attempt; capture has no retry loop,
+   * because a frame the reader wanted is a frame they can ask for again. */
+  captureFailed: "capture-failed",
+  /** The captured frame came back blank, which is what protected playback
+   * produces. Nothing is saved rather than saving a black rectangle. */
+  captureBlank: "capture-blank",
+  /** The worker could not open the purchase or settings page the in-page prompt
+   * asked for. Its own code rather than borrowing `toggleUnreachable`: the reader
+   * pressed a button and got nothing, and a shared code makes that indis-
+   * tinguishable from a shortcut that missed the page. */
+  proPageOpenFailed: "pro-page-open-failed",
 } as const;
 
 type DiagnosticCode = (typeof DIAGNOSTIC)[keyof typeof DIAGNOSTIC];
@@ -378,6 +556,27 @@ const YT = {
   controls: ".ytp-right-controls",
   /** YouTube's own fullscreen control. */
   nativeFullscreen: ".ytp-fullscreen-button",
+  /**
+   * The playing media element, for frame capture. Both class forms are listed for
+   * the same reason the player has a fallback: YouTube has shipped each of them.
+   *
+   * Resolved inside the player rather than document-wide, because a watch page
+   * carries other `<video>` elements — the hover previews in the suggestions rail
+   * are real video elements, and capturing one of those instead of the thing being
+   * watched would be a baffling bug to be handed.
+   */
+  video: "video.html5-main-video, video.video-stream",
+  /**
+   * The channel link in the owner row, whose href carries the channel's stable
+   * identifier: `/@handle` on a modern page, `/channel/UC…` on an older one.
+   *
+   * The href is read rather than the visible name: a channel can rename itself,
+   * and a stored rule that matched the display name would stop applying with
+   * nothing said about it.
+   */
+  channelLink: "ytd-video-owner-renderer a[href], #owner a[href], #upload-info a[href]",
+  /** The channel's display name, for the settings list to print. */
+  channelName: "ytd-channel-name #text, ytd-video-owner-renderer #channel-name #text",
   /**
    * Controls inside YouTube's own player bar whose result renders OUTSIDE the
    * player, so they do nothing at all while the mode is on.
@@ -453,6 +652,20 @@ const YT = {
 
 /** Hosts treated as YouTube. */
 const YT_HOSTS = new Set(["www.youtube.com", "youtube.com", "m.youtube.com"]);
+
+/* The three numbers in `clamp(320px, 26vw, 440px)`, the default width of BOTH docks
+   in the stylesheet below. Named here because `getDefaultDockWidth` has to work the
+   same expression out in JS to give a drag its floor, and two copies of a magic
+   number in one file is how they drift apart. */
+
+/** The `320px` lower bound: the narrowest either dock is ever drawn. */
+const DOCK_DEFAULT_FLOOR_PX = 320;
+
+/** The `26vw` middle term: the share of the window a dock takes by default. */
+const DOCK_DEFAULT_VIEWPORT_SHARE = 0.26;
+
+/** The `440px` upper bound, so a wide monitor does not hand the dock the stage. */
+const DOCK_DEFAULT_CEILING_PX = 440;
 
 /**
  * YouTube's active-mode CSS. Scoped under `html.wfs-windowed` (a class the
@@ -1507,6 +1720,101 @@ html.wfs-windowed:has(#chat:not([collapsed])) #chat-container {
   content-visibility: visible !important;
 }
 
+/* -------------------------------------------------------------------------
+   Drag-to-resize grips, one per dock.
+
+   Both hang off <body> rather than being injected into the dock they move, for
+   exactly the reason recorded against .wfs-panel-close: #below and #chat belong
+   to the site's own renderer, which rebuilds them on a video change and on lazy
+   loads, so anything of ours inside them is discarded at a moment we do not
+   control. They are positioned onto the dock's inboard edge instead.
+
+   Each grip sits ON the shared edge, half its width either side of it, so the
+   pointer target is wider than the 1px seam without either dock having to give
+   up layout width for it. That is why the offsets below subtract half the grip
+   width rather than being flush.
+
+   Hidden by default, and revealed only by the class its dock is up under, so
+   "is there a dock to resize?" stays a pure CSS question — the same reasoning as
+   every other rule in this stylesheet being nested under a class. A free install
+   never mounts these elements at all, so there is no rule here for the
+   un-entitled case: nothing to hide.
+   ------------------------------------------------------------------------- */
+.wfs-dock-grip {
+  display: none;
+}
+
+html.wfs-windowed .wfs-dock-grip {
+  box-sizing: border-box !important;
+  position: fixed !important;
+  top: 0 !important;
+  bottom: 0 !important;
+  width: 10px !important;
+  padding: 0 !important;
+  margin: 0 !important;
+  border: 0 !important;
+  background: transparent !important;
+  /* The one cursor that says "this edge moves sideways". */
+  cursor: col-resize !important;
+  /* Above the panel it moves, below the masthead — the same rank the panel's own
+     close button takes, and for the same reason: it has to clear the dock's
+     scrolling content without reaching the chrome layer. */
+  z-index: var(--wfs-z-panel-control) !important;
+  /* No transition on the offset. The grip's position is written from JS on every
+     frame of a drag, and a transition on it would make the grip lag the pointer
+     it is following, which reads as the drag having missed. */
+  transition: background-color 120ms ease !important;
+}
+
+/* A hairline that only appears on hover or while dragging. Visible at rest it
+   would be a second border beside the panel's own box-shadow edge, doubling a
+   line the design already draws. */
+html.wfs-windowed .wfs-dock-grip::after {
+  content: "" !important;
+  position: absolute !important;
+  top: 0 !important;
+  bottom: 0 !important;
+  left: 50% !important;
+  width: 2px !important;
+  transform: translateX(-50%) !important;
+  background: transparent !important;
+  transition: background-color 120ms ease !important;
+}
+
+html.wfs-windowed .wfs-dock-grip:hover::after,
+html.wfs-windowed .wfs-dock-grip.is-dragging::after,
+html.wfs-windowed .wfs-dock-grip:focus-visible::after {
+  background: #3ea6ff !important;
+}
+
+/* Keyboard reachable, so the width is not mouse-only. The ring is drawn on the
+   hairline rather than the 10px box, which would outline a strip of video. */
+html.wfs-windowed .wfs-dock-grip:focus-visible {
+  outline: none !important;
+}
+
+/* The comment panel's grip sits on that panel's inboard edge, wherever it
+   currently is — which is chat's width further in when chat is docked outboard,
+   because --wfs-panel-right already carries that. */
+html.wfs-windowed.wfs-side-panel .wfs-dock-grip[data-wfs-dock="panel"] {
+  display: block !important;
+  right: calc(var(--wfs-panel-right) + var(--wfs-panel-width) - 5px) !important;
+}
+
+/* Chat's grip sits on chat's own inboard edge. Chat keeps the outer edge, so this
+   is simply its width in from the window edge. */
+html.wfs-windowed:has(#chat:not([collapsed])) .wfs-dock-grip[data-wfs-dock="chat"] {
+  display: block !important;
+  right: calc(var(--wfs-chat-width) - 5px) !important;
+}
+
+/* Browser fullscreen belongs to YouTube, and the dock widths collapse to 0 for
+   it, so a grip left on screen would sit at the window's right edge over the
+   site's own fullscreen controls. */
+html.wfs-windowed:is(:fullscreen, :has(:fullscreen)) .wfs-dock-grip {
+  display: none !important;
+}
+
 /* The masthead needs no rule of its own here. It reads --wfs-docked-width, which
    the tokens at the top of this section already widened to cover chat, so the bar
    stops short of whichever docks are up. */
@@ -1610,6 +1918,92 @@ const youtubeAdapter: SiteAdapter = {
 
   findControlsContainer(doc) {
     return doc.querySelector(YT.controls);
+  },
+
+  findVideo(doc) {
+    // Scoped to the player, not the document: the suggestions rail's hover
+    // previews are real `<video>` elements, and capturing one of those instead of
+    // the video being watched would look like the feature was simply broken.
+    const player = doc.querySelector(YT.player) ?? doc.querySelector(YT.playerFallback);
+    const video = player?.querySelector(YT.video) ?? null;
+    return video instanceof HTMLVideoElement ? video : null;
+  },
+
+  readChannel(doc) {
+    const link = doc.querySelector(YT.channelLink);
+    const href = link?.getAttribute("href")?.trim();
+    if (!href) return null;
+
+    // The identifier is the first path segment that names a channel. `/@handle`
+    // and `/channel/UC…` are both stable; `/watch` and `/results` are not
+    // channels at all and are refused rather than stored as one.
+    let path: string;
+    try {
+      // Relative hrefs are what YouTube ships; the base is only there to parse.
+      path = new URL(href, "https://www.youtube.com").pathname;
+    } catch {
+      return null;
+    }
+    const handle = /^\/(@[^/]+)/.exec(path)?.[1] ?? /^\/channel\/(UC[^/]+)/.exec(path)?.[1] ?? null;
+    if (!handle) return null;
+
+    const named = doc.querySelector(YT.channelName)?.textContent?.trim();
+    // The handle stands in for a name that has not rendered yet, so a rule added
+    // from the popup is never stored as a nameless entry.
+    return { id: handle, label: named && named.length > 0 ? named : handle };
+  },
+
+  readCaptureName(doc) {
+    const id = readYouTubeVideoId(doc);
+    return id ? `youtube-${id}` : null;
+  },
+
+  getDockWidthCss(widths) {
+    // Written into a stylesheet of our own rather than inline on <html>, and that
+    // is not a style preference — it is the fullscreen handoff.
+    //
+    // `html.wfs-windowed.wfs-side-panel:is(:fullscreen, :has(:fullscreen))` sets
+    // `--wfs-panel-width: 0px` so the site measures an honest layout during the
+    // few frames before the mode stands down. An inline custom property on <html>
+    // outranks every stylesheet rule, `!important` or not, so writing the reader's
+    // width there would beat that rule and hand YouTube a player still holding a
+    // panel-sized gap — which is exactly how it ends up caching a bogus size and
+    // rendering its smallest control bar.
+    //
+    // These selectors are one class short of the fullscreen ones, so the sheet
+    // still loses to them and wins against the `clamp()` defaults it overrides —
+    // which it does on source order, being appended after the main sheet.
+    const rules: string[] = [];
+    if (widths.panelPx > 0) {
+      rules.push(`html.wfs-windowed.wfs-side-panel { --wfs-panel-width: ${widths.panelPx}px; }`);
+    }
+    if (widths.chatPx > 0) {
+      rules.push(
+        `html.wfs-windowed:has(#chat:not([collapsed])) { --wfs-chat-width: ${widths.chatPx}px; }`,
+      );
+    }
+    return rules.join("\n");
+  },
+
+  getDefaultDockWidth(viewportPx) {
+    // Mirrors `clamp(320px, 26vw, 440px)`, the value BOTH docks default to in the
+    // stylesheet above — `--wfs-panel-width` and `--wfs-chat-width` are declared
+    // with the same expression on purpose, so the two docks are interchangeable and
+    // one function covers both. Change either declaration and this must change with
+    // it, in the same commit: it is the drag's floor, and a floor that drifts from
+    // the sheet lets a drag land a pixel off the default and look broken.
+    const px = Math.round(viewportPx * DOCK_DEFAULT_VIEWPORT_SHARE);
+    return Math.min(Math.max(px, DOCK_DEFAULT_FLOOR_PX), DOCK_DEFAULT_CEILING_PX);
+  },
+
+  measureDockWidth(doc, dock) {
+    const el = dock === "panel" ? doc.querySelector(YT.sideContent) : doc.querySelector(YT.liveChat);
+    if (!el) return null;
+    const width = el.getBoundingClientRect().width;
+    // 0 means the element exists but is not laid out — chat before it expands, or
+    // the panel before the mode docks it. Null, so the caller falls back rather
+    // than starting a drag from a zero-width edge.
+    return width > 0 ? width : null;
   },
 
   findNativeFullscreenButton(doc) {
@@ -1882,7 +2276,110 @@ function normalizeSitePrefs(stored: unknown): SitePrefs | null {
   return {
     autoApply: raw.autoApply,
     scrollable: typeof raw.scrollable === "boolean" ? raw.scrollable : DEFAULT_SITE_PREFS.scrollable,
+    // Both widths keep whatever number is stored, floored so nothing draws a dock
+    // narrower than the stylesheet would. There is no ceiling here on purpose: a
+    // record from a wider monitor is a real choice, and the drag's own live clamp
+    // brings it inside this window the moment the reader touches the grip. 0 stays 0,
+    // meaning "use the stylesheet's own responsive width".
+    panelWidth: normalizeDockWidth(raw.panelWidth),
+    chatWidth: normalizeDockWidth(raw.chatWidth),
+    channels: normalizeChannelRules(raw.channels),
+    captureToClipboard:
+      typeof raw.captureToClipboard === "boolean"
+        ? raw.captureToClipboard
+        : DEFAULT_SITE_PREFS.captureToClipboard,
   };
+}
+
+/**
+ * The narrowest width a stored dock record may hold, in CSS px.
+ *
+ * 320px — the lower bound of the `clamp(320px, 26vw, 440px)` both docks default to,
+ * so no stored number draws a dock narrower than the stylesheet ever would. This is
+ * the storage floor only, and it is deliberately viewport-free: a *drag* cannot go
+ * below the dock's default width for the window it is in, which on a wide monitor is
+ * more than this. See `getDefaultDockWidth` (§3) and {@link clampDockWidth}.
+ */
+export const MIN_DOCK_WIDTH_PX = 320;
+
+/**
+ * The strip of window a dock may never take, in CSS px.
+ *
+ * 24px, and it is not there to protect the video — the reader is allowed to widen a
+ * dock until the video is a sliver, because the same grip drags it straight back and
+ * refusing that is what made the paid width control feel like a trial. It is there
+ * so the grip stays on screen: the grip is 10px wide and centred on the dock's
+ * inboard edge, so an edge flush with the window's left side would leave half of it
+ * outside the viewport and the drag would be one-way.
+ *
+ * An earlier revision reserved 480px here instead, the width at which YouTube's
+ * control bar starts dropping buttons. That reads as a bug rather than a guard: on a
+ * 1366px window with both docks up it left the second dock barely a pixel of travel,
+ * so the feature looked broken to the people who had paid for it. Do not reinstate
+ * it — a narrow video is the reader's own choice and it is one drag from undone.
+ */
+export const DOCK_DRAG_RESERVE_PX = 24;
+
+/**
+ * The most per-channel rules one site may hold.
+ *
+ * 50. The list is the only stored field the reader can grow, and every entry is
+ * read on every video load, so it is bounded rather than trimmed: silently
+ * dropping the oldest rule would make a setting the reader deliberately added stop
+ * working with nothing said about it. The settings UI reports the refusal instead.
+ */
+export const MAX_CHANNEL_RULES = 50;
+
+/** The longest channel identifier accepted, so one rule cannot fill the record. */
+export const MAX_CHANNEL_ID_LENGTH = 120;
+
+/**
+ * Coerce a stored dock width: a whole number at or above the minimum, or 0.
+ *
+ * There is no upper bound — whatever the reader dragged to is what they get. The
+ * live viewport guard in {@link clampDockWidth} is the only ceiling, and it runs
+ * on every drag frame, so storage does not need to second-guess it.
+ */
+export function normalizeDockWidth(stored: unknown): number {
+  if (typeof stored !== "number" || !Number.isFinite(stored)) return 0;
+  const px = Math.round(stored);
+  if (px <= 0) return 0;
+  return Math.max(px, MIN_DOCK_WIDTH_PX);
+}
+
+/**
+ * Coerce a stored channel-rule list: strings only, trimmed, de-duplicated, and
+ * capped.
+ *
+ * Total, and never null: a damaged list reads as no rules, which is the same thing
+ * a free install has and cannot mislead anyone into thinking a rule is in force.
+ * Non-string entries are dropped individually rather than condemning the list,
+ * for the same reason every other coercion here is per-field.
+ */
+export function normalizeChannelRules(stored: unknown): readonly string[] {
+  if (!Array.isArray(stored)) return [];
+  const out: string[] = [];
+  for (const entry of stored) {
+    if (typeof entry !== "string") continue;
+    const id = entry.trim();
+    if (id === "" || id.length > MAX_CHANNEL_ID_LENGTH) continue;
+    if (out.includes(id)) continue;
+    out.push(id);
+    if (out.length >= MAX_CHANNEL_RULES) break;
+  }
+  return out;
+}
+
+/**
+ * Whether the page's channel has a rule asking for the mode.
+ *
+ * Pure, and deliberately does not read the Pro state: the gate belongs to the one
+ * caller in §9, so this stays a question about the rules alone and stays testable
+ * without an entitlement record.
+ */
+export function channelRuleMatches(prefs: SitePrefs, channel: ChannelRef | null): boolean {
+  if (!channel || channel.id === "") return false;
+  return prefs.channels.includes(channel.id);
 }
 
 /**
@@ -2348,6 +2845,25 @@ const REVEAL_HIDE_ZONE_PX = 120;
  */
 const PANEL_CLASS = "wfs-side-panel";
 
+/**
+ * Id of the second injected `<style>` element, which holds nothing but the
+ * reader's chosen dock widths.
+ *
+ * Separate from {@link STYLE_ELEMENT_ID} so a drag rewrites two short rules
+ * instead of the whole site stylesheet, and so the widths land *after* the
+ * defaults they override without the main sheet having to be regenerated.
+ */
+const DOCK_WIDTH_STYLE_ID = "wfs-dock-widths";
+
+/** Class on a dock's drag grip. Positioned by the adapter's stylesheet. */
+const DOCK_GRIP_CLASS = "wfs-dock-grip";
+
+/** Attribute naming which dock a grip moves. */
+const DOCK_GRIP_ATTR = "data-wfs-dock";
+
+/** Class on a grip while it is being dragged, so the hairline stays visible. */
+const DOCK_GRIP_DRAGGING_CLASS = "is-dragging";
+
 /** Attribute marking our injected button. */
 const BUTTON_MARKER_ATTR = "data-wfs-button";
 
@@ -2393,6 +2909,138 @@ html.wfs-windowed.wfs-scrollable,
 html.wfs-windowed.wfs-scrollable body {
   overflow-x: hidden !important;
 }
+
+/* While a dock is being dragged, nothing on the page may select text or start a
+   drag of its own. Applied to <html> for the duration of the pointer capture and
+   removed when it ends, rather than being fought per-element: a drag that crosses
+   the comment panel would otherwise select every comment it passes over.
+
+   Deliberately NOT scoped under .wfs-windowed. The class is only ever set during
+   a drag, which only happens inside the mode, and scoping it would make it one
+   more thing that has to be true at the same time for a drag to behave. */
+html.wfs-dock-resizing,
+html.wfs-dock-resizing body {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+/* The cursor has to survive leaving the 10px grip. A drag routinely travels a
+   couple of hundred pixels, and without this the pointer reverts to whatever is
+   under it mid-drag — an I-beam over the comments — which reads as the drag
+   having been dropped. */
+html.wfs-dock-resizing * {
+  cursor: col-resize !important;
+}
+
+/* -------------------------------------------------------------------------
+   The Pro prompt.
+
+   Shown in the page, over the video, when a control the reader pressed is part
+   of the paid tier. It exists because exactly one Pro feature is visible to
+   someone who never opens the settings — the capture button in the player bar —
+   and a locked door that says so converts, where a hidden one does not exist.
+
+   Our own classes only, so it is site-independent: it is appended to <body> and
+   positioned against the viewport, and no rule here is nested under
+   .wfs-windowed because the capture button is in the player bar whether the mode
+   is on or off.
+   ------------------------------------------------------------------------- */
+.wfs-pro-prompt {
+  position: fixed !important;
+  inset: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  /* Above everything the adapter's stylesheet declares. The scale in §3 tops out
+     at --wfs-z-overlay, and this is one above it: a prompt the reader cannot see
+     is worse than a prompt over a menu. */
+  z-index: 2147483643 !important;
+  background: rgba(0, 0, 0, 0.6) !important;
+  /* The system stack, so the card matches the browser rather than the page. */
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif !important;
+}
+
+.wfs-pro-prompt__card {
+  box-sizing: border-box !important;
+  width: min(380px, calc(100vw - 32px)) !important;
+  padding: 24px !important;
+  border-radius: 12px !important;
+  background: #ffffff !important;
+  color: #0f0f0f !important;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45) !important;
+  text-align: left !important;
+}
+
+.wfs-pro-prompt__title {
+  margin: 0 0 8px !important;
+  font-size: 18px !important;
+  font-weight: 600 !important;
+  line-height: 1.3 !important;
+}
+
+.wfs-pro-prompt__body {
+  margin: 0 0 20px !important;
+  font-size: 14px !important;
+  line-height: 1.5 !important;
+  color: #444444 !important;
+}
+
+.wfs-pro-prompt__actions {
+  display: flex !important;
+  flex-wrap: wrap !important;
+  gap: 8px !important;
+}
+
+.wfs-pro-prompt__action {
+  box-sizing: border-box !important;
+  padding: 9px 16px !important;
+  border: 1px solid rgba(0, 0, 0, 0.16) !important;
+  border-radius: 999px !important;
+  background: transparent !important;
+  color: inherit !important;
+  font: inherit !important;
+  font-size: 14px !important;
+  cursor: pointer !important;
+}
+
+.wfs-pro-prompt__action.is-primary {
+  border-color: transparent !important;
+  background: #0f6cbd !important;
+  color: #ffffff !important;
+  font-weight: 600 !important;
+}
+
+.wfs-pro-prompt__action:focus-visible {
+  outline: 2px solid #0f6cbd !important;
+  outline-offset: 2px !important;
+}
+
+/* A brief message over the video: "Frame saved", or why it was not.
+
+   Not a dialog, because none of it needs an answer, and not written into the
+   settings error region either — the reader is looking at a video, not at a
+   settings page, and a message they will never see is the same as no message.
+
+   Non-interactive on purpose, and that is the hover-zone mistake avoided rather
+   than a detail: it appears over the control bar, and anything there that accepts
+   pointer events swallows a click meant for the button underneath it. */
+.wfs-toast {
+  position: fixed !important;
+  left: 50% !important;
+  bottom: 88px !important;
+  transform: translateX(-50%) !important;
+  z-index: 2147483643 !important;
+  max-width: min(420px, calc(100vw - 32px)) !important;
+  padding: 10px 16px !important;
+  border-radius: 8px !important;
+  background: rgba(0, 0, 0, 0.85) !important;
+  color: #ffffff !important;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif !important;
+  font-size: 14px !important;
+  line-height: 1.4 !important;
+  text-align: center !important;
+  pointer-events: none !important;
+}
 `;
 
 /**
@@ -2407,6 +3055,53 @@ function injectStyles(doc: Document, siteCss: string): void {
   style.id = STYLE_ELEMENT_ID;
   style.textContent = siteCss ? `${BASE_CSS}\n${siteCss}` : BASE_CSS;
   (doc.head ?? doc.documentElement).appendChild(style);
+}
+
+/** Class on `<html>` for the duration of a dock drag. */
+const DOCK_RESIZING_CLASS = "wfs-dock-resizing";
+
+/**
+ * A fallback dock width for the case where nothing is stored and the dock cannot
+ * be measured — the middle of the range the stylesheets' own `clamp()` covers.
+ *
+ * Only reachable when a drag starts before the dock has laid out, which the grips'
+ * own visibility rules make unlikely; it exists so that case produces a usable
+ * width rather than a drag anchored on zero.
+ */
+const DOCK_WIDTH_FALLBACK_PX = 380;
+
+/**
+ * Write the reader's chosen dock widths into their own `<style>` element,
+ * creating it on first use and appending it after the main sheet.
+ *
+ * Appended after, and that is the whole reason this is a second element: the
+ * widths override `clamp()` defaults declared with the same selectors, so they win
+ * on source order — while still losing to the more specific fullscreen rules that
+ * collapse a dock to zero. Regenerating the main sheet on every frame of a drag
+ * would re-parse the whole site stylesheet instead of two rules.
+ *
+ * An empty string empties the element rather than removing it: a drag back to the
+ * default has to stop overriding, and keeping the node means the next write does
+ * not have to re-establish document order.
+ */
+function writeDockWidthCss(doc: Document, css: string): void {
+  let style = doc.getElementById(DOCK_WIDTH_STYLE_ID);
+  // Nothing chosen and nothing to clear: no element is created. The common case is
+  // a reader who has never dragged anything, and an empty `<style>` sitting in
+  // their head would be one more thing for someone reading the page — or a script
+  // reaching for this id — to have to explain.
+  if (!style && css === "") return;
+  if (!style) {
+    style = doc.createElement("style");
+    style.id = DOCK_WIDTH_STYLE_ID;
+    (doc.head ?? doc.documentElement).appendChild(style);
+  }
+  if (style.textContent !== css) style.textContent = css;
+}
+
+/** Drop the dock-width sheet, used on teardown so a navigation leaves nothing. */
+function removeDockWidthCss(doc: Document): void {
+  doc.getElementById(DOCK_WIDTH_STYLE_ID)?.remove();
 }
 
 // ===========================================================================
@@ -3233,12 +3928,26 @@ const PANEL_CLOSE_LABEL = "Close comments";
 /** Class on the panel's close button. Styled by the adapter's stylesheet. */
 const PANEL_CLOSE_CLASS = "wfs-panel-close";
 
+/** Accessible name for the frame-capture control. */
+const CAPTURE_BUTTON_LABEL = "Save this frame";
+
+/** Accessible name for a dock's drag grip, with the dock named. */
+const DOCK_GRIP_LABELS = {
+  panel: "Drag to resize the comments column",
+  chat: "Drag to resize the chat column",
+} as const;
+
 /**
  * The controls we inject, in on-screen order starting immediately to the right
  * of the site's own fullscreen button. The value doubles as the marker
  * attribute's value, which is how a re-render is de-duplicated per control.
+ *
+ * Capture is first, so it lands between the site's fullscreen button and ours.
+ * The two the reader uses constantly keep the positions they have had since
+ * 1.2.0 — moving them to make room for a new control would mean everyone
+ * re-learning where the button they press every video is.
  */
-const BUTTON_ROLES = ["mode", "panel"] as const;
+const BUTTON_ROLES = ["capture", "mode", "panel"] as const;
 
 type ButtonRole = (typeof BUTTON_ROLES)[number];
 
@@ -3372,6 +4081,41 @@ function buildPanelIcon(doc: Document): Element {
 }
 
 /**
+ * A camera for frame capture: a body, a lens, and the raised strip above it.
+ *
+ * Not a download arrow, and not a pair of scissors. The arrow describes what
+ * happens to the file rather than what the button does, and it is also the glyph
+ * the reader has already learned means "download this video" from every other
+ * extension in this space — a button that promised a video and saved a PNG would
+ * be a genuine surprise. A camera names the action.
+ */
+function buildCaptureIcon(doc: Document): Element {
+  const svg = createIconSvg(doc);
+  // The raised strip over the lens, drawn first so the body sits on top of it.
+  appendShape(doc, svg, "path", {
+    d: "M14 9h8v3h-8z",
+    fill: "#ffffff",
+  });
+  appendShape(doc, svg, "rect", {
+    x: "7",
+    y: "12",
+    width: "22",
+    height: "15",
+    rx: "2.5",
+    fill: "none",
+    stroke: "#ffffff",
+    "stroke-width": "2",
+  });
+  appendShape(doc, svg, "circle", {
+    cx: "18",
+    cy: "19.5",
+    r: "4",
+    fill: "#ffffff",
+  });
+  return svg;
+}
+
+/**
  * A plain X for the panel's close button.
  *
  * Stroked with `currentColor` rather than the flat white the player-bar icons
@@ -3415,6 +4159,217 @@ function buildPanelCloseButton(doc: Document, onActivate: () => void): HTMLEleme
     onActivate();
   });
   return button;
+}
+
+/** Which dock a grip moves. */
+export type DockId = "panel" | "chat";
+
+/** How far one arrow-key press moves a dock's edge, in CSS px. */
+const DOCK_KEY_STEP_PX = 16;
+
+/** The same with `Shift` held, for crossing the range without holding a key. */
+const DOCK_KEY_STEP_LARGE_PX = 64;
+
+/**
+ * Clamp a proposed dock width to the range a drag is allowed to reach.
+ *
+ * Pure, so the guard is testable without a window.
+ *
+ * `floorPx` is the dock's default width for this window — what the stylesheet would
+ * give it — and the drag stops there on the way in. Shrinking below the free default
+ * is not something the paid control offers: it can only open the dock up.
+ *
+ * Outwards, the dock may take the whole window bar {@link DOCK_DRAG_RESERVE_PX} and
+ * whatever the other dock is holding. The video is allowed to end up a sliver. That
+ * is the point: the reader who wants to read chat at full width drags there, and
+ * drags back when they want to watch. `otherDockPx` is the width the *other* dock is
+ * taking right now, so two docks share one budget instead of each one measuring the
+ * window as if it were alone.
+ *
+ * On a window too narrow for the floor and the reserve together, the floor wins: a
+ * dock the reader can see and drag is a better answer than a correct arithmetic
+ * result nobody can grab.
+ */
+export function clampDockWidth(options: {
+  proposedPx: number;
+  otherDockPx: number;
+  viewportPx: number;
+  floorPx: number;
+}): number {
+  const { proposedPx, otherDockPx, viewportPx } = options;
+  // Never below the storage floor, whatever the caller asked for: a floor under
+  // 320px would let a drag write a width no stylesheet would ever draw.
+  const floorPx = Math.max(Math.round(options.floorPx), MIN_DOCK_WIDTH_PX);
+  const ceiling = viewportPx - otherDockPx - DOCK_DRAG_RESERVE_PX;
+  if (ceiling < floorPx) return floorPx;
+  return Math.round(Math.min(Math.max(proposedPx, floorPx), ceiling));
+}
+
+/**
+ * Build one dock's drag grip.
+ *
+ * Hangs off `<body>` and is positioned onto the dock's inboard edge by the
+ * adapter's stylesheet, for the reason recorded against `.wfs-panel-close`: the
+ * dock is the site's own element and its renderer rebuilds that subtree.
+ *
+ * A `<div>` with an explicit role rather than a `<button>`: a button's job is to
+ * be pressed, and every browser and assistive technology treats it that way — the
+ * separator role is what says "this thing has a position you can change", which is
+ * also what makes the arrow-key handling below expected behaviour rather than a
+ * surprise.
+ *
+ * Pointer capture is what makes the drag survive leaving the 10px target. Without
+ * it a fast drag loses the pointer the moment it outruns the grip, and the reader
+ * is left holding a mouse button that no longer does anything.
+ */
+function buildDockGrip(
+  doc: Document,
+  dock: DockId,
+  handlers: {
+    /** The dock's current width in px, for a drag or a key press to start from. */
+    readWidth: () => number;
+    /** The other dock's current width, so the two share one width budget. */
+    readOtherWidth: () => number;
+    /** The narrowest this dock may be dragged: its default width for this window. */
+    readFloor: () => number;
+    /** Called with every new width while the drag is live. Must be cheap. */
+    onPreview: (px: number) => void;
+    /** Called once when the drag ends, with the width to persist. */
+    onCommit: (px: number) => void;
+  },
+): HTMLElement {
+  const grip = doc.createElement("div");
+  grip.className = DOCK_GRIP_CLASS;
+  grip.setAttribute(DOCK_GRIP_ATTR, dock);
+  grip.setAttribute("role", "separator");
+  grip.setAttribute("aria-orientation", "vertical");
+  grip.setAttribute("aria-label", DOCK_GRIP_LABELS[dock]);
+  // Reachable by keyboard, so the width is not a mouse-only setting.
+  grip.tabIndex = 0;
+
+  const view = doc.defaultView ?? window;
+
+  /** Where the pointer went down, and how wide the dock was at that moment. */
+  let startX = 0;
+  let startWidth = 0;
+  let pointerId: number | null = null;
+
+  /**
+   * The width the last frame was asked to paint, and the frame it is waiting on.
+   *
+   * Coalesced to one write per frame. A pointermove can fire several times per
+   * frame on a high-rate mouse, and each write here re-parses a small stylesheet
+   * and invalidates the player's layout — so an uncoalesced drag does that work
+   * two or three times for one painted frame.
+   */
+  let pendingPx: number | null = null;
+  let frame: number | null = null;
+
+  const flush = (): void => {
+    frame = null;
+    if (pendingPx === null) return;
+    const px = pendingPx;
+    pendingPx = null;
+    handlers.onPreview(px);
+  };
+
+  const schedule = (px: number): void => {
+    pendingPx = px;
+    if (frame !== null) return;
+    frame = view.requestAnimationFrame(flush);
+  };
+
+  /** The width a pointer at `clientX` is asking for, already clamped. */
+  const widthFor = (clientX: number): number =>
+    clampDockWidth({
+      // Both docks take width from the RIGHT edge, so dragging the grip left —
+      // a decreasing clientX — makes the dock wider. Hence the subtraction.
+      proposedPx: startWidth - (clientX - startX),
+      otherDockPx: handlers.readOtherWidth(),
+      viewportPx: view.innerWidth,
+      floorPx: handlers.readFloor(),
+    });
+
+  const endDrag = (clientX: number | null): void => {
+    if (pointerId === null) return;
+    if (frame !== null) {
+      view.cancelAnimationFrame(frame);
+      frame = null;
+    }
+    pendingPx = null;
+
+    const finalPx = clientX === null ? handlers.readWidth() : widthFor(clientX);
+    try {
+      grip.releasePointerCapture(pointerId);
+    } catch {
+      // Already released, which is the ordinary case on `pointerup`.
+    }
+    pointerId = null;
+    grip.classList.remove(DOCK_GRIP_DRAGGING_CLASS);
+    doc.documentElement.classList.remove(DOCK_RESIZING_CLASS);
+    handlers.onCommit(finalPx);
+  };
+
+  grip.addEventListener("pointerdown", (event) => {
+    const pointer = event as PointerEvent;
+    // Primary button only. A right-click on the grip belongs to the page's own
+    // context menu, and a middle-click is a scroll gesture.
+    if (pointer.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    startX = pointer.clientX;
+    startWidth = handlers.readWidth();
+    pointerId = pointer.pointerId;
+    try {
+      grip.setPointerCapture(pointerId);
+    } catch {
+      // Capture refused: the drag still works while the pointer stays over the
+      // grip, which is worse but not broken, so it is not worth refusing over.
+    }
+    grip.classList.add(DOCK_GRIP_DRAGGING_CLASS);
+    doc.documentElement.classList.add(DOCK_RESIZING_CLASS);
+  });
+
+  grip.addEventListener("pointermove", (event) => {
+    if (pointerId === null) return;
+    schedule(widthFor((event as PointerEvent).clientX));
+  });
+
+  grip.addEventListener("pointerup", (event) => {
+    endDrag((event as PointerEvent).clientX);
+  });
+
+  // `pointercancel` is the browser taking the pointer away — a touch turning into
+  // a page scroll, a stylus leaving range. The width stays wherever the last
+  // preview put it rather than snapping back: the reader saw that width, and
+  // reverting it would look like the drag had been undone for no reason.
+  grip.addEventListener("pointercancel", () => {
+    endDrag(null);
+  });
+
+  grip.addEventListener("keydown", (event) => {
+    const key = event as KeyboardEvent;
+    if (key.key !== "ArrowLeft" && key.key !== "ArrowRight") return;
+    key.preventDefault();
+    // Left widens, for the same reason the drag maths subtracts: the dock's edge
+    // is what moves, and moving it left gives the dock more room.
+    const step = key.shiftKey ? DOCK_KEY_STEP_LARGE_PX : DOCK_KEY_STEP_PX;
+    const delta = key.key === "ArrowLeft" ? step : -step;
+    const next = clampDockWidth({
+      proposedPx: handlers.readWidth() + delta,
+      otherDockPx: handlers.readOtherWidth(),
+      viewportPx: view.innerWidth,
+      floorPx: handlers.readFloor(),
+    });
+    // One press is one width, so it previews and commits together: there is no
+    // drag in progress to coalesce, and a keyboard user who nudges once and walks
+    // away must not lose the change to a commit that never came.
+    handlers.onPreview(next);
+    handlers.onCommit(next);
+  });
+
+  return grip;
 }
 
 /**
@@ -3879,6 +4834,154 @@ function resolveDescriptor(
   };
 }
 
+// --- Frame capture ---------------------------------------------------------
+
+/** What one capture attempt produced. */
+export type CaptureResult =
+  | { outcome: "ok"; blob: Blob }
+  /** The frame drew, but every sampled pixel was pure black. */
+  | { outcome: "blank" }
+  | { outcome: "no-video" }
+  | { outcome: "failed"; error: string };
+
+/**
+ * How many points across the frame are sampled to decide whether it is blank.
+ *
+ * A 3×3 grid, inset from the edges. Nine single-pixel reads rather than one read
+ * of the whole frame: `getImageData` over a 4K canvas copies 33 million bytes to
+ * answer a question nine pixels can answer, and this runs on a click.
+ */
+const CAPTURE_SAMPLE_GRID = 3;
+
+/**
+ * Capture the current frame.
+ *
+ * The blank check is the interesting part, and it is deliberately not a claim
+ * about why. Protected playback — a rental, a film — produces one of two things in
+ * Chrome: a canvas that throws on read because the draw tainted it, or a frame of
+ * pure black. Both arrive here as `blank`, and the message the reader gets names
+ * the likely cause without asserting it, because a video that has genuinely faded
+ * to black is indistinguishable from a protected one at this level and telling
+ * someone their unprotected video is protected is worse than being vague.
+ *
+ * No retry, and no loop. A frame the reader wanted is a frame they can ask for
+ * again, and the alternative is a bounded loop that saves a *different* frame from
+ * the one they were looking at.
+ */
+export async function captureVideoFrame(video: HTMLVideoElement): Promise<CaptureResult> {
+  const width = video.videoWidth;
+  const height = video.videoHeight;
+  // Metadata has not arrived, so there is no frame yet — distinct from a failure,
+  // because waiting a second and pressing again works.
+  if (!width || !height) return { outcome: "no-video" };
+
+  const doc = video.ownerDocument;
+  const canvas = doc.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return { outcome: "failed", error: "no drawing context" };
+
+  try {
+    ctx.drawImage(video, 0, 0, width, height);
+  } catch (err) {
+    // Some builds refuse the draw outright for protected media rather than
+    // tainting the canvas. Reported as blank, not as a failure: the reader's
+    // situation and the message they need are identical either way.
+    warn(DIAGNOSTIC.captureBlank, "The frame could not be drawn.", {
+      error: describeError(err),
+    });
+    return { outcome: "blank" };
+  }
+
+  // Reading the canvas is what a tainted one refuses, so this doubles as the
+  // protected-media check and the blank check.
+  try {
+    let lit = false;
+    for (let row = 1; row <= CAPTURE_SAMPLE_GRID && !lit; row += 1) {
+      for (let col = 1; col <= CAPTURE_SAMPLE_GRID && !lit; col += 1) {
+        const x = Math.floor((width * col) / (CAPTURE_SAMPLE_GRID + 1));
+        const y = Math.floor((height * row) / (CAPTURE_SAMPLE_GRID + 1));
+        const [r = 0, g = 0, b = 0] = ctx.getImageData(x, y, 1, 1).data;
+        if (r !== 0 || g !== 0 || b !== 0) lit = true;
+      }
+    }
+    if (!lit) return { outcome: "blank" };
+  } catch {
+    return { outcome: "blank" };
+  }
+
+  const blob = await new Promise<Blob | null>((resolve) => {
+    // PNG, not JPEG: this is a still of someone's video, and a lossy re-encode of
+    // an already-lossy stream is visible on flat colour and text.
+    canvas.toBlob((result) => resolve(result), "image/png");
+  });
+  if (!blob) return { outcome: "failed", error: "encoding produced nothing" };
+  return { outcome: "ok", blob };
+}
+
+/**
+ * Save a blob to the reader's downloads using a temporary `<a download>`.
+ *
+ * Deliberately not `chrome.downloads`. That API needs the `downloads` permission,
+ * which shows up on the install screen as "Manage your downloads" and would be a
+ * new permission warning on an update — a heavy price for a filename we can get
+ * from an anchor. The object URL is revoked immediately after the click, which is
+ * safe because the browser has already taken its own reference by then.
+ */
+function downloadBlob(doc: Document, blob: Blob, filename: string): void {
+  const view = doc.defaultView ?? window;
+  const url = view.URL.createObjectURL(blob);
+  const link = doc.createElement("a");
+  link.href = url;
+  link.download = filename;
+  // Not appended to the document. A detached anchor's click still downloads, and
+  // appending would put an element of ours into the site's tree for a frame.
+  link.click();
+  view.URL.revokeObjectURL(url);
+}
+
+/**
+ * Put an image on the clipboard. Returns whether it worked.
+ *
+ * Only ever called from inside a click handler: the Clipboard API requires a user
+ * gesture and a focused document, and both are true of a button press and neither
+ * is true of anything else this extension does.
+ */
+async function copyBlobToClipboard(blob: Blob): Promise<boolean> {
+  try {
+    if (typeof ClipboardItem === "undefined" || !navigator.clipboard?.write) return false;
+    await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+    return true;
+  } catch {
+    // Refused, unfocused, or unsupported. The caller falls back to a download,
+    // which is the outcome the reader wanted either way.
+    return false;
+  }
+}
+
+/**
+ * Build the filename for a captured frame: the site's own name for what is
+ * playing, then the wall-clock time, then `.png`.
+ *
+ * The timestamp is what keeps a second capture of the same video from overwriting
+ * the first, and it is local time rather than an ISO instant because the file is
+ * for a person looking at their downloads folder. Colons are not legal in a
+ * filename on Windows, hence the dashes.
+ */
+export function captureFilename(stem: string | null, now: Date): string {
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  const stamp =
+    `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
+    `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  // Anything a filesystem might object to becomes a dash, and a run of them
+  // collapses, so a site that hands back a title rather than an id still produces
+  // a sane name.
+  const safe = (stem ?? "frame").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return `windowed-fullscreen-${safe === "" ? "frame" : safe}-${stamp}.png`;
+}
+
 /**
  * How long to keep trying to re-enter the mode after browser fullscreen ends.
  * Six attempts at 250ms covers the site rebuilding its player without leaving a
@@ -3907,6 +5010,31 @@ const FULLSCREEN_GRACE_MS = 900;
  * on screen.
  */
 const PAGE_HANDOFF_GRACE_MS = 900;
+
+/**
+ * How long a per-channel auto-apply rule waits for the page to say which channel
+ * it is showing.
+ *
+ * 32 attempts at 250ms, so eight seconds.
+ *
+ * This exists because a per-channel rule was a race the page always won. The
+ * channel is named by the owner row, which lives inside the below-video block —
+ * and that block mounts SEVERAL SECONDS after the player, which is already written
+ * down on `hasSideContent` in §1 because it caused a different bug there. Every
+ * moment auto-apply is otherwise triggered lands before then: preferences
+ * resolving, the entitlement record arriving, our button appearing (the player, not
+ * the owner row), and the video changing. So `readChannel` returned null, the rule
+ * did not match, and the `autoApplied` latch meant nothing ever looked again. The
+ * per-site switch never had this problem because it needs no page content to
+ * decide.
+ *
+ * Eight seconds because "several seconds" is the observation this has to survive,
+ * and a rule that fires late is still the thing the reader asked for while a rule
+ * that never fires is not. Bounded, like every other loop here: at the cap it emits
+ * `channel-rule-abandoned` and stops rather than watching the page forever.
+ */
+const CHANNEL_RULE_RETRY_MS = 250;
+const MAX_CHANNEL_RULE_ATTEMPTS = 32;
 
 /**
  * Where the page lands once browser fullscreen ends.
@@ -3997,6 +5125,17 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
   injectStyles(doc, adapter.getActiveModeCss());
 
   let prefs: SitePrefs = { ...DEFAULT_SITE_PREFS };
+
+  /**
+   * The entitlement record, held rather than read per press.
+   *
+   * `isPro` is a pure predicate over this for the reason its own comment gives: the
+   * controls that gate decide inside a click handler, where there is nothing to
+   * await into. The record is loaded once below and followed with
+   * {@link watchProState}, so a key accepted in the options tab unlocks this page
+   * without a reload — the same shape as the preference watch.
+   */
+  let pro: ProState = { ...DEFAULT_PRO_STATE };
 
   const controller = new WindowedFullscreenController(doc, () => modeFor(prefs));
   const resolve = (): SiteDescriptor | null => resolveDescriptor(adapter, doc, modeFor(prefs));
@@ -4109,8 +5248,103 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
    */
   controller.setModeEndListener(noteSessionEnd);
 
+  /**
+   * Whether auto-apply should fire on this page, from the per-site switch or a
+   * per-channel rule.
+   *
+   * The per-site switch has been free since 1.2.0 and stays free. Per-channel rules
+   * are Pro, and the gate is here rather than at the point the rules are stored: a
+   * reader whose entitlement lapses keeps their rules, so re-entering a key puts
+   * them straight back to work instead of asking them to type a channel list again.
+   */
+  const autoApplyWanted = (): boolean => {
+    if (autoApplyEnabled) return true;
+    if (!isPro(pro)) return false;
+    return channelRuleMatches(prefs, adapter.readChannel?.(doc) ?? null);
+  };
+
+  /**
+   * Whether a per-channel rule could still turn out to apply here, but cannot be
+   * judged yet because the page has not named its channel.
+   *
+   * Deliberately narrow: true only with an entitlement, with rules stored, with the
+   * site offering a channel reader, and with that reader coming back empty. So a
+   * reader with no rules schedules no retries at all, and neither does a site that
+   * has no notion of a channel.
+   *
+   * The known limit: on an in-app navigation the owner row can still hold the
+   * PREVIOUS video's channel for a frame or two, and a read that returns the old
+   * channel counts as decided here. YouTube blanks the row during the swap far more
+   * often than it leaves it stale, so in practice this waits rather than answering
+   * from the last video — and the alternative, refusing a channel until it differs
+   * from the one before it, would refuse two videos from the same channel forever.
+   */
+  const channelRuleUndecided = (): boolean => {
+    if (autoApplyEnabled || !isPro(pro) || prefs.channels.length === 0) return false;
+    if (!adapter.readChannel) return false;
+    return adapter.readChannel(doc) === null;
+  };
+
+  /**
+   * Attempts already spent waiting for the channel, the pending retry, and the
+   * one-shot flag that stops the give-up line repeating. All three are reset per
+   * video, so each video gets its own window.
+   */
+  let channelRuleAttempts = 0;
+  let channelRuleGaveUp = false;
+  let channelRuleTimer: number | null = null;
+
+  const clearChannelRuleWatch = (): void => {
+    if (channelRuleTimer === null) return;
+    timers().clearTimeout(channelRuleTimer);
+    channelRuleTimer = null;
+  };
+
+  /** Start the window over: a new video, or an entitlement that has just arrived. */
+  const resetChannelRuleWatch = (): void => {
+    clearChannelRuleWatch();
+    channelRuleAttempts = 0;
+    channelRuleGaveUp = false;
+  };
+
+  /**
+   * Look again shortly, because the only thing missing is the channel.
+   *
+   * A no-op unless a rule is genuinely waiting on the page, so this costs nothing
+   * for the reader who has no rules — which is every reader without a licence.
+   */
+  const scheduleChannelRuleRetry = (): void => {
+    if (channelRuleTimer !== null || channelRuleGaveUp) return;
+    if (!channelRuleUndecided()) return;
+    if (channelRuleAttempts >= MAX_CHANNEL_RULE_ATTEMPTS) {
+      // Give up loudly, once. The page has had five seconds to name its channel;
+      // waiting longer would put the mode on top of a reader already watching.
+      channelRuleGaveUp = true;
+      warn(
+        DIAGNOSTIC.channelRuleAbandoned,
+        "The page never named its channel, so per-channel auto-apply did not run.",
+        { siteId: adapter.siteId, attempts: channelRuleAttempts },
+      );
+      return;
+    }
+    channelRuleAttempts += 1;
+    channelRuleTimer = timers().setTimeout(() => {
+      channelRuleTimer = null;
+      maybeAutoApply();
+    }, CHANNEL_RULE_RETRY_MS) as unknown as number;
+  };
+
   const maybeAutoApply = (): void => {
-    if (!prefResolved || !autoApplyEnabled || autoApplied || controller.isActive) return;
+    if (!prefResolved || autoApplied || controller.isActive) return;
+    if (!autoApplyWanted()) {
+      // Not "no", possibly "not yet": the owner row mounts on the site's own
+      // schedule, later than everything that triggers this. See
+      // CHANNEL_RULE_RETRY_MS for the race this closes.
+      scheduleChannelRuleRetry();
+      return;
+    }
+    // Decided, so nothing is waiting on the page any more.
+    clearChannelRuleWatch();
     // The reader has just left fullscreen for the plain player. Both refusals
     // hold until one of the four events in the latch's comment above.
     if (autoApplySuppressed || Date.now() < normalPlayerUntilMs) return;
@@ -4638,6 +5872,11 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
   const disposePrefWatch = watchSitePrefs(adapter.siteId, (next) => {
     prefs = next;
     autoApplyEnabled = next.autoApply;
+    // The stored widths are the durable copy of what a drag already applied here,
+    // so this is a no-op for the tab that did the dragging and the whole point for
+    // any other tab. `applyDockWidths` skips the write when the text is unchanged,
+    // so the common case costs a string comparison.
+    adoptStoredWidths(next);
     reapplyMode();
   });
 
@@ -4652,10 +5891,334 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
   });
   doc.body.appendChild(panelCloseButton);
 
+  // -------------------------------------------------------------------------
+  // Resizable docks (Pro).
+  //
+  // The widths themselves are one CSS custom property each, which is why this is
+  // a small amount of code for a feature that moves the whole layout: §3 already
+  // routes every rule that narrows something past a dock through
+  // `--wfs-panel-width`, `--wfs-chat-width` and `--wfs-docked-width`, so the docks
+  // cannot disagree about their shared edge and there is exactly one number to
+  // write.
+  //
+  // Three things here are load-bearing:
+  //
+  //  - The width goes into a stylesheet of ours, never inline on <html>. See
+  //    `getDockWidthCss` in §3: an inline custom property would outrank the
+  //    fullscreen rule that collapses a dock to zero, and hand the site a player
+  //    still holding a panel-sized gap to measure.
+  //  - The site is asked to re-measure on drag END only. `refreshGeometry` is a
+  //    synthetic resize, YouTube answers a resize with a relayout, and a relayout
+  //    is when it strips `ytp-big-mode` — so nudging per pointermove turns one
+  //    width change into a contest that burns the reassertion budget in seconds.
+  //    The same reasoning as `GEOMETRY_REPAIR_DEBOUNCE_MS`, one level up.
+  //  - The clamp reads the OTHER dock's width, so the two docks share one width
+  //    budget instead of each measuring the window as if it were alone. The budget is
+  //    the whole window bar a grabbable strip: a dock may take almost all of it and
+  //    leave the video a sliver, because the same grip drags it straight back.
+  // -------------------------------------------------------------------------
+
+  /** Whether this site's docks can be resized at all. */
+  const dockResizeSupported = typeof adapter.getDockWidthCss === "function";
+
+  /**
+   * The width in force for each dock: the reader's stored choice, or 0 meaning
+   * "whatever the stylesheet's own responsive default works out to".
+   *
+   * Session-local and written by the drag before storage confirms, so the layout
+   * follows the pointer rather than the round trip. `prefs` is the durable copy and
+   * the preference watch reconciles the two.
+   */
+  const liveWidths = { panelPx: 0, chatPx: 0 };
+
+  /**
+   * The narrowest a drag may make either dock right now: the width the stylesheet
+   * itself would give it at this window width.
+   *
+   * Read per drag frame rather than once, because it follows the window — the sheet's
+   * default is a share of the viewport, so a resized window moves the floor with it.
+   */
+  const dockWidthFloor = (): number =>
+    Math.max(
+      adapter.getDefaultDockWidth?.(doc.defaultView?.innerWidth ?? 0) ?? MIN_DOCK_WIDTH_PX,
+      MIN_DOCK_WIDTH_PX,
+    );
+
+  /**
+   * Put the widths on screen, each brought inside what THIS window can hold.
+   *
+   * The clamp here is not a duplicate of the drag's. A stored width outlives the
+   * window it was chosen in: drag chat to 1500px on a monitor, open the same video on
+   * a 1200px laptop, and the raw number would render a dock wider than the viewport —
+   * which puts its grip off the left edge, and a grip nobody can reach is a width
+   * nobody can undo. So the reader's number is kept as stored, and only what is
+   * PAINTED is clamped. Widen the window again and the full width comes back.
+   *
+   * Chat is resolved first because it holds the outer edge, and the panel is then
+   * measured against what chat actually took rather than what it asked for.
+   */
+  const applyDockWidths = (): void => {
+    if (!adapter.getDockWidthCss) return;
+    const viewportPx = doc.defaultView?.innerWidth ?? 0;
+    const floorPx = dockWidthFloor();
+    // 0 means "let the stylesheet's own responsive width decide", so it passes
+    // through untouched: clamping it would turn the default into a fixed number that
+    // stops following the window.
+    // A viewport of 0 is a document with no window to measure, which only happens
+    // during teardown. The stored number goes through unchanged rather than being
+    // clamped against a window that does not exist.
+    const fit = (px: number, otherDockPx: number): number =>
+      px > 0 && viewportPx > 0
+        ? clampDockWidth({ proposedPx: px, otherDockPx, viewportPx, floorPx })
+        : Math.max(px, 0);
+    const chatPx = fit(liveWidths.chatPx, 0);
+    const panelPx = fit(liveWidths.panelPx, isDockVisible("chat") ? chatPx : 0);
+    writeDockWidthCss(doc, adapter.getDockWidthCss({ panelPx, chatPx }));
+  };
+
+  /**
+   * Re-fit on a window resize, so shrinking the window cannot leave a dock wider
+   * than the viewport with its grip off the edge.
+   *
+   * Not tied to the grips: a reader whose licence has lapsed keeps the widths they
+   * chose, so the fit has to keep running when there is nothing left to drag.
+   * `writeDockWidthCss` skips a write when the text is unchanged, so a resize that
+   * changes no width costs a string comparison.
+   */
+  const onViewportResize = (): void => {
+    applyDockWidths();
+  };
+  if (dockResizeSupported) {
+    doc.defaultView?.addEventListener("resize", onViewportResize, { passive: true });
+  }
+
+  /** The width a drag on this dock should start from. */
+  const currentDockWidth = (dock: DockId): number => {
+    const stored = dock === "panel" ? liveWidths.panelPx : liveWidths.chatPx;
+    if (stored > 0) return stored;
+    // Nothing stored, so the sheet's `clamp()` is in force and cannot be read back
+    // as a number — measure what is on screen instead. See `measureDockWidth`.
+    return Math.round(adapter.measureDockWidth?.(doc, dock) ?? 0) || DOCK_WIDTH_FALLBACK_PX;
+  };
+
+  /** Whether a dock is currently taking viewport width (visible on screen). */
+  const isDockVisible = (dock: DockId): boolean => {
+    if (dock === "panel") return doc.documentElement.classList.contains(PANEL_CLASS);
+    // Chat is visible when #chat exists and is not collapsed.
+    const chat = doc.querySelector("#chat");
+    return chat !== null && !chat.hasAttribute("collapsed");
+  };
+
+  /**
+   * Take the widths from a preferences record and put them on screen.
+   *
+   * Only ever widens the source of truth in one direction: storage is authoritative
+   * for a page that did not do the dragging, and for the page that did, the stored
+   * value is what the drag just wrote, so adopting it changes nothing.
+   */
+  const adoptStoredWidths = (source: SitePrefs): void => {
+    liveWidths.panelPx = source.panelWidth;
+    liveWidths.chatPx = source.chatWidth;
+    applyDockWidths();
+  };
+
+  const setDockWidth = (dock: DockId, px: number): void => {
+    if (dock === "panel") liveWidths.panelPx = px;
+    else liveWidths.chatPx = px;
+    applyDockWidths();
+  };
+
+  const commitDockWidth = (dock: DockId, px: number): void => {
+    setDockWidth(dock, px);
+    // One re-measure for one width change, at the end, exactly as the comment
+    // block above requires.
+    controller.refreshGeometry();
+    const patch: Partial<SitePrefs> = dock === "panel" ? { panelWidth: px } : { chatWidth: px };
+    void setSitePrefs(adapter.siteId, patch).then((result) => {
+      if (result.ok) return;
+      // The width the reader dragged to is still on screen and still correct for
+      // this page; only the durable copy is missing. Said out loud rather than
+      // silently reverted, because reverting would undo something they can see.
+      showToast(doc, "That width could not be saved for next time.");
+    });
+  };
+
+  /**
+   * The grips, mounted only for an entitled reader.
+   *
+   * Absent rather than present-and-locked, deliberately. The capture control is the
+   * one paid surface shown to everybody, because it is the only one a reader who
+   * never opens the settings will meet; a grip is reachable only by someone already
+   * exploring, so it has no funnel to serve — and a grip that showed a prompt when
+   * dragged would be an affordance that lies about what it does.
+   */
+  let grips: HTMLElement[] = [];
+
+  const mountGrips = (): void => {
+    if (grips.length > 0 || !dockResizeSupported || !isPro(pro)) return;
+    for (const dock of ["panel", "chat"] as const) {
+      const grip = buildDockGrip(doc, dock, {
+        readWidth: () => currentDockWidth(dock),
+        readOtherWidth: () => {
+          // Count the other dock only when it is currently taking viewport width.
+          // A stored width from a prior session must not eat into the available
+          // space when that dock is not on screen right now.
+          const other: DockId = dock === "panel" ? "chat" : "panel";
+          if (!isDockVisible(other)) return 0;
+          return currentDockWidth(other);
+        },
+        readFloor: dockWidthFloor,
+        onPreview: (px) => setDockWidth(dock, px),
+        onCommit: (px) => commitDockWidth(dock, px),
+      });
+      doc.body.appendChild(grip);
+      grips.push(grip);
+    }
+  };
+
+  const unmountGrips = (): void => {
+    for (const grip of grips) grip.remove();
+    grips = [];
+    doc.documentElement.classList.remove(DOCK_RESIZING_CLASS);
+  };
+
+  // -------------------------------------------------------------------------
+  // Frame capture (Pro).
+  // -------------------------------------------------------------------------
+
+  /** Cancels the message currently on screen, so a teardown takes it with it. */
+  let dismissToast: (() => void) | null = null;
+
+  /** Closes the Pro prompt, for the same reason. */
+  let dismissProPrompt: (() => void) | null = null;
+
+  const say = (text: string): void => {
+    dismissToast?.();
+    dismissToast = showToast(doc, text);
+  };
+
+  /**
+   * Ask the worker to open a page. The content script cannot open either
+   * destination itself: `chrome.tabs` is not available here, and navigating to the
+   * settings page — an extension URL — is blocked for a page unless that page is
+   * listed as web-accessible, which would put the settings one link away from every
+   * site on the internet.
+   */
+  const openPage = (page: "pro" | "licence"): void => {
+    try {
+      const message: WorkerMessage = { type: "OPEN_PAGE", page };
+      void chrome.runtime.sendMessage(message);
+    } catch {
+      // The worker is unreachable, which on this path means the extension is being
+      // reloaded. Nothing to report into: the reader pressed a button in a page
+      // that is about to be re-injected.
+    }
+  };
+
+  const offerPro = (reason: "capture" | "other"): void => {
+    dismissProPrompt?.();
+    dismissProPrompt = showProPrompt(doc, {
+      reason,
+      openOptions: () => openPage("licence"),
+    });
+  };
+
+  /**
+   * The capture control, and the shortcut bound to it.
+   *
+   * Shown to everyone. A free press opens the prompt rather than doing nothing —
+   * the manifest advertises the shortcut at the browser's own shortcuts page
+   * whatever the entitlement, so a handler that silently declined would look like
+   * a broken key rather than a paid feature.
+   */
+  const captureFrame = (): void => {
+    if (!isPro(pro)) {
+      offerPro("capture");
+      return;
+    }
+    const video = adapter.findVideo?.(doc) ?? null;
+    if (!video) {
+      say(HELP_COPY.pro.captureNoVideo);
+      return;
+    }
+    void (async () => {
+      const result = await captureVideoFrame(video);
+      if (result.outcome === "no-video") {
+        say(HELP_COPY.pro.captureNoVideo);
+        return;
+      }
+      if (result.outcome === "blank") {
+        say(HELP_COPY.pro.captureBlank);
+        return;
+      }
+      if (result.outcome === "failed") {
+        warn(DIAGNOSTIC.captureFailed, "Frame capture failed.", { error: result.error });
+        say(HELP_COPY.pro.captureFailed);
+        return;
+      }
+
+      // The clipboard is attempted first when asked for, and a refusal falls
+      // through to a download rather than reporting a failure: the reader wanted
+      // the frame, and the file is the same frame.
+      if (prefs.captureToClipboard && (await copyBlobToClipboard(result.blob))) {
+        say(HELP_COPY.pro.captureCopied);
+        return;
+      }
+      downloadBlob(doc, result.blob, captureFilename(adapter.readCaptureName?.(doc) ?? null, new Date()));
+      say(HELP_COPY.pro.captureSaved);
+    })();
+  };
+
+  /** The capture button element, tracked so a lock badge can be toggled with Pro. */
+  let captureButton: Element | null = null;
+
+  /** Class for the lock badge overlay on the capture button. */
+  const CAPTURE_LOCK_CLASS = "wfs-capture-lock";
+
+  /** Add or remove the lock badge on the capture button based on entitlement. */
+  const updateCaptureLockBadge = (): void => {
+    if (!captureButton) return;
+    const existing = captureButton.querySelector(`.${CAPTURE_LOCK_CLASS}`);
+    if (isPro(pro)) {
+      // Entitled: remove the badge if present.
+      if (existing) existing.remove();
+    } else {
+      // Not entitled: add the badge if not already there.
+      if (!existing) {
+        const badge = doc.createElement("span");
+        badge.className = CAPTURE_LOCK_CLASS;
+        badge.textContent = "\uD83D\uDD12";
+        badge.style.cssText = [
+          "position:absolute",
+          "bottom:4px",
+          "right:4px",
+          "font-size:9px",
+          "line-height:1",
+          "pointer-events:none",
+        ].join(";");
+        // The button needs relative positioning for the badge to anchor correctly.
+        (captureButton as HTMLElement).style.position = "relative";
+        captureButton.appendChild(badge);
+      }
+    }
+  };
+
   const injector = new ButtonInjector({
     adapter,
     document: doc,
     buttons: [
+      {
+        // First in the list, so it lands between the site's own fullscreen button
+        // and ours — see BUTTON_ROLES for why the other two do not move.
+        role: "capture",
+        label: CAPTURE_BUTTON_LABEL,
+        buildIcon: buildCaptureIcon,
+        onActivate: captureFrame,
+        // A site the extension cannot capture from never offers the control. Note
+        // this is about the SITE, not about entitlement: a free reader sees the
+        // button and gets the prompt, which is the whole point of it.
+        isAvailable: () => typeof adapter.findVideo === "function",
+      },
       {
         role: "mode",
         label: BUTTON_LABEL,
@@ -4677,6 +6240,12 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
         controller.setPanelButton(button);
         return;
       }
+      // Track the capture button so a lock badge can be added/removed with Pro.
+      if (role === "capture") {
+        captureButton = button;
+        updateCaptureLockBadge();
+        return;
+      }
       controller.setButton(button);
       // The button appearing is a good proxy for the player having loaded.
       maybeAutoApply();
@@ -4684,6 +6253,36 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
     isModeActive: () => controller.isActive,
   });
   injector.start();
+
+  /**
+   * Follow the entitlement record.
+   *
+   * Mounting and unmounting the grips from here is what makes a key entered in the
+   * options tab take effect on a page that is already open, and — more importantly
+   * — makes a *revoked* key take the grips away without a reload. Auto-apply is
+   * re-run because a per-channel rule may have just become active.
+   */
+  const applyProState = (next: ProState): void => {
+    pro = next;
+    if (isPro(pro)) mountGrips();
+    else unmountGrips();
+    updateCaptureLockBadge();
+    // A key accepted in the options tab gets its own window to find the channel:
+    // until this moment `channelRuleUndecided` answered "no rule to wait for", so
+    // no attempts have been spent and there may be nothing scheduled to spend them.
+    resetChannelRuleWatch();
+    maybeAutoApply();
+  };
+
+  const disposeProWatch = watchProState(applyProState);
+
+  void getProState().then(({ state }) => {
+    // A failed read yields the un-entitled default, which is the safe direction:
+    // §14 rule 2 protects an entitlement already granted, and this is the read that
+    // would have granted it. Nothing is written back, so a transient failure costs
+    // the grips until the next read rather than the licence.
+    applyProState(state);
+  });
 
   /**
    * The fourth event that releases the suppression latch: the reader has moved to
@@ -4703,6 +6302,9 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
   const disposeVideoChange = adapter.onVideoChange(doc, () => {
     autoApplySuppressed = false;
     autoApplied = false;
+    // A new video is a new question, so the channel window starts again rather
+    // than inheriting the attempts the previous one spent.
+    resetChannelRuleWatch();
     maybeAutoApply();
   });
 
@@ -4724,6 +6326,7 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
   void getSitePrefs(adapter.siteId).then(({ prefs: stored }) => {
     prefs = stored;
     autoApplyEnabled = stored.autoApply;
+    adoptStoredWidths(stored);
     prefResolved = true;
     maybeAutoApply();
   });
@@ -4735,22 +6338,53 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
         case "TOGGLE":
           toggleMode();
           return { ok: true, active: controller.isActive };
-        case "GET_STATUS":
+        case "TOGGLE_PANEL":
+          togglePanel();
           return { ok: true, active: controller.isActive };
+        case "CAPTURE":
+          // The entitlement check is inside `captureFrame`, not here and not in the
+          // worker: the worker relays a command whatever the tier, because the
+          // browser lists the shortcut at its own shortcuts page whatever the tier,
+          // and a press that does nothing at all reads as a broken key.
+          captureFrame();
+          return { ok: true, active: controller.isActive };
+        case "GET_STATUS":
+          // The channel rides along so the popup can offer "always on this channel"
+          // without a second round trip. Null on a page that has not rendered the
+          // owner row yet, which the popup treats as "nothing to offer" rather than
+          // as an error.
+          return {
+            ok: true,
+            active: controller.isActive,
+            channel: adapter.readChannel?.(doc) ?? null,
+          };
         default:
           return null;
       }
     },
     stop() {
       disposePrefWatch();
+      disposeProWatch();
       disposeVideoChange();
       disposeSiteDockChange?.();
+      // Ours, positioned against the viewport, and belonging to a page this session
+      // is handing back. Anything left here is the same class of leak as a pending
+      // reflow nudge: invisible until an unrelated page grows an element nobody can
+      // explain.
+      unmountGrips();
+      doc.defaultView?.removeEventListener("resize", onViewportResize);
+      removeDockWidthCss(doc);
+      dismissToast?.();
+      dismissToast = null;
+      dismissProPrompt?.();
+      dismissProPrompt = null;
       doc.removeEventListener("fullscreenchange", onFullscreenChange);
       doc.removeEventListener("click", onPointerCapture, true);
       doc.removeEventListener("dblclick", onPointerCapture, true);
       doc.removeEventListener("keydown", onKeyCapture as EventListener, true);
       clearGrace();
       clearResume();
+      clearChannelRuleWatch();
       resumeAfterFullscreen = false;
       resumePanelAfterFullscreen = false;
       // A navigation is not an exit we asked for; leave nothing a later
@@ -4886,8 +6520,36 @@ export function startContentScript(): void {
 // §10  Service worker
 // ===========================================================================
 
-/** The manifest command that toggles the mode. */
-const TOGGLE_COMMAND = "toggle-windowed-fullscreen";
+/**
+ * The manifest commands, and the message each one relays to the page.
+ *
+ * A table rather than three `if` branches, because the worker's job for all three
+ * is identical — find the tab, check it is a site we support, forward one message,
+ * badge the failure — and the only thing that differs is which message. Adding a
+ * command is one entry.
+ *
+ * Every command is relayed whatever the reader's tier, including the capture one.
+ * Chrome reads commands from the manifest, so the capture shortcut is listed at
+ * `chrome://extensions/shortcuts` for a free reader and cannot be hidden from
+ * them; a worker that declined to relay it would produce a key that does nothing,
+ * which reads as broken rather than as paid. The page decides, and shows the Pro
+ * prompt.
+ */
+const COMMANDS: Readonly<Record<string, ExtMessage>> = {
+  "toggle-windowed-fullscreen": { type: "TOGGLE" },
+  "toggle-comment-panel": { type: "TOGGLE_PANEL" },
+  "capture-frame": { type: "CAPTURE" },
+};
+
+/**
+ * The one command the help copy prints a key cap for.
+ *
+ * Named separately from the table above because the settings surface asks the
+ * browser about this one specifically, and there is no version of "the shortcut"
+ * that means all three: the panel and capture bindings appear at the browser's own
+ * shortcuts page, which is where the help section already sends the reader.
+ */
+export const TOGGLE_COMMAND_NAME = "toggle-windowed-fullscreen";
 
 /**
  * How long to wait for the content script to acknowledge. Past this it is
@@ -4943,14 +6605,15 @@ async function setFailureBadge(failed: boolean, detail?: string): Promise<void> 
  * left alone and the failure surfaces on the toolbar icon.
  */
 async function handleToggleCommand(command: string): Promise<void> {
-  if (command !== TOGGLE_COMMAND) return;
+  const message = COMMANDS[command];
+  if (!message) return;
 
   const tab = await queryActiveTab();
   if (!tab?.id || !tab.url) return;
   if (!resolveAdapter(tab.url)) return;
 
   try {
-    const response = await sendToTab(tab.id, { type: "TOGGLE" });
+    const response = await sendToTab(tab.id, message);
     if (response?.ok) {
       await setFailureBadge(false);
       return;
@@ -4982,6 +6645,24 @@ async function handleToggleCommand(command: string): Promise<void> {
  * this page is now only the greeting.
  */
 const WELCOME_PAGE_PATH = "welcome/index.html";
+
+/**
+ * The settings page, as the worker addresses it. Must match `options_ui.page` in
+ * the manifest — the worker opens this path directly rather than asking the
+ * runtime for the options page, because the runtime's own opener cannot carry the
+ * panel selector below.
+ */
+const OPTIONS_PAGE_PATH = "options/index.html";
+
+/**
+ * What selects the Pro panel when the settings page loads.
+ *
+ * A URL fragment rather than a stored "open here next time" flag: a flag is state
+ * that outlives the intent that set it, so a reader who once pressed `I have a key`
+ * would find the settings opening on the Pro panel for ever. The fragment says it
+ * once, in the address that requested it.
+ */
+const PRO_PANEL_HASH = "#pro";
 
 /**
  * Pure. Whether an `onInstalled` event should open the welcome page.
@@ -5038,6 +6719,78 @@ async function handleInstalled(details: chrome.runtime.InstalledDetails): Promis
  * and restarted at any time, so it holds no state — everything durable lives in
  * `chrome.storage`.
  */
+/**
+ * Open one of the two pages the in-page Pro prompt can ask for.
+ *
+ * The page decides *which*, from a two-member union; the worker owns the
+ * addresses. A message carrying a URL would make this an open redirector for
+ * anything that could reach the worker, and "anything that could reach the worker"
+ * is a larger set than it looks once a future release adds another sender.
+ */
+async function handleWorkerMessage(message: WorkerMessage): Promise<void> {
+  if (message?.type !== "OPEN_PAGE") return;
+  try {
+    if (message.page === "licence") {
+      // A tab at an explicit address rather than `chrome.runtime.openOptionsPage()`,
+      // which cannot carry the panel selector: it opens whatever the manifest names
+      // and nothing else. That trade is deliberate. `openOptionsPage` would focus a
+      // settings tab the reader already had open, which sounds better until you
+      // notice it would focus it on whichever panel they left it on — and the whole
+      // reason this message exists is that they pressed `I have a key` and need the
+      // key field. A second settings tab, open on the right panel, is the lesser
+      // annoyance.
+      await chrome.tabs.create({
+        url: chrome.runtime.getURL(`${OPTIONS_PAGE_PATH}${PRO_PANEL_HASH}`),
+        active: true,
+      });
+      return;
+    }
+    await chrome.tabs.create({ url: PRO_PURCHASE_URL, active: true });
+  } catch (err) {
+    // The reader pressed a button and nothing happened, and there is nowhere in the
+    // page to say so from here. One diagnostic line; the prompt is still open with
+    // its other action available.
+    warn(DIAGNOSTIC.proPageOpenFailed, "Could not open a page for the prompt.", {
+      page: message.page,
+      error: describeError(err),
+    });
+  }
+}
+
+/**
+ * Revalidate the stored licence if it is due.
+ *
+ * Runs on worker start rather than on a timer: an MV3 worker is terminated
+ * whenever the browser feels like it, so there is nothing durable to schedule
+ * against, and the worker starts often enough — every command, every popup, every
+ * install event — that a 14-day interval is met comfortably. {@link proCheckDue}
+ * carries the retry bound, so a stretch of worker starts with no network costs one
+ * request every six hours rather than one per start.
+ *
+ * Fails open, entirely inside {@link applyValidation}: an unreachable endpoint
+ * moves the attempt time and nothing else, so an entitled reader stays entitled.
+ */
+async function revalidateProIfDue(now: number): Promise<void> {
+  const { state, loadFailed } = await getProState();
+  // An unreadable record must not be written back over: the default is
+  // un-entitled, and storing it would turn a transient storage failure into a
+  // revoked licence.
+  if (loadFailed) return;
+  if (!proCheckDue(state, now)) return;
+
+  // The activation id goes with it, so the provider is answering about this device
+  // rather than about the key in the abstract — which is what makes a deactivation
+  // performed on another machine take effect here.
+  const result = await validateLicenceKey(state.key, state.instanceId);
+  if (result.outcome !== "active") {
+    warn(DIAGNOSTIC.proValidationFailed, "The licence check did not confirm the key.", {
+      outcome: result.outcome,
+      reason: result.reason,
+    });
+  }
+  await setProState(applyValidation(state, result, now));
+}
+
 export function startServiceWorker(): void {
   chrome.commands?.onCommand.addListener((command) => {
     void handleToggleCommand(command);
@@ -5049,6 +6802,18 @@ export function startServiceWorker(): void {
   chrome.runtime?.onInstalled?.addListener((details) => {
     void handleInstalled(details);
   });
+
+  chrome.runtime?.onMessage?.addListener((message: unknown) => {
+    void handleWorkerMessage(message as WorkerMessage);
+    // No reply, so nothing is kept alive waiting for one: the sender is a content
+    // script that asked for a tab and does not need to be told it got one.
+    return false;
+  });
+
+  // Deliberately not awaited and deliberately not gated on anything: the check
+  // decides for itself whether it is due, and a worker start is the only clock an
+  // event-driven worker has.
+  void revalidateProIfDue(Date.now());
 }
 
 // ===========================================================================
@@ -5089,6 +6854,29 @@ export const SUPPORT_URL = "https://rohittiger.vercel.app/support";
  */
 export const REVIEW_URL =
   "https://chromewebstore.google.com/detail/windowed-fullscreen-for-y/apjbicaacpojdlppeodnbdmkajhmclok/reviews";
+
+/**
+ * Where a reader buys Pro: the payment provider's checkout, directly.
+ *
+ * An earlier revision pointed this at a page on the product site that handed off
+ * to the provider, on the reasoning that a URL baked into a shipped extension
+ * outlives a provider change by however long it takes every install to update,
+ * whereas a page we own can be repointed the same afternoon. That reasoning is
+ * still true and is the cost accepted here: **changing provider, product, or price
+ * link now needs a release.** It was traded away because the button exists to sell
+ * a $5 impulse purchase, and a landing page in front of the checkout is a step
+ * where readers leave. The indirection can be reinstated the moment there is a
+ * page worth the hop — it is one string.
+ *
+ * Paired with {@link DODO_API_BASE} and it must be flipped in the same commit: a
+ * test checkout link takes real money nowhere, and a live checkout link paired
+ * with a test API host sells a key the extension will refuse. Both spellings of
+ * that mistake are caught by the guard in `scripts/package.mjs` and by the host
+ * assertion in `tests/entitlement.test.ts`, because neither is visible on the
+ * developer's own machine.
+ */
+export const PRO_PURCHASE_URL =
+  "https://test.checkout.dodopayments.com/buy/pdt_0Nf1XWPRqpjTH4YVdZiMN?quantity=1";
 
 /**
  * How long after install the rating prompt stays quiet.
@@ -5176,6 +6964,21 @@ export const JARGON_LIST: readonly string[] = [
  */
 export const HELP_COPY = {
   heading: "Tips",
+
+  /**
+   * The settings page's two panels.
+   *
+   * Two, and there is no appetite for a third. The split is not a filing system for
+   * a growing pile of settings — it exists because one of these panels is a sales
+   * pitch and the other is a preference list, and a reader arrives wanting exactly
+   * one of them. Everything that is a setting goes in the first panel however long
+   * that list gets.
+   */
+  tabs: {
+    settings: "Settings",
+    pro: "Get Pro",
+    proEntitled: "Pro",
+  },
 
   /**
    * One tip. Not a feature tour.
@@ -5320,6 +7123,168 @@ export const HELP_COPY = {
     feedbackLink: "Feedback",
     privacyLink: "Privacy",
   },
+
+  /**
+   * The paid tier. Three surfaces share these words: the prompt that opens in the
+   * page when a free reader presses a Pro control, the settings section where a
+   * key is entered, and the capture control's own messages.
+   *
+   * Written to name what the reader gets, never what they are missing. "Resize the
+   * columns" is a feature; "you cannot resize the columns" is a complaint about
+   * the reader's wallet, and every draft that read that way got deleted.
+   *
+   * The price is stated here rather than fetched, because a paywall that will not
+   * say the price until you click it is the thing everybody hates about paywalls.
+   * It also means changing the price is a release, which is the correct amount of
+   * friction for changing a price.
+   */
+  pro: {
+    /** The name, used as a heading in the settings and in the prompt when not entitled. */
+    name: "Get Pro",
+    /** The price, stated once. One purchase, no renewal, no account. */
+    price: "$5 once",
+
+    /** The prompt's heading when the capture control is what was pressed. */
+    captureTitle: "Saving frames is part of Pro",
+    /** The prompt's heading for any other paid control. */
+    genericTitle: "This one is part of Pro",
+    /**
+     * The body, and the only place the tier is described. Kept to what is bought
+     * rather than a feature matrix: the reader is standing in front of a video
+     * they were watching, not shopping.
+     */
+    body: "Save any frame as an image, drag the columns to any width, and switch it on for chosen channels.",
+    /** The primary action. Names the price so the button holds no surprise. */
+    buy: "Get Pro — $5 once",
+    /** For a reader who already bought it on another machine. */
+    haveKey: "I have a key",
+    /** Closes the prompt and changes nothing. */
+    dismiss: "Not now",
+
+    /** The settings section's heading. */
+    sectionTitle: "Pro",
+
+    /**
+     * The paywall panel, which is the one surface with room to say what is being
+     * sold. The in-page prompt gets `body` above — one sentence, because the reader
+     * is standing in front of a video. This is the other case: they opened the
+     * settings and clicked through to a tab called Pro, so they are shopping, and
+     * the honest thing is to lay the three items out and name the price.
+     *
+     * Each feature is a name and one line. Not a comparison table, and no free
+     * column: nothing that was free has moved, so a table would have one row per
+     * paid feature and a column of ticks saying so, which is a lot of furniture to
+     * say "three things".
+     */
+    pitchLead: "Unlock the full viewing experience. One payment, yours forever.",
+    features: [
+      {
+        name: "Save the frame",
+        detail: "Screenshot any moment, straight to downloads or clipboard.",
+      },
+      {
+        name: "Resize columns",
+        detail: "Drag comments and chat to your perfect width.",
+      },
+      {
+        name: "Auto per channel",
+        detail: "Auto-enter windowed mode on your favourite channels.",
+      },
+    ],
+    /** Heads the same list once the reader owns it. */
+    haveHeading: "What you unlocked",
+
+    /**
+     * The activation disclosure's label, and the line inside it.
+     *
+     * Collapsed, because entering a key is a once-per-device job and a text field
+     * sitting open under a price is a reader being asked to buy and to prove they
+     * already bought in the same breath. Someone with a key is looking for this row
+     * and finds it; someone without one is not made to scroll past it.
+     */
+    haveKeyHeading: "Already bought Pro?",
+    activateOnce: "Enter your key once on this device.",
+    /** The same disclosure on the other side of the purchase. */
+    removeHeading: "Moving to another computer?",
+
+    /** Above the key field. */
+    keyLabel: "Licence key",
+    keyPlaceholder: "Paste your key",
+    activate: "Activate",
+    remove: "Remove key",
+    /** Shown while a check is in flight, so the button is never silently busy. */
+    checking: "Checking your key…",
+    /** The three settled outcomes. */
+    active: "Pro is active on this device.",
+    inactive: "Pro is not active on this device.",
+    /**
+     * A refusal the reader fixes by re-reading what they pasted.
+     *
+     * An earlier revision named both possible causes in one sentence — "check it,
+     * or it may already be in use on too many devices" — on the reasoning that only
+     * the provider's own error prose tells them apart, and branching on a third
+     * party's wording is how a copy edit becomes a silent unlock. The reasoning was
+     * sound about the wording and wrong about the status code: 404 and 403 are
+     * numbers, not prose, and they separate two problems a reader acts on
+     * differently. One sentence covering both left everyone re-pasting a key that
+     * was never going to be accepted, burning another activation each time.
+     */
+    invalid: "That key was not accepted. Check that you pasted it exactly as it was issued.",
+    /**
+     * The activation limit, which is not a problem with the key. Says what to do,
+     * because the reader can fix this one themselves and would otherwise ask for a
+     * refund of something they already own.
+     */
+    limit:
+      "That key is already active on the maximum number of devices. Remove it on one of them, then activate here.",
+    /**
+     * A key the provider has switched off — refunded, charged back, or revoked by
+     * hand. Named separately because "check what you pasted" sends someone to look
+     * for a typo that is not there, and because this is the one refusal where the
+     * honest next step is to get in touch rather than to try again.
+     */
+    revoked: "That key is no longer active. If you believe that is wrong, reply to your receipt.",
+    /**
+     * The fail-open case, said plainly. The reader keeps every feature, so this is
+     * information rather than a warning, and it must not read as one.
+     */
+    unreachable: "Could not reach the licence check. Nothing has changed; it will try again later.",
+    malformed: "That does not look like a licence key.",
+    /** Removed here, and the device freed up at the provider too. */
+    removed: "The key was removed, and this device freed up for another.",
+    /**
+     * Removed here, but the provider could not be told. Said rather than hidden:
+     * the reader is about to try the key elsewhere and needs to know it may still
+     * count against them.
+     */
+    removedLocally: "The key was removed here, but this device may still count. Try again online.",
+    /** What the check sends, stated where the key is entered. */
+    privacyNote: "Only the key you type is sent, to the payment provider that issued it.",
+
+    /**
+     * The popup's one line about Pro, and the way out of it.
+     *
+     * The popup carries neither the pitch nor the key field. It is 320 px wide and
+     * it opens over a video the reader is part-way through, which makes it the worst
+     * place on the extension to read three feature lines or paste a 36-character
+     * string. So it says one sentence and offers the door: the panel on the settings
+     * page is where both of those jobs belong, and the reader gets there in one
+     * press instead of hunting the toolbar's context menu for Options.
+     */
+    summaryPitch: "Unlock frame capture, resizable columns, and auto-apply.",
+    summaryOpen: "See what's in Pro",
+    /** Same door, for a reader who already owns it and may want to move the key. */
+    summaryManage: "Manage your key",
+
+    /** Capture's own outcomes. */
+    captureSaved: "Frame saved.",
+    captureCopied: "Frame copied.",
+    /** Protected playback, or a genuinely black frame. Both look the same to us. */
+    captureBlank: "That frame came back blank. Protected videos cannot be saved.",
+    captureFailed: "Could not save that frame.",
+    /** No video to capture from yet. */
+    captureNoVideo: "No video to save a frame from yet.",
+  },
 } as const;
 
 /**
@@ -5364,7 +7329,7 @@ async function isMacPlatform(): Promise<boolean> {
 async function readToggleCombo(): Promise<string | null> {
   try {
     const commands = (await chrome.commands?.getAll()) ?? [];
-    const raw = commands.find((command) => command.name === TOGGLE_COMMAND)?.shortcut ?? "";
+    const raw = commands.find((command) => command.name === TOGGLE_COMMAND_NAME)?.shortcut ?? "";
     if (raw === "") return null;
     return formatCombo(raw, await isMacPlatform());
   } catch {
@@ -6204,8 +8169,20 @@ export function renderPinPrompt(
  * checkbox in both the options page and the popup; adding a preference here is
  * all it takes to surface it in both.
  */
+/**
+ * The preference fields that are a single boolean, which is what a checkbox can
+ * represent.
+ *
+ * Derived from {@link SitePrefs} rather than restated, so a field added there is
+ * either automatically eligible for {@link SITE_TOGGLES} or a compile error if
+ * someone lists a width or a rule list as a checkbox.
+ */
+type BooleanPrefField = {
+  [K in keyof SitePrefs]: SitePrefs[K] extends boolean ? K : never;
+}[keyof SitePrefs];
+
 const SITE_TOGGLES: ReadonlyArray<{
-  field: keyof SitePrefs;
+  field: BooleanPrefField;
   /** Marker attribute, so the control is findable without relying on order. */
   marker: string;
   /** Visible text beside the checkbox. */
@@ -6226,6 +8203,8 @@ const SITE_TOGGLES: ReadonlyArray<{
   aria?: (siteLabel: string) => string;
   /** Optional explanation rendered beneath. */
   hint?: string;
+  /** When true, a lock icon is shown beside the label to indicate a Pro feature. */
+  proGated?: boolean;
 }> = [
   {
     field: "autoApply",
@@ -6246,38 +8225,839 @@ const SITE_TOGGLES: ReadonlyArray<{
       "scroll down for the description and comments, scroll back up for the video. " +
       "Leave this off to lock the page to the video alone.",
   },
+  {
+    field: "captureToClipboard",
+    marker: "data-wfs-capture-clipboard",
+    text: () => "Copy saved frames instead of downloading them",
+    aria: (siteLabel) => `Copy saved frames instead of downloading them — on ${siteLabel}`,
+    proGated: true,
+    // Not gated, and not hidden without a licence. It changes what a Pro feature
+    // does rather than being one, so hiding it would mean a reader who buys Pro has
+    // to come back and find a setting that appeared behind them; and left visible
+    // it costs a free reader one line that does nothing yet, which is honest —
+    // saving frames is named as part of Pro two sections down.
+    hint:
+      "Saving frames is part of Pro. With this on, the frame goes to your clipboard " +
+      "ready to paste. If your browser refuses, it is downloaded instead.",
+  },
 ];
 
 /**
+ * The Pro panel: what the tier is, whether it is on, and — folded away — the one
+ * field that turns it on.
+ *
+ * THE ARRANGEMENT IS THE POINT, so it is written down here rather than left to be
+ * inferred from the paint order. This section used to open with a status line
+ * reading "Pro is not active on this device", followed immediately by a licence
+ * field. Both halves were wrong for a reader who had not bought anything, which is
+ * every reader the first time they see it: it announced a negative, and then it
+ * asked for a credential, and nowhere did it say what was for sale. The tier's own
+ * description sat in one sentence under all of it.
+ *
+ * So the order is now: the price, what the three features are, and the way to buy.
+ * Entering a key is a once-per-device job that a reader either came here to do or
+ * will never do at all, so it sits inside a collapsed disclosure — findable by
+ * anyone looking for it, and not in the way of anyone who is not.
+ *
+ * The status line moves with the field, into the disclosure, for a reader who is
+ * not yet entitled. It is the answer to the `Activate` button, and an answer
+ * belongs beside the question. The disclosure is forced open whenever that answer
+ * matters — mid-check, and after any refusal — so no message is ever delivered
+ * into a collapsed box. Once entitled, the status is the headline instead, because
+ * then it is the panel's whole subject.
+ *
+ * Repaints itself whole from a {@link watchProState} subscription, so the section
+ * is correct in the options tab the moment a key is entered in the popup, and vice
+ * versa. It owns its host completely for exactly that reason — the same rule that
+ * gave the rating prompt a host of its own: any node a storage subscriber repaints
+ * wholesale belongs to that subscriber alone.
+ *
+ * @returns a disposer for the subscription. The options page never calls it (the
+ *   page outlives the section) but the popup can be closed mid-check, and a
+ *   listener on a dead document is a leak whether or not anything notices.
+ */
+export function renderProSection(
+  doc: Document,
+  host: Element,
+  ctx: {
+    showError: (message: string) => void;
+    showSaved: (message: string) => void;
+    openInTab: (url: string, description: string) => Promise<void>;
+  },
+): () => void {
+  const copy = HELP_COPY.pro;
+
+  /** Emoji badges for the three features, matching HELP_COPY.pro.features order. */
+  const FEATURE_ICONS = ["\uD83D\uDDBC\uFE0F", "\u2194\uFE0F", "\uD83C\uDFAF"] as const;
+
+  /** The last record painted, so `Remove` writes from what the reader can see. */
+  let current: ProState = { ...DEFAULT_PRO_STATE };
+
+  /** True while a check is in flight, so a second press cannot start a second. */
+  let checking = false;
+
+  const paint = (): void => {
+    host.replaceChildren();
+
+    const entitled = isPro(current);
+
+    // --- The Pro showcase card with gradient accent border ------------------
+    const card = doc.createElement("div");
+    card.setAttribute("data-wfs-pro-card", "");
+    if (entitled) card.classList.add("is-active");
+
+    // --- Header with badge, title, and pill --------------------------------
+    const header = doc.createElement("div");
+    header.setAttribute("data-wfs-pro-header", "");
+
+    const badge = doc.createElement("span");
+    badge.setAttribute("data-wfs-pro-badge", "");
+    badge.textContent = entitled ? "\u2728" : "\u26A1";
+    header.appendChild(badge);
+
+    const title = doc.createElement("span");
+    title.setAttribute("data-wfs-pro-title", "");
+    title.textContent = entitled ? copy.active : copy.name;
+    header.appendChild(title);
+
+    if (!entitled) {
+      const pricePill = doc.createElement("span");
+      pricePill.setAttribute("data-wfs-pro-pill", "");
+      pricePill.textContent = copy.price;
+      header.appendChild(pricePill);
+    }
+
+    card.appendChild(header);
+
+    // --- Pitch line (not entitled only) ------------------------------------
+    if (!entitled) {
+      const pitch = doc.createElement("p");
+      pitch.setAttribute("data-wfs-pro-pitch", "");
+      pitch.textContent = copy.pitchLead;
+      card.appendChild(pitch);
+    }
+
+    // --- Feature cards: always shown, language changes with entitlement -----
+    const features = doc.createElement("div");
+    features.setAttribute("data-wfs-pro-features-grid", "");
+    for (let i = 0; i < copy.features.length; i++) {
+      const feature = copy.features[i]!;
+      const item = doc.createElement("div");
+      item.setAttribute("data-wfs-pro-feature-card", "");
+
+      const icon = doc.createElement("span");
+      icon.setAttribute("data-wfs-pro-feature-icon", "");
+      icon.textContent = FEATURE_ICONS[i]!;
+      item.appendChild(icon);
+
+      const name = doc.createElement("span");
+      name.setAttribute("data-wfs-pro-feature-name", "");
+      name.textContent = feature.name;
+      item.appendChild(name);
+
+      const detail = doc.createElement("span");
+      detail.setAttribute("data-wfs-pro-feature-detail", "");
+      detail.textContent = feature.detail;
+      item.appendChild(detail);
+
+      features.appendChild(item);
+    }
+    card.appendChild(features);
+
+    if (entitled) {
+      // --- Entitled: what you unlocked heading + manage/remove --------------
+      const haveHeading = doc.createElement("h3");
+      haveHeading.setAttribute("data-wfs-pro-have", "");
+      haveHeading.textContent = copy.haveHeading;
+      card.appendChild(haveHeading);
+
+      const removeBox = doc.createElement("details");
+      removeBox.setAttribute("data-wfs-pro-remove-details", "");
+
+      const removeSummary = doc.createElement("summary");
+      removeSummary.textContent = copy.removeHeading;
+      removeBox.appendChild(removeSummary);
+
+      const remove = doc.createElement("button");
+      remove.type = "button";
+      remove.setAttribute("data-wfs-pro-remove", "");
+      remove.textContent = copy.remove;
+      remove.addEventListener("click", () => {
+        void (async () => {
+          const handedBack = await deactivateLicence(current.key, current.instanceId);
+          const result = await setProState({ ...DEFAULT_PRO_STATE });
+          if (!result.ok) {
+            ctx.showError(`Could not remove the key: ${result.error}.`);
+            return;
+          }
+          ctx.showSaved(handedBack ? copy.removed : copy.removedLocally);
+        })();
+      });
+      removeBox.appendChild(remove);
+      card.appendChild(removeBox);
+    } else {
+      // --- Not entitled: buy CTA + activation form -------------------------
+      const actions = doc.createElement("div");
+      actions.setAttribute("data-wfs-pro-actions", "");
+
+      const buy = doc.createElement("a");
+      buy.href = PRO_PURCHASE_URL;
+      buy.rel = "noopener noreferrer";
+      buy.setAttribute("data-wfs-pro-buy-cta", "");
+      buy.textContent = copy.buy;
+      buy.addEventListener("click", (event) => {
+        event.preventDefault();
+        void ctx.openInTab(PRO_PURCHASE_URL, "purchase page");
+      });
+      actions.appendChild(buy);
+
+      card.appendChild(actions);
+
+      // --- Activation form, always visible on options (not collapsed) --------
+      const form = doc.createElement("div");
+      form.setAttribute("data-wfs-pro-form", "");
+
+      const formHeading = doc.createElement("h3");
+      formHeading.setAttribute("data-wfs-pro-form-heading", "");
+      formHeading.textContent = copy.haveKeyHeading;
+      form.appendChild(formHeading);
+
+      // Status feedback
+      const status = doc.createElement("p");
+      status.setAttribute("data-wfs-pro-inline-status", "");
+      status.setAttribute("role", "status");
+      status.setAttribute("aria-live", "polite");
+      status.textContent = checking
+        ? copy.checking
+        : current.status === "invalid"
+          ? copy.invalid
+          : current.status === "unreachable"
+            ? copy.unreachable
+            : "";
+      if (status.textContent) form.appendChild(status);
+
+      const field = doc.createElement("label");
+      field.setAttribute("data-wfs-pro-field", "");
+      const fieldText = doc.createElement("span");
+      fieldText.textContent = copy.keyLabel;
+      field.appendChild(fieldText);
+
+      const input = doc.createElement("input");
+      input.type = "text";
+      input.setAttribute("data-wfs-pro-key", "");
+      input.placeholder = copy.keyPlaceholder;
+      input.maxLength = MAX_LICENCE_KEY_LENGTH;
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      field.appendChild(input);
+      form.appendChild(field);
+
+      const activate = doc.createElement("button");
+      activate.type = "button";
+      activate.setAttribute("data-wfs-pro-activate", "");
+      activate.textContent = copy.activate;
+
+      const submit = (): void => {
+        if (checking) return;
+        const key = normalizeLicenceKey(input.value);
+        if (!licenceKeyLooksWellFormed(key)) {
+          ctx.showError(copy.malformed);
+          return;
+        }
+        checking = true;
+        paint();
+
+        void (async () => {
+          const now = Date.now();
+          const { validation: result, instanceId } = await activateLicence(key);
+          const next = applyValidation(
+            { ...DEFAULT_PRO_STATE, key, instanceId },
+            result,
+            now,
+          );
+          checking = false;
+          const written = await setProState(next);
+          if (!written.ok) {
+            ctx.showError(`Could not save the key: ${written.error}.`);
+            current = { ...DEFAULT_PRO_STATE };
+            paint();
+            return;
+          }
+          if (result.outcome === "active") {
+            ctx.showSaved(copy.active);
+          } else {
+            warn(DIAGNOSTIC.proValidationFailed, "Activation was refused.", {
+              outcome: result.outcome,
+              reason: result.reason,
+              host: DODO_API_BASE,
+            });
+            ctx.showError(refusalMessage(result, copy));
+          }
+        })();
+      };
+
+      activate.addEventListener("click", submit);
+      input.addEventListener("keydown", (event) => {
+        if ((event as KeyboardEvent).key === "Enter") submit();
+      });
+      form.appendChild(activate);
+
+      const note = doc.createElement("p");
+      note.setAttribute("data-wfs-pro-privacy", "");
+      note.textContent = copy.privacyNote;
+      form.appendChild(note);
+
+      card.appendChild(form);
+    }
+
+    host.appendChild(card);
+  };
+
+  paint();
+
+  void getProState().then(({ state, loadFailed }) => {
+    current = state;
+    paint();
+    if (loadFailed) ctx.showError("Could not read your licence on this device.");
+  });
+
+  return watchProState((state) => {
+    current = state;
+    checking = false;
+    paint();
+  });
+}
+
+/**
+ * The popup's Pro row: one sentence and one way out of it.
+ *
+ * The popup gets neither the pitch nor the key field, and that is a deliberate
+ * split rather than an omission. It is 320 px wide, it opens over a video the
+ * reader is part-way through, and it closes the instant focus leaves — three
+ * reasons it is the worst surface in the extension both for reading a feature list
+ * and for pasting a 36-character string. Both of those jobs live on the settings
+ * page's Pro panel, and this row is the door to it.
+ *
+ * The row is also the popup's only route to the settings page. Without it a reader
+ * holding a fresh licence key has to know that the toolbar button's context menu
+ * has an Options item, which is a thing extension authors know and readers do not.
+ *
+ * Subscribes to entitlement and repaints whole, so it owns its host — the same rule
+ * as {@link renderProSection}.
+ *
+ * Since 1.5.0 the popup renders a teaser card. Pressing it navigates to a full Pro
+ * showcase view within the popup (no external tab). The reader stays in the popup,
+ * sees the features, can buy or activate, and press Back to return.
+ *
+ * The `ctx.showProView` callback tells the popup to swap its content for the
+ * showcase. The popup's own code handles the transition; this function only builds
+ * the teaser and the showcase.
+ *
+ * @returns a disposer for the subscription. The popup is closed far more often
+ *   mid-flight than the options page, so this one is worth calling.
+ */
+export function renderProSummary(
+  doc: Document,
+  host: Element,
+  ctx: { openProPanel: () => void },
+): () => void {
+  const copy = HELP_COPY.pro;
+  let entitled = false;
+
+  const paint = (): void => {
+    host.replaceChildren();
+
+    // --- Teaser card: a clickable row that opens the Pro view ---------------
+    const card = doc.createElement("button");
+    card.type = "button";
+    card.setAttribute("data-wfs-pro-teaser", "");
+    if (entitled) card.classList.add("is-active");
+
+    const badge = doc.createElement("span");
+    badge.setAttribute("data-wfs-pro-teaser-badge", "");
+    badge.textContent = entitled ? "\u2728" : "\u26A1";
+    card.appendChild(badge);
+
+    const text = doc.createElement("span");
+    text.setAttribute("data-wfs-pro-teaser-text", "");
+    text.textContent = entitled ? copy.active : copy.summaryPitch;
+    card.appendChild(text);
+
+    const arrow = doc.createElement("span");
+    arrow.setAttribute("data-wfs-pro-teaser-arrow", "");
+    arrow.textContent = "\u203A";
+    card.appendChild(arrow);
+
+    card.addEventListener("click", () => ctx.openProPanel());
+    host.appendChild(card);
+  };
+
+  paint();
+
+  void getProState().then(({ state }) => {
+    entitled = isPro(state);
+    paint();
+  });
+
+  return watchProState((state) => {
+    entitled = isPro(state);
+    paint();
+  });
+}
+
+/**
+ * The full Pro showcase view rendered inside the popup when the reader presses the
+ * Pro teaser card. It replaces the popup's main content and provides a Back button
+ * to return. Contains the feature grid, Buy CTA, and inline key activation.
+ *
+ * Called from the popup's navigation handler, not from `renderSettings`. The popup
+ * owns the transition between its two views; this function owns the Pro view's
+ * content.
+ *
+ * @returns a disposer for the entitlement subscription.
+ */
+export function renderProView(
+  doc: Document,
+  host: Element,
+  ctx: { onBack: () => void },
+): () => void {
+  const copy = HELP_COPY.pro;
+  const FEATURE_ICONS = ["\uD83D\uDDBC\uFE0F", "\u2194\uFE0F", "\uD83C\uDFAF"] as const;
+
+  let current: ProState = { ...DEFAULT_PRO_STATE };
+  let checking = false;
+
+  const paint = (): void => {
+    host.replaceChildren();
+    const entitled = isPro(current);
+
+    // --- Back button -------------------------------------------------------
+    const backBtn = doc.createElement("button");
+    backBtn.type = "button";
+    backBtn.setAttribute("data-wfs-pro-back-nav", "");
+    backBtn.textContent = "\u2039 Back";
+    backBtn.addEventListener("click", () => ctx.onBack());
+    host.appendChild(backBtn);
+
+    // --- The Pro card with gradient stripe ---------------------------------
+    const card = doc.createElement("div");
+    card.setAttribute("data-wfs-pro-card", "");
+    if (entitled) card.classList.add("is-active");
+
+    // Header
+    const header = doc.createElement("div");
+    header.setAttribute("data-wfs-pro-header", "");
+
+    const headerBadge = doc.createElement("span");
+    headerBadge.setAttribute("data-wfs-pro-badge", "");
+    headerBadge.textContent = entitled ? "\u2728" : "\u26A1";
+    header.appendChild(headerBadge);
+
+    const title = doc.createElement("span");
+    title.setAttribute("data-wfs-pro-title", "");
+    title.textContent = entitled ? copy.active : copy.name;
+    header.appendChild(title);
+
+    if (!entitled) {
+      const pricePill = doc.createElement("span");
+      pricePill.setAttribute("data-wfs-pro-pill", "");
+      pricePill.textContent = copy.price;
+      header.appendChild(pricePill);
+    }
+    card.appendChild(header);
+
+    // Pitch (not entitled)
+    if (!entitled) {
+      const pitch = doc.createElement("p");
+      pitch.setAttribute("data-wfs-pro-pitch", "");
+      pitch.textContent = copy.pitchLead;
+      card.appendChild(pitch);
+    }
+
+    // Feature cards — horizontal layout: icon left, text (name + detail) right.
+    const features = doc.createElement("div");
+    features.setAttribute("data-wfs-pro-features-grid", "");
+    for (let i = 0; i < copy.features.length; i++) {
+      const feature = copy.features[i]!;
+      const item = doc.createElement("div");
+      item.setAttribute("data-wfs-pro-feature-card", "");
+
+      const icon = doc.createElement("span");
+      icon.setAttribute("data-wfs-pro-feature-icon", "");
+      icon.textContent = FEATURE_ICONS[i]!;
+      item.appendChild(icon);
+
+      const textCol = doc.createElement("div");
+      textCol.setAttribute("data-wfs-pro-feature-text", "");
+
+      const name = doc.createElement("span");
+      name.setAttribute("data-wfs-pro-feature-name", "");
+      name.textContent = feature.name;
+      textCol.appendChild(name);
+
+      const detail = doc.createElement("span");
+      detail.setAttribute("data-wfs-pro-feature-detail", "");
+      detail.textContent = feature.detail;
+      textCol.appendChild(detail);
+
+      item.appendChild(textCol);
+      features.appendChild(item);
+    }
+    card.appendChild(features);
+
+    if (entitled) {
+      // Entitled: manage/remove via options page
+      const manage = doc.createElement("button");
+      manage.type = "button";
+      manage.setAttribute("data-wfs-pro-manage", "");
+      manage.textContent = copy.summaryManage;
+      manage.addEventListener("click", () => {
+        void chrome.tabs.create({
+          url: chrome.runtime.getURL(`${OPTIONS_PAGE_PATH}${PRO_PANEL_HASH}`),
+          active: true,
+        });
+      });
+      card.appendChild(manage);
+    } else {
+      // Not entitled: Buy CTA always visible
+      const actions = doc.createElement("div");
+      actions.setAttribute("data-wfs-pro-actions", "");
+
+      const buy = doc.createElement("a");
+      buy.href = PRO_PURCHASE_URL;
+      buy.rel = "noopener noreferrer";
+      buy.setAttribute("data-wfs-pro-buy-cta", "");
+      buy.textContent = copy.buy;
+      buy.addEventListener("click", (event) => {
+        event.preventDefault();
+        void chrome.tabs.create({ url: PRO_PURCHASE_URL, active: true });
+      });
+      actions.appendChild(buy);
+      card.appendChild(actions);
+
+      // "Already have a key?" — always visible below the CTA, no toggle needed.
+      const form = doc.createElement("div");
+      form.setAttribute("data-wfs-pro-form", "");
+
+      const formLabel = doc.createElement("p");
+      formLabel.setAttribute("data-wfs-pro-form-label", "");
+      formLabel.textContent = copy.haveKeyHeading;
+      form.appendChild(formLabel);
+
+      if (checking || current.status === "invalid" || current.status === "unreachable") {
+        const status = doc.createElement("p");
+        status.setAttribute("data-wfs-pro-inline-status", "");
+        status.setAttribute("role", "status");
+        status.setAttribute("aria-live", "polite");
+        status.textContent = checking
+          ? copy.checking
+          : current.status === "invalid"
+            ? copy.invalid
+            : copy.unreachable;
+        form.appendChild(status);
+      }
+
+      const input = doc.createElement("input");
+      input.type = "text";
+      input.setAttribute("data-wfs-pro-key", "");
+      input.placeholder = copy.keyPlaceholder;
+      input.maxLength = MAX_LICENCE_KEY_LENGTH;
+      input.autocomplete = "off";
+      input.spellcheck = false;
+      form.appendChild(input);
+
+      const activate = doc.createElement("button");
+      activate.type = "button";
+      activate.setAttribute("data-wfs-pro-activate-inline", "");
+      activate.textContent = copy.activate;
+
+      const submit = (): void => {
+        if (checking) return;
+        const key = normalizeLicenceKey(input.value);
+        if (!licenceKeyLooksWellFormed(key)) {
+          const existing = form.querySelector("[data-wfs-pro-inline-status]");
+          if (existing) existing.textContent = copy.malformed;
+          else {
+            const s = doc.createElement("p");
+            s.setAttribute("data-wfs-pro-inline-status", "");
+            s.textContent = copy.malformed;
+            form.insertBefore(s, formLabel.nextSibling);
+          }
+          return;
+        }
+        checking = true;
+        paint();
+
+        void (async () => {
+          const now = Date.now();
+          const { validation: result, instanceId } = await activateLicence(key);
+          const next = applyValidation(
+            { ...DEFAULT_PRO_STATE, key, instanceId },
+            result,
+            now,
+          );
+          checking = false;
+          const written = await setProState(next);
+          if (!written.ok) {
+            current = { ...DEFAULT_PRO_STATE };
+            paint();
+          }
+        })();
+      };
+
+      activate.addEventListener("click", submit);
+      input.addEventListener("keydown", (event) => {
+        if ((event as KeyboardEvent).key === "Enter") submit();
+      });
+      form.appendChild(activate);
+
+      card.appendChild(form);
+    }
+
+    host.appendChild(card);
+  };
+
+  paint();
+
+  void getProState().then(({ state }) => {
+    current = state;
+    paint();
+  });
+
+  return watchProState((state) => {
+    current = state;
+    checking = false;
+    paint();
+  });
+}
+
+/**
+ * The per-channel auto-apply rules for one site.
+ *
+ * Rendered only for an entitled reader, and the section is empty otherwise — see
+ * the note in §14 on which Pro surfaces are shown locked and which are absent. The
+ * subscription is what makes the list appear the moment a key is accepted, without
+ * asking the reader to reopen the settings they are already looking at.
+ *
+ * @returns a disposer for the entitlement subscription.
+ */
+export function renderChannelRules(
+  doc: Document,
+  host: Element,
+  ctx: {
+    siteId: string;
+    siteLabel: string;
+    showError: (message: string) => void;
+    showSaved: (message: string) => void;
+  },
+): () => void {
+  let entitled = false;
+  let channels: readonly string[] = [];
+
+  /** Write the list whole, then repaint from what was stored. */
+  const store = async (next: readonly string[], saved: string): Promise<void> => {
+    const result = await setSitePrefs(ctx.siteId, { channels: next });
+    if (!result.ok) {
+      ctx.showError(`Could not save the channel list: ${result.error}.`);
+      return;
+    }
+    channels = next;
+    ctx.showSaved(saved);
+    paint();
+  };
+
+  function paint(): void {
+    host.replaceChildren();
+    if (!entitled) return;
+
+    const heading = doc.createElement("h3");
+    heading.textContent = "Always on these channels";
+    host.appendChild(heading);
+
+    const hint = doc.createElement("p");
+    hint.setAttribute("data-wfs-channel-hint", "");
+    hint.textContent =
+      "Windowed fullscreen switches on by itself for these channels, even with the " +
+      "setting above off.";
+    host.appendChild(hint);
+
+    const list = doc.createElement("ul");
+    list.setAttribute("data-wfs-channel-list", "");
+    for (const id of channels) {
+      const item = doc.createElement("li");
+      item.setAttribute("data-wfs-channel-item", "");
+
+      const name = doc.createElement("span");
+      name.textContent = id;
+      item.appendChild(name);
+
+      const remove = doc.createElement("button");
+      remove.type = "button";
+      remove.setAttribute("data-wfs-channel-remove", "");
+      // Names the channel, not just the action: a column of buttons all announcing
+      // "Remove" gives a screen-reader user no way to tell which one they are on.
+      remove.setAttribute("aria-label", `Remove ${id}`);
+      remove.textContent = "Remove";
+      remove.addEventListener("click", () => {
+        void store(
+          channels.filter((entry) => entry !== id),
+          `Removed ${id}.`,
+        );
+      });
+      item.appendChild(remove);
+      list.appendChild(item);
+    }
+    host.appendChild(list);
+
+    const field = doc.createElement("label");
+    field.setAttribute("data-wfs-channel-field", "");
+    const fieldText = doc.createElement("span");
+    fieldText.textContent = "Channel";
+    field.appendChild(fieldText);
+
+    const input = doc.createElement("input");
+    input.type = "text";
+    input.setAttribute("data-wfs-channel-input", "");
+    input.placeholder = "@channel";
+    input.maxLength = MAX_CHANNEL_ID_LENGTH;
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    field.appendChild(input);
+    host.appendChild(field);
+
+    const add = doc.createElement("button");
+    add.type = "button";
+    add.setAttribute("data-wfs-channel-add", "");
+    add.textContent = "Add";
+
+    const submit = (): void => {
+      const id = input.value.trim();
+      if (id === "") return;
+      if (channels.includes(id)) {
+        ctx.showSaved(`${id} is already on the list.`);
+        return;
+      }
+      if (channels.length >= MAX_CHANNEL_RULES) {
+        // Refused out loud, and nothing trimmed. Dropping the oldest rule to make
+        // room would make a setting the reader deliberately added stop working with
+        // nothing said about it.
+        ctx.showError(`The list is full at ${MAX_CHANNEL_RULES} channels. Remove one first.`);
+        return;
+      }
+      input.value = "";
+      void store([...channels, id], `Added ${id}.`);
+    };
+
+    add.addEventListener("click", submit);
+    input.addEventListener("keydown", (event) => {
+      if ((event as KeyboardEvent).key === "Enter") submit();
+    });
+    host.appendChild(add);
+  }
+
+  const load = (): void => {
+    void getSitePrefs(ctx.siteId).then(({ prefs }) => {
+      channels = prefs.channels;
+      paint();
+    });
+  };
+
+  void getProState().then(({ state }) => {
+    entitled = isPro(state);
+    if (entitled) load();
+    else paint();
+  });
+
+  return watchProState((state) => {
+    entitled = isPro(state);
+    if (entitled) load();
+    else paint();
+  });
+}
+
+/**
+ * Put a channel identifier into the rules field without submitting it.
+ *
+ * The popup knows which channel the open tab is showing and the options page does
+ * not, so this is how the one surface that has the answer hands it to the shared
+ * tree. Deliberately does not add the rule: the reader opened the popup to watch a
+ * video, and a settings surface that writes a preference because a page was open
+ * is a surface nobody can trust.
+ *
+ * A no-op when the field is absent (the reader is not entitled, so there is no
+ * list) or already has something in it (they were typing).
+ */
+export function prefillChannelRule(root: ParentNode, channel: ChannelRef | null): void {
+  if (!channel) return;
+  const input = root.querySelector("[data-wfs-channel-input]") as HTMLInputElement | null;
+  if (!input || input.value !== "") return;
+  input.value = channel.id;
+}
+
+/**
  * Render the settings controls into `root`: the help section, one auto-apply
- * checkbox per supported site, the donation link, and a privacy-policy footer
- * link.
+ * checkbox per supported site, the donation link, the Pro surface, and a
+ * privacy-policy footer link.
  *
- * The same function backs both the standalone options page and the popup, which
- * is why the heading is optional — the popup already has a title of its own. That
- * is the ONLY difference between the two: they get the same controls in the same
- * order, and the help section is collapsed on both.
+ * ON THE OPTIONS PAGE THIS IS TWO PANELS, and the split is the arrangement's whole
+ * substance. Everything used to be one column: tips, then a sales pitch with a
+ * licence field in it, then the tip jar, then the preferences the reader actually
+ * came for. A reader changing a setting had to scroll past a paywall, and a reader
+ * who had bought Pro found the pitch again every time. So the preferences are one
+ * panel and Pro is the other, and the reader picks.
  *
- * There used to be a `surface: "options" | "popup"` option here, described as
- * controlling whether the help section started collapsed. Nothing read it — both
- * surfaces collapse — so it was removed rather than left as a parameter that
- * looked like it did something.
+ * `surface` decides which shape is built, and it does read as more than a heading
+ * flag. There used to be a `surface` option here that nothing read, and it was
+ * removed for exactly that reason; this one selects the layout:
+ *
+ * - `options` — a heading, a two-tab strip, and the full Pro panel behind the
+ *   second tab (see {@link renderProSection}).
+ * - `popup` — no heading (the popup has its own title), no tab strip, and a single
+ *   Pro row that opens the panel on the settings page instead of reproducing it in
+ *   320 px (see {@link renderProSummary}).
+ *
+ * `[data-wfs-status]`, `[data-wfs-error]`, the prompt host and the footer host stay
+ * direct children of `root`, outside both panels and in that order. Two reasons,
+ * and both are load-bearing: the messages belong to whichever panel is showing —
+ * activation reports into the same region a checkbox does — and `startPopup` finds
+ * all four by marker on the tree it was handed.
  *
  * Each checkbox loads its effective value (stored, else the documented default).
  * On a failed write the control reverts to the last persisted value and an error
  * is shown, so the UI never claims a setting was saved when it was not.
+ *
+ * @returns a disposer for the entitlement subscriptions the Pro surfaces open.
  */
 export function renderSettings(
   doc: Document,
   root: Element,
-  options: { showHeading: boolean },
-): void {
+  options: {
+    surface: "options" | "popup";
+    /**
+     * Which panel the options page opens on. `pro` is how the in-page prompt's
+     * `I have a key` lands on the key field rather than on the checkboxes; the
+     * worker puts {@link PRO_PANEL_HASH} in the address to ask for it. Ignored on
+     * the popup, which has no panels.
+     */
+    initialPanel?: "settings" | "pro";
+    /**
+     * Popup only. Navigates the popup to the full Pro showcase view without
+     * opening a new tab. Provided by `startPopup`'s view-switching logic.
+     */
+    showProView?: () => void;
+  },
+): () => void {
   root.replaceChildren();
 
   /** The last value known to be persisted, keyed `siteId:field`. */
   const persisted = new Map<string, boolean>();
 
-  if (options.showHeading) {
+  /** Everything the Pro surfaces subscribed to, torn down together. */
+  const disposers: Array<() => void> = [];
+
+  const isOptions = options.surface === "options";
+
+  if (isOptions) {
     const heading = doc.createElement("h1");
     heading.textContent = "Windowed Fullscreen — Options";
     root.appendChild(heading);
@@ -6332,6 +9112,108 @@ export function renderSettings(
     }
   };
 
+  // --- The two panels, and the strip that switches them ---------------------
+  //
+  // Built with `role="tablist"` and two `role="tab"` buttons rather than with
+  // native radios or links, for the same reason the rating stars are hand-rolled:
+  // the pattern needs arrow keys to move between the tabs while Tab leaves the
+  // strip entirely, and no native control does that. Roving tabindex, so the strip
+  // is one stop in the tab order however many panels it grows.
+  //
+  // Panels are hidden with the `hidden` attribute, not by unmounting. A hidden
+  // panel keeps its subscriptions, its loaded preference values and its half-typed
+  // licence key, so switching tabs never discards the reader's work — and the
+  // renderers underneath repaint from storage, which would fight a mount/unmount
+  // scheme for ownership of when they exist.
+  const panels = new Map<"settings" | "pro", HTMLElement>();
+  const tabs = new Map<"settings" | "pro", HTMLElement>();
+
+  /** Where the preference sections go: the first panel, or `root` in the popup. */
+  let settingsHost: Element = root;
+
+  const select = (which: "settings" | "pro"): void => {
+    for (const [name, panel] of panels) {
+      const on = name === which;
+      if (on) panel.removeAttribute("hidden");
+      else panel.setAttribute("hidden", "");
+      const tab = tabs.get(name);
+      if (!tab) continue;
+      tab.setAttribute("aria-selected", on ? "true" : "false");
+      // -1 rather than removing the attribute: an unselected tab must stay
+      // reachable by arrow key and skipped by Tab, and only an explicit -1 says so.
+      tab.setAttribute("tabindex", on ? "0" : "-1");
+    }
+  };
+
+  if (isOptions) {
+    const strip = doc.createElement("nav");
+    strip.setAttribute("data-wfs-tabs", "");
+    strip.setAttribute("role", "tablist");
+    // Named, because a tab strip with two unlabelled tabs announces as a bare list
+    // of buttons. "Settings sections", not "navigation": it switches what is shown
+    // on this page rather than going anywhere.
+    strip.setAttribute("aria-label", "Settings sections");
+
+    const order: Array<"settings" | "pro"> = ["settings", "pro"];
+
+    for (const name of order) {
+      const panel = doc.createElement("div");
+      panel.id = `wfs-panel-${name}`;
+      panel.setAttribute("data-wfs-panel", name);
+      panel.setAttribute("role", "tabpanel");
+      panel.setAttribute("aria-labelledby", `wfs-tab-${name}`);
+      // Focusable, so a keyboard reader who has just chosen a tab can move into its
+      // contents with one Tab press rather than arriving at the browser's chrome.
+      panel.setAttribute("tabindex", "0");
+      panels.set(name, panel);
+
+      const tab = doc.createElement("button");
+      tab.type = "button";
+      tab.id = `wfs-tab-${name}`;
+      tab.setAttribute("data-wfs-tab", name);
+      tab.setAttribute("role", "tab");
+      tab.setAttribute("aria-controls", panel.id);
+      tab.textContent = name === "pro" ? HELP_COPY.tabs.pro : HELP_COPY.tabs.settings;
+      tab.addEventListener("click", () => select(name));
+      tab.addEventListener("keydown", (event) => {
+        const key = (event as KeyboardEvent).key;
+        const index = order.indexOf(name);
+        let next = -1;
+        if (key === "ArrowRight") next = (index + 1) % order.length;
+        else if (key === "ArrowLeft") next = (index - 1 + order.length) % order.length;
+        else if (key === "Home") next = 0;
+        else if (key === "End") next = order.length - 1;
+        if (next < 0) return;
+        event.preventDefault();
+        const target = order[next];
+        if (target === undefined) return;
+        select(target);
+        tabs.get(target)?.focus();
+      });
+      tabs.set(name, tab);
+      strip.appendChild(tab);
+    }
+
+    root.appendChild(strip);
+    for (const name of order) {
+      const panel = panels.get(name);
+      if (panel) root.appendChild(panel);
+    }
+
+    settingsHost = panels.get("settings") ?? root;
+    select(options.initialPanel === "pro" ? "pro" : "settings");
+
+    // Update the Pro tab label when entitlement changes: "Get Pro" → "Pro".
+    const proTab = tabs.get("pro");
+    if (proTab) {
+      const updateProTabLabel = (entitled: boolean): void => {
+        proTab.textContent = entitled ? HELP_COPY.tabs.proEntitled : HELP_COPY.tabs.pro;
+      };
+      void getProState().then(({ state }) => updateProTabLabel(isPro(state)));
+      disposers.push(watchProState((state) => updateProTabLabel(isPro(state))));
+    }
+  }
+
   /** A `<section>` with an uppercase-styled `<h2>`, the shared shape here. */
   const addSection = (marker: string, title: string): HTMLElement => {
     const section = doc.createElement("section");
@@ -6339,7 +9221,7 @@ export function renderSettings(
     const heading = doc.createElement("h2");
     heading.textContent = title;
     section.appendChild(heading);
-    root.appendChild(section);
+    settingsHost.appendChild(section);
     return section;
   };
 
@@ -6357,7 +9239,7 @@ export function renderSettings(
   // around the pair as though they were one thing.
   const helpHost = doc.createElement("div");
   helpHost.setAttribute("data-wfs-help-section", "");
-  root.appendChild(helpHost);
+  settingsHost.appendChild(helpHost);
   void readToggleCombo()
     .then((combo) => {
       try {
@@ -6375,19 +9257,65 @@ export function renderSettings(
       showError("Help section failed to render.");
     });
 
-  // --- Donation -----------------------------------------------------------
-  const donationSection = addSection("data-wfs-donation-section", "Buy me a coffee");
-  const donationLink = doc.createElement("a");
-  donationLink.href = DONATION_URL;
-  donationLink.rel = "noopener noreferrer";
-  donationLink.textContent = "\u2615 Enjoying this? Help keep it alive";
-  donationLink.addEventListener("click", (event) => {
-    event.preventDefault();
-    void openInTab(DONATION_URL, "donation page");
-  });
-  donationSection.appendChild(donationLink);
+  // --- Pro, in the second panel -------------------------------------------
+  // A `<section>` host with no heading of its own: `renderProSection` owns its
+  // subtree completely, heading included, because it repaints the lot on every
+  // entitlement change.
+  //
+  // It is mounted here, in source order, but it lands in the Pro panel — so this
+  // block's position in the file says nothing about where the reader sees it, and
+  // moving it would not reorder anything.
+  const proPanel = panels.get("pro");
+  if (proPanel) {
+    const proHost = doc.createElement("section");
+    proHost.setAttribute("data-wfs-pro-section", "");
+    proPanel.appendChild(proHost);
+    try {
+      disposers.push(renderProSection(doc, proHost, { showError, showSaved, openInTab }));
+    } catch {
+      showError("Pro section failed to render.");
+    }
+  }
 
   // --- Per-site toggles ---------------------------------------------------
+
+  /**
+   * Pro-gated checkboxes that need updating when entitlement changes. Each entry
+   * holds the checkbox and its wrapper so both can be disabled/muted in one pass.
+   */
+  const proGatedControls: Array<{
+    checkbox: HTMLInputElement;
+    wrapper: HTMLLabelElement;
+    lock: HTMLElement;
+  }> = [];
+
+  /**
+   * Apply — or lift — the lock on Pro-gated checkboxes.
+   *
+   * The padlock is part of the lock, not a permanent label for the feature. It was
+   * appended once while the row was built and never touched again, so an entitled
+   * reader kept a padlock beside a setting they had already paid for and could
+   * already change — the control was live and the icon beside it said it was not.
+   * Anything this turns off it has to be able to turn back on, which is why the
+   * icon is registered here with the checkbox instead of being left to the paint.
+   */
+  const applyProGateToToggles = (entitled: boolean): void => {
+    for (const { checkbox, wrapper, lock } of proGatedControls) {
+      checkbox.disabled = !entitled;
+      wrapper.style.opacity = entitled ? "" : "0.5";
+      wrapper.style.pointerEvents = entitled ? "" : "none";
+      // `hidden` rather than a display style: no stylesheet gives the badge a
+      // `display`, so the attribute takes it out of the layout and out of the
+      // accessibility tree in one move.
+      lock.hidden = entitled;
+    }
+  };
+
+  // Initialise from storage, then watch for changes so a key entered in the Pro
+  // tab or the popup takes effect immediately without a page reload.
+  void getProState().then(({ state }) => applyProGateToToggles(isPro(state)));
+  disposers.push(watchProState((state) => applyProGateToToggles(isPro(state))));
+
   for (const { siteId, label } of supportedSites()) {
     const section = addSection("data-wfs-site-section", label);
     section.setAttribute("data-site-id", siteId);
@@ -6426,6 +9354,16 @@ export function renderSettings(
       const wrapper = doc.createElement("label");
       wrapper.appendChild(checkbox);
       wrapper.appendChild(doc.createTextNode(` ${text}`));
+      // A lock icon for Pro-gated settings, so the reader knows at a glance.
+      if (toggle.proGated) {
+        const lock = doc.createElement("span");
+        lock.setAttribute("data-wfs-pro-lock", "");
+        lock.textContent = " \uD83D\uDD12";
+        lock.title = "Pro feature";
+        wrapper.appendChild(lock);
+        // Register for entitlement-driven disable/mute, badge included.
+        proGatedControls.push({ checkbox, wrapper, lock });
+      }
       section.appendChild(wrapper);
 
       if (toggle.hint) {
@@ -6452,7 +9390,65 @@ export function renderSettings(
         if (loadFailed) showError("Could not load preferences; showing defaults.");
       });
     }
+
+    // The per-channel rules, inside the site they belong to rather than in the Pro
+    // section: the rules are per site, and a reader looking for "when does this
+    // switch itself on" is already reading this section to find the switch above.
+    // Its own host, because it repaints from an entitlement change.
+    const channelHost = doc.createElement("div");
+    channelHost.setAttribute("data-wfs-channel-section", "");
+    section.appendChild(channelHost);
+    try {
+      disposers.push(
+        renderChannelRules(doc, channelHost, { siteId, siteLabel: label, showError, showSaved }),
+      );
+    } catch {
+      showError("Channel list failed to render.");
+    }
   }
+
+  // --- Pro, in the popup: one row and a door ------------------------------
+  // Only where there is no Pro panel to put the real thing in. The teaser card
+  // navigates to the full Pro showcase view within the popup when `showProView`
+  // is provided; otherwise falls back to opening the options page in a tab.
+  if (!isOptions) {
+    const summaryHost = doc.createElement("section");
+    summaryHost.setAttribute("data-wfs-pro-summary-section", "");
+    settingsHost.appendChild(summaryHost);
+    try {
+      disposers.push(
+        renderProSummary(doc, summaryHost, {
+          openProPanel: () => {
+            if (options.showProView) {
+              options.showProView();
+            } else {
+              void openInTab(
+                chrome.runtime.getURL(`${OPTIONS_PAGE_PATH}${PRO_PANEL_HASH}`),
+                "settings page",
+              );
+            }
+          },
+        }),
+      );
+    } catch {
+      showError("Pro row failed to render.");
+    }
+  }
+
+  // --- Donation -----------------------------------------------------------
+  // Last in the panel, under the settings and under Pro. It used to sit above the
+  // per-site controls, which put a request for money in front of the preferences
+  // the reader opened the page to change.
+  const donationSection = addSection("data-wfs-donation-section", "Buy me a coffee");
+  const donationLink = doc.createElement("a");
+  donationLink.href = DONATION_URL;
+  donationLink.rel = "noopener noreferrer";
+  donationLink.textContent = "\u2615 Enjoying this? Help keep it alive";
+  donationLink.addEventListener("click", (event) => {
+    event.preventDefault();
+    void openInTab(DONATION_URL, "donation page");
+  });
+  donationSection.appendChild(donationLink);
 
   root.appendChild(status);
   root.appendChild(error);
@@ -6484,6 +9480,10 @@ export function renderSettings(
   } catch {
     showError("Rating footer failed to render.");
   }
+
+  return () => {
+    for (const dispose of disposers) dispose();
+  };
 }
 
 /**
@@ -6491,11 +9491,22 @@ export function renderSettings(
  *
  * Settings only. The first-run greeting that used to render above these controls
  * is its own page now (§13), so nothing here is conditional on how the reader
- * arrived.
+ * arrived — except which of the two panels is showing, which the address decides.
+ *
+ * The disposer is dropped on purpose: this page lives until the tab is closed, and
+ * a page teardown takes its subscriptions with it. The popup is the surface that
+ * needs it.
  */
 export function startOptionsPage(): void {
   const root = document.getElementById("app");
-  if (root) renderSettings(document, root, { showHeading: true });
+  if (!root) return;
+  // A fragment the worker or the popup put in the address, and nothing else reads
+  // it. Compared whole rather than parsed: there is one accepted value.
+  const wantsPro = window.location.hash === PRO_PANEL_HASH;
+  renderSettings(document, root, {
+    surface: "options",
+    initialPanel: wantsPro ? "pro" : "settings",
+  });
 }
 
 // ===========================================================================
@@ -6551,10 +9562,23 @@ function toggleLabel(status: PopupStatus): string {
 function renderPopup(doc: Document, root: HTMLElement, status: PopupStatus, onToggle: () => void): void {
   root.replaceChildren();
 
+  // Header row: title on the left, "Get Pro" button on the right.
+  const headerRow = doc.createElement("div");
+  headerRow.className = "wfs-popup__header";
+
   const heading = doc.createElement("h1");
   heading.className = "wfs-popup__title";
   heading.textContent = "Windowed Fullscreen";
-  root.appendChild(heading);
+  headerRow.appendChild(heading);
+
+  // The Pro button is placed by startPopup after renderPopup returns, because
+  // it needs the view-switching callback that only startPopup owns. A slot is
+  // left for it.
+  const proSlot = doc.createElement("span");
+  proSlot.setAttribute("data-wfs-pro-header-slot", "");
+  headerRow.appendChild(proSlot);
+
+  root.appendChild(headerRow);
 
   const list = doc.createElement("dl");
   list.className = "wfs-popup__status";
@@ -6610,6 +9634,42 @@ export function startPopup(): void {
   let url: string | undefined;
   let response: ExtResponse | undefined;
 
+  // --- Two-view navigation: main (toggle + settings) and Pro showcase ------
+  const mainSections = {
+    app: root,
+    pinPrompt: document.getElementById("pin-prompt"),
+    settings: document.getElementById("settings"),
+  };
+  const proViewHost = document.getElementById("pro-view");
+  let proDisposer: (() => void) | null = null;
+
+  /** Switch the popup to the Pro showcase view. */
+  const showProView = (): void => {
+    if (!proViewHost) return;
+    // Hide main content
+    root.setAttribute("hidden", "");
+    if (mainSections.pinPrompt) mainSections.pinPrompt.setAttribute("hidden", "");
+    if (mainSections.settings) mainSections.settings.setAttribute("hidden", "");
+    // Show Pro view
+    proViewHost.removeAttribute("hidden");
+    proDisposer = renderProView(document, proViewHost, {
+      onBack: showMainView,
+    });
+  };
+
+  /** Switch back to the main popup view. */
+  const showMainView = (): void => {
+    if (proDisposer) { proDisposer(); proDisposer = null; }
+    if (proViewHost) {
+      proViewHost.setAttribute("hidden", "");
+      proViewHost.replaceChildren();
+    }
+    // Restore main content
+    root.removeAttribute("hidden");
+    if (mainSections.pinPrompt) mainSections.pinPrompt.removeAttribute("hidden");
+    if (mainSections.settings) mainSections.settings.removeAttribute("hidden");
+  };
+
   const paint = (): void => {
     renderPopup(document, root, derivePopupStatus(url, response), () => {
       void (async () => {
@@ -6620,20 +9680,37 @@ export function startPopup(): void {
         }
       })();
     });
+    // Fill the "Get Pro" header slot that renderPopup leaves empty.
+    const slot = root.querySelector("[data-wfs-pro-header-slot]");
+    if (slot) {
+      const proBtn = document.createElement("button");
+      proBtn.type = "button";
+      proBtn.setAttribute("data-wfs-pro-header-btn", "");
+      proBtn.textContent = "\u26A1 Pro";
+      proBtn.addEventListener("click", () => showProView());
+      slot.appendChild(proBtn);
+    }
   };
 
   paint();
 
   // The settings controls load their own values, so render them once up front.
-  const settings = document.getElementById("settings");
-  if (settings) renderSettings(document, settings, { showHeading: false });
+  // `popup`, so the tree arrives without a tab strip and with the Pro teaser card
+  // in place of the full panel — see `renderSettings`.
+  //
+  // The disposer is deliberately not held. A popup document is destroyed outright
+  // when the popup closes, which takes its storage listeners with it; there is no
+  // event that fires first and nothing to hang a call on. It is returned so a
+  // future surface that does outlive its tree can unsubscribe.
+  const settings = mainSections.settings;
+  if (settings) renderSettings(document, settings, { surface: "popup", showProView });
 
   // --- Prompt decision (R9.19, R16.1, R16.2, R16.4, R16.5–R16.8, R16.12) ---
   // Async step after the initial paint: read the Pin_State, compute both
   // decisions, ask promptPrecedence, render at most one prompt, then record
   // that showing. A failed or stalled read never blocks the popup — the
   // paint-early-repaint-later structure stays intact.
-  const pinPromptRoot = document.getElementById("pin-prompt");
+  const pinPromptRoot = mainSections.pinPrompt;
   void (async () => {
     try {
       const pinned = await readPinState();
@@ -6702,6 +9779,14 @@ export function startPopup(): void {
 
     response = await askContentScript(tabId, { type: "GET_STATUS" });
     paint();
+
+    // The popup is the only surface that knows which channel the open tab is
+    // showing, so it hands that to the shared settings tree. Filled in, never
+    // submitted: the reader opened the popup to watch something, and a settings
+    // surface that saves a preference because a page happened to be open is one
+    // nobody can trust. The field is absent without Pro, and `prefillChannelRule`
+    // treats that as nothing to do.
+    if (settings && response?.ok) prefillChannelRule(settings, response.channel ?? null);
   })();
 }
 
@@ -6861,4 +9946,915 @@ export function startWelcomePage(): void {
       await setFirstRunState({ ...state, welcomeSeen: true });
     }
   })();
+}
+
+// ===========================================================================
+// §14  Entitlement (Pro tier)
+// ===========================================================================
+//
+// The paid tier's stored state and its single gate. Provider-agnostic, and as of
+// this section entirely offline: {@link validateLicenceKey} is a stub that never
+// touches the network, so invariant 6 — nothing leaves the device — still holds
+// in full. When the real validator lands it will send exactly one thing, the
+// licence key the reader typed, to exactly one endpoint, and every privacy claim
+// in `README.md`, `store-assets/LISTING.md`, the published listing, and
+// `.kiro/steering/product.md` has to change in that same commit.
+//
+// WHY THIS IS ITS OWN SECTION
+// The type, the record, the coercion, the gate, and the validator boundary all
+// live here rather than being filed with preferences in §1 and §5. Entitlement is
+// not a preference: the reader does not choose it, and it is the only stored value
+// an outside authority can revoke. Keeping it beside the checkboxes invites a
+// later writer to fold it into `SitePrefs`, which would hand Pro to anyone who can
+// edit local storage. It is also the part of this extension most likely to be
+// replaced wholesale when the payment provider changes, and a layer confined to
+// one section is a layer that can be swapped in one place.
+//
+// GOVERNING RULES
+//  1. **Nothing that was free before this section existed is gated by it.** The
+//     comment panel, both modes, the live-chat dock, the suggestions rail, and
+//     per-site auto-apply had all shipped publicly before the tier existed. Every
+//     Pro feature is new work, which is why there is no grandfathering code here
+//     and must never need to be any.
+//  2. **Fail open.** A network failure, a broken endpoint, or an unreadable record
+//     leaves an already-entitled reader entitled. A paying reader losing features
+//     on a flaky connection is a worse outcome than a pirate getting a free
+//     fortnight.
+//  3. **Fail open applies to re-validation, never to activation.** An install that
+//     has never had a valid answer is not Pro, whatever the network did. Rule 2
+//     extends an entitlement that was granted; it never grants one.
+//
+// Nothing in the extension consumes this section yet. That is deliberate — the
+// layer is reviewable, and discardable, on its own.
+
+/** Where the entitlement record lives. One more top-level key in the local area. */
+export const PRO_KEY = "pro";
+
+/**
+ * What the last validation attempt concluded. Recorded so the settings UI can say
+ * *why* the reader is or is not Pro, which `entitled` alone cannot: an unreachable
+ * endpoint and a revoked key both leave a reader without features, and only one of
+ * them is worth telling them to check their connection about.
+ *
+ * - `none` — no key has been entered. The first-run state.
+ * - `active` — the validator confirmed the key.
+ * - `invalid` — the validator rejected it. A definite answer: a typo, a refund, or
+ *   an activation limit reached. Not subject to rule 2.
+ * - `unreachable` — no answer arrived. Rule 2 applies.
+ */
+export type ProStatus = "none" | "active" | "invalid" | "unreachable";
+
+/**
+ * Persisted entitlement record. One storage key, written whole — the licence field
+ * in the settings tree is the only thing that writes it, and it always knows the
+ * complete record it wants stored. Same treatment as {@link RatingState}, and for
+ * the same reason: a rejected write leaves the previous record intact.
+ *
+ * The field is `entitled` rather than the brief's `pro` because a record stored
+ * under the key `pro` with a field called `pro` reads as a typo at every use site.
+ */
+export interface ProState {
+  /**
+   * The key as stored — already run through {@link normalizeLicenceKey}, so what
+   * is written is what will be sent, with no second normalisation step to drift.
+   * Empty string means none entered.
+   */
+  key: string;
+  /**
+   * The provider's id for **this device's** activation, or `""` when the licence is
+   * not bound to a device.
+   *
+   * This is what makes the activation limit on the product mean anything: it is
+   * sent with every re-check, and handed back to the provider when the reader
+   * removes the key so the slot is freed rather than burned.
+   *
+   * Empty is a valid state, not a broken one. A record written before activation
+   * existed in this extension has no instance, and keeps working unbound — a reader
+   * must not lose a licence they already entered because a later version learned to
+   * count devices.
+   */
+  instanceId: string;
+  /**
+   * Whether the tier is unlocked. Set only by a validator answer, never by the UI
+   * directly, and never true with an empty {@link key} — see the coercion.
+   */
+  entitled: boolean;
+  /** The last attempt's conclusion. */
+  status: ProStatus;
+  /**
+   * When a *definite* answer last arrived (`active` or `invalid`), in ms since
+   * epoch; 0 means never, and {@link proCheckDue} reads it that way rather than as
+   * the epoch. Drives the {@link PRO_REVALIDATE_INTERVAL_MS} schedule.
+   */
+  checkedAt: number;
+  /**
+   * When validation was last *attempted*, definite or not; 0 means never. Bounds
+   * retries after an unreachable endpoint.
+   *
+   * Two timestamps rather than one, because one cannot do both jobs. Moving a
+   * single field on a failed attempt would push the next revalidation another
+   * fortnight out every time the network hiccupped, so a revoked key could stay
+   * live indefinitely. Leaving it unmoved would make the check due on every
+   * service-worker wake, which is an unbounded retry against someone else's
+   * server — the network-side form of the bounded-loops invariant.
+   */
+  attemptedAt: number;
+}
+
+/** Documented defaults applied when nothing is stored. */
+export const DEFAULT_PRO_STATE: ProState = {
+  key: "",
+  instanceId: "",
+  entitled: false,
+  status: "none",
+  checkedAt: 0,
+  attemptedAt: 0,
+};
+
+/**
+ * Longest activation id accepted. The provider issues `lki_` followed by an
+ * identifier; 128 is generous headroom and bounds what a hand-edited record can put
+ * into a request body.
+ */
+export const MAX_INSTANCE_ID_LENGTH = 128;
+
+/**
+ * How long a confirmed licence is trusted before it is checked again.
+ *
+ * 14 days. The number balances two costs that pull opposite ways: a shorter
+ * interval means more requests to a paid third-party API for a purchase that
+ * cannot change after the fact, and a longer one means a refunded or
+ * charged-back key keeps its features for longer. A fortnight is short enough
+ * that a refund lands within one billing dispute window and long enough that a
+ * daily user's extension talks to the network twice a month.
+ */
+export const PRO_REVALIDATE_INTERVAL_MS = 14 * 24 * 60 * 60 * 1000;
+
+/**
+ * The shortest gap between attempts once one has failed to get an answer.
+ *
+ * 6 hours. This is the bound that keeps rule 2 from becoming a retry storm: with
+ * fail-open, a reader whose check cannot complete keeps every feature, so there is
+ * nothing to gain by asking again soon. Long enough that an offline laptop makes
+ * at most a handful of attempts a day; short enough that a reader who was offline
+ * for a fortnight is revalidated the same day they reconnect.
+ */
+export const PRO_RETRY_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * Bounds on a stored licence key, in characters.
+ *
+ * A Dodo Payments licence key is a 36-character UUID-shaped string. 128 is
+ * generous headroom against a provider change — Gumroad is the documented
+ * fallback and uses a similar length — while keeping the stored record a small
+ * string no matter what is pasted into the field. The floor exists so an
+ * accidental single keystroke is rejected before it reaches the validator.
+ */
+export const MAX_LICENCE_KEY_LENGTH = 128;
+export const MIN_LICENCE_KEY_LENGTH = 8;
+
+/**
+ * Characters a licence key may contain, after {@link normalizeLicenceKey}.
+ *
+ * Letters, digits, hyphen, underscore: the intersection of what Dodo and Gumroad
+ * issue. Case is deliberately preserved rather than folded — a provider is free to
+ * treat its keys case-sensitively, and upper-casing on the reader's behalf would
+ * turn a valid key into an invalid one with no way for them to see why.
+ */
+const LICENCE_KEY_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * Tidy a key the reader typed or pasted into the form that gets stored and sent.
+ *
+ * All whitespace is removed, not merely trimmed at the ends. A key copied out of
+ * a receipt email routinely arrives wrapped across a line break or with a stray
+ * space mid-string, and a key never legitimately contains one — so stripping is
+ * always the reader's intent, and rejecting instead would fail them for something
+ * their mail client did.
+ */
+export function normalizeLicenceKey(raw: unknown): string {
+  if (typeof raw !== "string") return "";
+  return raw.replace(/\s+/g, "");
+}
+
+/**
+ * Whether a key is worth sending. A shape check only — it says nothing about
+ * whether the key was ever bought.
+ *
+ * Its job is to keep the settings UI able to answer "that is not a licence key"
+ * without a round trip, and to keep junk out of the request. A key that passes
+ * this and is then rejected by the validator is the ordinary wrong-key case.
+ */
+export function licenceKeyLooksWellFormed(key: string): boolean {
+  return (
+    key.length >= MIN_LICENCE_KEY_LENGTH &&
+    key.length <= MAX_LICENCE_KEY_LENGTH &&
+    LICENCE_KEY_PATTERN.test(key)
+  );
+}
+
+/**
+ * Coerce a stored entitlement record, field by field.
+ *
+ * Always returns a record, like {@link normalizeRatingState} rather than
+ * {@link getSitePrefs}: an absent record is the ordinary never-purchased case and
+ * the defaults are exactly what it should see.
+ *
+ * One cross-field rule beyond the per-field checks: **entitlement requires a key.**
+ * A record claiming `entitled` with no key to revalidate could never be re-checked,
+ * so it would be a permanent unlock — which is what a hand-edited record looks
+ * like. This is not a security boundary and is not pretending to be one; local
+ * storage belongs to the reader and anyone willing to edit it can also set a
+ * plausible key. It keeps the record self-consistent, so {@link isPro} has one
+ * thing to test and the revalidation schedule always has something to work with.
+ */
+export function normalizeProState(stored: unknown): ProState {
+  if (typeof stored !== "object" || stored === null || Array.isArray(stored)) {
+    return { ...DEFAULT_PRO_STATE };
+  }
+  const raw = stored as Record<string, unknown>;
+
+  // Normalised on the way in as well as on the way out: a record written by a
+  // version whose normalisation differed still reads as the key it meant.
+  const key = normalizeLicenceKey(raw.key);
+  const keyIsUsable = licenceKeyLooksWellFormed(key);
+
+  const status = isProStatus(raw.status) ? raw.status : DEFAULT_PRO_STATE.status;
+  const entitled = typeof raw.entitled === "boolean" ? raw.entitled : DEFAULT_PRO_STATE.entitled;
+
+  // Bounded and stripped of anything that is not an identifier, because this value
+  // goes straight into a request body. An unusable one degrades to "not bound",
+  // which still validates — see `ProState.instanceId`.
+  const rawInstance = typeof raw.instanceId === "string" ? raw.instanceId.trim() : "";
+  const instanceId =
+    rawInstance.length > 0 &&
+    rawInstance.length <= MAX_INSTANCE_ID_LENGTH &&
+    /^[A-Za-z0-9_-]+$/.test(rawInstance)
+      ? rawInstance
+      : "";
+
+  return {
+    key: keyIsUsable ? key : "",
+    // Without a key there is nothing for an activation to belong to.
+    instanceId: keyIsUsable ? instanceId : "",
+    entitled: keyIsUsable && entitled,
+    // With no usable key there is nothing an outcome could be about, so the record
+    // reads back as a first run rather than as a rejection the reader must clear.
+    status: keyIsUsable ? status : DEFAULT_PRO_STATE.status,
+    checkedAt: isCount(raw.checkedAt, Number.MAX_SAFE_INTEGER)
+      ? raw.checkedAt
+      : DEFAULT_PRO_STATE.checkedAt,
+    attemptedAt: isCount(raw.attemptedAt, Number.MAX_SAFE_INTEGER)
+      ? raw.attemptedAt
+      : DEFAULT_PRO_STATE.attemptedAt,
+  };
+}
+
+/** True for one of the four documented status strings. */
+function isProStatus(value: unknown): value is ProStatus {
+  return value === "none" || value === "active" || value === "invalid" || value === "unreachable";
+}
+
+/**
+ * **The gate.** Every Pro feature asks this one function and nothing else.
+ *
+ * Pure and synchronous over a record the caller already holds, rather than an
+ * `async` read of storage. Two reasons. The surfaces that gate — the injector and
+ * the content script — decide inside a click handler, where there is nothing to
+ * await into; and a gate that reads storage on every call would be asked once per
+ * pointer event. Every surface therefore loads the record once and follows
+ * {@link watchProState}, which is the same shape as `watchSitePrefs`.
+ *
+ * Staleness is not consulted, and that is rule 2 in one line: a record confirmed
+ * a year ago and never rechecked because the reader has been offline still says
+ * yes. {@link proCheckDue} is what decides when to ask again, and it is a separate
+ * question from what the reader may use right now.
+ */
+export function isPro(state: ProState): boolean {
+  return state.entitled;
+}
+
+/**
+ * Whether the stored licence should be validated again now.
+ *
+ * Pure, so the schedule is testable without a clock or a network. Four gates:
+ *
+ *  1. There has to be a key. Nothing to validate otherwise, and asking about an
+ *     empty string is a request that can only fail.
+ *  2. If an attempt has already been made, it has to be at least
+ *     {@link PRO_RETRY_INTERVAL_MS} old. This is the retry bound, and it applies to
+ *     a first activation too: a key entered while offline is retried on a schedule,
+ *     not on every wake.
+ *  3. A key that has never had a definite answer is due — this is rule 3.
+ *     Activation is not subject to the grace period that protects a confirmed
+ *     licence, so a fresh key is asked about at the first opportunity.
+ *  4. Otherwise the last definite answer has to be at least
+ *     {@link PRO_REVALIDATE_INTERVAL_MS} old, or the clock has to have moved
+ *     backwards past it. The backwards case is due rather than ignored because the
+ *     alternative — trusting a future-dated `checkedAt` — is an unlock that
+ *     outlasts any interval.
+ *
+ * Both timestamps read **0 as never, not as the epoch.** Treating a zero
+ * `attemptedAt` as an attempt made in 1970 is arithmetically the same thing for
+ * any plausible `now`, but it is not the same thing at the boundary: it made gate 2
+ * refuse a key entered on a device whose clock had not yet been set, so activation
+ * silently waited six hours for a retry of an attempt that had never happened.
+ */
+export function proCheckDue(state: ProState, now: number): boolean {
+  if (!Number.isFinite(now) || now < 0) return false;
+  if (state.key === "") return false;
+
+  const attempted = state.attemptedAt > 0;
+  // `now < attemptedAt` means the clock moved back; that falls through to due,
+  // for the same reason as gate 4.
+  if (attempted && now >= state.attemptedAt && now - state.attemptedAt < PRO_RETRY_INTERVAL_MS) {
+    return false;
+  }
+
+  if (state.checkedAt === 0) return true;
+  return now - state.checkedAt >= PRO_REVALIDATE_INTERVAL_MS || now < state.checkedAt;
+}
+
+/**
+ * What a validator concluded. The shape the network validator in step 7 must also
+ * return, so swapping {@link validateLicenceKey} for it changes one function body
+ * and nothing that calls it.
+ *
+ * `reason` is for the console and the settings UI, never for a decision: branching
+ * on a provider's wording is how a provider change becomes a silent unlock.
+ */
+export type ProValidation =
+  | { outcome: "active" }
+  /**
+   * `status` is the provider's HTTP status, and `code` its documented business-logic
+   * identifier (`LICENSE_KEY_LIMIT_REACHED`, `INACTIVE_LICENSE_KEY`, …). Both are
+   * absent when the refusal was decided locally from the key's shape.
+   *
+   * These exist so the settings UI can tell three refusals apart that a reader acts
+   * on differently: re-read what you pasted, free up a device, or this key has been
+   * revoked. Note the distinction from the rule above — an enumerated code is part
+   * of the provider's contract, whereas its `message` is prose that can be reworded
+   * in a release note. So this branches on `code` and never on `message`, and only
+   * ever to choose a sentence: entitlement is decided by the 4xx alone, before any
+   * of this is read. An unrecognised code degrades to the general refusal, which is
+   * why a provider adding one cannot unlock anything.
+   */
+  | { outcome: "invalid"; reason: string; status?: number; code?: string }
+  | { outcome: "unreachable"; reason: string };
+
+/**
+ * Fold a validation result into the stored record. Pure; the caller writes it.
+ *
+ * This is where rules 2 and 3 actually live:
+ *
+ * - `active` and `invalid` are definite answers, so both move `checkedAt` and set
+ *   `entitled` outright. A rejection revokes — a refunded or charged-back key has
+ *   to stop working, and no amount of previous entitlement changes that.
+ * - `unreachable` moves `attemptedAt` alone. `entitled` and `checkedAt` are carried
+ *   through untouched, so an entitled reader stays entitled for as long as the
+ *   endpoint is unreachable, and an install that has never had an answer stays
+ *   un-entitled. That asymmetry is the whole of rule 3, and it is the reason this
+ *   is a reducer over the previous record rather than a mapping from an outcome to
+ *   a state.
+ */
+export function applyValidation(state: ProState, result: ProValidation, now: number): ProState {
+  const at = Number.isFinite(now) && now >= 0 ? Math.floor(now) : state.attemptedAt;
+  switch (result.outcome) {
+    case "active":
+      return { ...state, entitled: true, status: "active", checkedAt: at, attemptedAt: at };
+    case "invalid":
+      return { ...state, entitled: false, status: "invalid", checkedAt: at, attemptedAt: at };
+    case "unreachable":
+      return { ...state, status: "unreachable", attemptedAt: at };
+  }
+}
+
+/**
+ * The provider's documented licence-key error codes, as far as this extension reads
+ * them. Listed rather than matched loosely so that adding one is a decision.
+ *
+ * Anything not here — including a code the provider adds later — is the general
+ * refusal. That default is the safe direction: the reader is told the key was not
+ * accepted, which is true of every 4xx.
+ */
+const PROVIDER_REFUSAL_CODES = {
+  /** Activations = limit. Not a problem with the key. */
+  limitReached: "LICENSE_KEY_LIMIT_REACHED",
+  /** Key status is not active: refunded, charged back, or revoked by hand. */
+  inactive: "INACTIVE_LICENSE_KEY",
+} as const;
+
+/**
+ * Choose the sentence for a check that did not confirm the key. Pure, so the
+ * mapping can be read and tested without a network or a DOM.
+ *
+ * Only ever chooses words. Entitlement was already decided by
+ * {@link applyValidation} before this is called, which is what makes reading a
+ * provider-supplied field here safe.
+ */
+export function refusalMessage(
+  result: ProValidation,
+  copy: { invalid: string; limit: string; revoked: string; unreachable: string },
+): string {
+  // Not a refusal at all: the endpoint could not be reached, the reader keeps
+  // everything they had, and saying "not accepted" here would be a lie that costs a
+  // support email.
+  if (result.outcome === "unreachable") return copy.unreachable;
+  if (result.outcome === "active") return copy.invalid;
+  switch (result.code) {
+    case PROVIDER_REFUSAL_CODES.limitReached:
+      return copy.limit;
+    case PROVIDER_REFUSAL_CODES.inactive:
+      return copy.revoked;
+    default:
+      return copy.invalid;
+  }
+}
+
+// --- Talking to the payment provider ---------------------------------------
+//
+// Dodo Payments' three licence endpoints — activate, validate, deactivate — are
+// all **public**: no API key, and documented as safe to call from client software.
+// Measured, not assumed: a preflight from a `chrome-extension://` origin comes back
+// 200 with the origin reflected in `Access-Control-Allow-Origin`, and the POST that
+// follows answers `{"valid":false}` for a bogus key. Both test and live hosts.
+//
+// So the extension calls them directly and there is **no server on our side at
+// all**. An earlier revision of this section went through a Vercel proxy of ours,
+// on the build brief's premise that the endpoints needed `Bearer <API key>` and
+// that shipping one inside an extension hands it to every user. The premise was
+// wrong, and once it was checked the proxy had one benefit left — being able to
+// change payment provider without an extension release — which is not worth a
+// service to run, deploy, and keep alive.
+//
+// What that costs, stated plainly so nobody rediscovers it as a surprise: these
+// URLs are baked into every install ever shipped. Moving off Dodo means a release,
+// and installs that never update keep calling Dodo until they do.
+//
+// The permission set is unchanged and this update carries no new permission
+// warning, because the CORS headers above mean no `host_permissions` entry is
+// needed. Adding one would disable the extension for every existing user until
+// they accepted it — a heavy price, and the reason the CORS behaviour was worth
+// measuring before deciding.
+
+/**
+ * The provider's API host.
+ *
+ * To work against test-mode keys, change `live` to `test` here — and change it
+ * back. One string rather than a mode flag with a lookup table, deliberately: a
+ * table would put both hosts in every bundle, and then the packaging guard that
+ * refuses to ship a test build would have nothing to look for.
+ *
+ * **A test host must never ship.** `scripts/package.mjs` refuses to write a release
+ * zip while it appears in the bundle, and `tests/entitlement.test.ts` fails the
+ * suite outright, so the guard does not depend on anyone remembering this comment.
+ * It is the one mistake in the licence path with no symptom on the developer's own
+ * machine: a test build validates test keys perfectly and rejects every real one,
+ * so the first person to find out is a reader who paid and was told their key was
+ * not accepted.
+ */
+const DODO_API_BASE = "https://test.dodopayments.com";
+
+/**
+ * How long to wait for the provider.
+ *
+ * 10 s, which is longer than it sounds and deliberately so. Nothing is blocked on
+ * it: the check runs in the service worker on a schedule, or behind an `Activate`
+ * button that has already said it is checking. The cost of waiting is nothing; the
+ * cost of giving up early is a reader on a slow connection being told their
+ * licence could not be checked.
+ */
+export const PRO_VERIFY_TIMEOUT_MS = 10_000;
+
+/**
+ * The name this install registers its activation under.
+ *
+ * A fixed string, carrying **no device fingerprint of any kind** — no user agent,
+ * no screen size, no generated id, nothing derived from the machine. Two installs
+ * therefore look identical in the provider's dashboard, which is the point: an
+ * extension whose pitch is that it collects nothing has no business inventing a
+ * per-device identifier to make a licence page tidier.
+ */
+const DODO_INSTANCE_NAME = "Windowed Fullscreen (browser)";
+
+/**
+ * One POST to a Dodo licence endpoint.
+ *
+ * Returns the parsed body on a 2xx, or a `ProValidation` describing the failure —
+ * which is always either a definite refusal or `unreachable`, never a guess. The
+ * split is the whole of §14 rule 2, so it lives in one place rather than being
+ * re-derived at each call site:
+ *
+ * - **4xx is a definite refusal.** The provider read the request and said no.
+ * - **Anything else is `unreachable`**: a 5xx, a timeout, no network, a refused
+ *   connection, a body that will not parse. An entitled reader keeps everything
+ *   through all of it.
+ */
+async function dodoPost(
+  path: string,
+  body: Record<string, string>,
+): Promise<{ ok: true; payload: unknown } | { ok: false; failure: ProValidation }> {
+  // `AbortController` rather than a `Promise.race`: a race leaves the request
+  // running, and this may be a service worker trying to go back to sleep.
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PRO_VERIFY_TIMEOUT_MS);
+  try {
+    const response = await fetch(`${DODO_API_BASE}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      // No cookies, and nothing that wants them. Stated rather than left to the
+      // default so it cannot drift with the platform's.
+      credentials: "omit",
+      cache: "no-store",
+      signal: controller.signal,
+    });
+
+    if (response.status >= 400 && response.status < 500) {
+      // The body is read for its `code` and nothing else. A refusal is already
+      // decided by the status; this only picks which sentence the reader gets, so a
+      // body that is missing, truncated, or not JSON degrades to the general one
+      // rather than failing the request a second time.
+      let code = "";
+      try {
+        const body: unknown = await response.json();
+        if (body !== null && typeof body === "object") {
+          const raw = (body as { code?: unknown }).code;
+          if (typeof raw === "string") code = raw;
+        }
+      } catch {
+        code = "";
+      }
+      return {
+        ok: false,
+        failure: {
+          outcome: "invalid",
+          reason: `provider refused with ${response.status}${code === "" ? "" : ` ${code}`}`,
+          status: response.status,
+          ...(code === "" ? {} : { code }),
+        },
+      };
+    }
+    if (!response.ok) {
+      return {
+        ok: false,
+        failure: { outcome: "unreachable", reason: `provider returned ${response.status}` },
+      };
+    }
+
+    // Deactivate answers 200 with no body, so a parse failure is not automatically
+    // a problem — the caller decides whether it needed a payload.
+    let payload: unknown = null;
+    try {
+      payload = await response.json();
+    } catch {
+      payload = null;
+    }
+    return { ok: true, payload };
+  } catch (err) {
+    return { ok: false, failure: { outcome: "unreachable", reason: describeError(err) } };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Register this device against a key, and report whether the key was accepted.
+ *
+ * Called once, when the reader enters a key. The instance id it returns is what
+ * binds the licence to this install: every later check sends it, so the provider's
+ * activation limit is what decides how many devices one purchase covers, and
+ * {@link deactivateLicence} is what gives an activation back.
+ *
+ * **A 4xx here covers two different situations and is deliberately not told
+ * apart:** the key is wrong, or the key is real and has already been activated on
+ * as many devices as it allows. The provider's wording is the only thing that
+ * distinguishes them, and branching on a third party's error prose is how a
+ * provider's copy edit becomes a silent unlock. One message names both things for
+ * the reader to check, which is honest and needs no sniffing.
+ *
+ * The response body carries the buyer's **name and email**. Only `id` is read out
+ * of it. Nothing else is stored, logged, or passed on — see the destructuring
+ * below, which is written the way it is on purpose.
+ */
+export async function activateLicence(
+  key: string,
+): Promise<{ validation: ProValidation; instanceId: string }> {
+  const normalized = normalizeLicenceKey(key);
+  if (!licenceKeyLooksWellFormed(normalized)) {
+    return {
+      validation: { outcome: "invalid", reason: "not the shape of a licence key" },
+      instanceId: "",
+    };
+  }
+
+  const result = await dodoPost("/licenses/activate", {
+    license_key: normalized,
+    name: DODO_INSTANCE_NAME,
+  });
+  if (!result.ok) return { validation: result.failure, instanceId: "" };
+
+  // `id` and nothing else. The rest of this payload is the customer record — name,
+  // email, phone — and it is dropped here rather than anywhere later, so there is
+  // no point in the code where it exists in a variable something could persist by
+  // accident.
+  const id = (result.payload as { id?: unknown } | null)?.id;
+  if (typeof id !== "string" || id === "") {
+    // Accepted, but we cannot tell which activation is ours. Treated as unreachable
+    // rather than active: entitling an install whose activation we cannot later
+    // deactivate would leak one of the reader's device slots permanently.
+    return {
+      validation: { outcome: "unreachable", reason: "activation returned no instance" },
+      instanceId: "",
+    };
+  }
+  return { validation: { outcome: "active" }, instanceId: id };
+}
+
+/**
+ * Re-check a key that has already been activated.
+ *
+ * Three outcomes and no fourth, because the caller's fail-open behaviour turns on
+ * the difference between them: `active`, a definite `invalid`, or `unreachable` for
+ * everything else. Which is why the success path tests `valid === true` rather than
+ * a truthy `valid` — a provider that starts answering `{"valid":"yes"}` has to fall
+ * out as unreachable, not as an unlock.
+ *
+ * `instanceId` is sent when there is one, and omitted when there is not. It is
+ * omitted for a record written before activation existed in this extension; such a
+ * record keeps working, unbound, rather than being invalidated for a reason the
+ * reader had no part in.
+ */
+export async function validateLicenceKey(key: string, instanceId = ""): Promise<ProValidation> {
+  const normalized = normalizeLicenceKey(key);
+  if (!licenceKeyLooksWellFormed(normalized)) {
+    return { outcome: "invalid", reason: "not the shape of a licence key" };
+  }
+
+  const body: Record<string, string> = { license_key: normalized };
+  if (instanceId !== "") body.license_key_instance_id = instanceId;
+
+  const result = await dodoPost("/licenses/validate", body);
+  if (!result.ok) return result.failure;
+
+  const valid = (result.payload as { valid?: unknown } | null)?.valid;
+  if (valid === true) return { outcome: "active" };
+  if (valid === false) return { outcome: "invalid", reason: "the key was not recognised" };
+  return { outcome: "unreachable", reason: "the provider answered in an unexpected shape" };
+}
+
+/**
+ * Give this device's activation back, so the reader can use it somewhere else.
+ *
+ * Best effort, and the caller does not wait on the answer to decide anything: the
+ * `Remove key` button's job is to take the licence off this device, and it has to
+ * do that whether or not the provider can be reached. A failure here costs the
+ * reader one activation slot until they contact support — annoying, and much less
+ * annoying than a Remove button that refuses to work while they are offline.
+ *
+ * @returns whether the provider confirmed it.
+ */
+export async function deactivateLicence(key: string, instanceId: string): Promise<boolean> {
+  const normalized = normalizeLicenceKey(key);
+  if (!licenceKeyLooksWellFormed(normalized) || instanceId === "") return false;
+  const result = await dodoPost("/licenses/deactivate", {
+    license_key: normalized,
+    license_key_instance_id: instanceId,
+  });
+  return result.ok;
+}
+
+/**
+ * Read the entitlement record.
+ *
+ * @returns the effective record, plus whether storage failed to answer. The flag
+ *   is what lets the settings UI distinguish "no licence entered" from "your
+ *   licence cannot be read", which are the same record and very different
+ *   messages. It is *not* a reason to deny features — see {@link isPro}: a failed
+ *   read yields the default record, which is un-entitled, and rule 2 is served by
+ *   never writing that default back over a good one.
+ */
+export async function getProState(): Promise<{ state: ProState; loadFailed: boolean }> {
+  const area = storageArea();
+  if (!area) return { state: { ...DEFAULT_PRO_STATE }, loadFailed: true };
+  try {
+    const stored = (await area.get(PRO_KEY))?.[PRO_KEY];
+    // Nothing stored is an install that has not bought anything, not a failure.
+    if (stored === undefined) return { state: { ...DEFAULT_PRO_STATE }, loadFailed: false };
+    return { state: normalizeProState(stored), loadFailed: false };
+  } catch {
+    return { state: { ...DEFAULT_PRO_STATE }, loadFailed: true };
+  }
+}
+
+/**
+ * Persist the whole entitlement record in one write, like {@link setRatingState}.
+ *
+ * Normalised on the way out as well as in, so a caller cannot store a record the
+ * coercion would refuse to read back — an `entitled` record with no key, most
+ * of all.
+ *
+ * A rejection is reported rather than swallowed: this write is the only record of
+ * a purchase on the device, and a reader who entered a valid key and was told
+ * nothing went wrong has to actually be Pro on the next page they open.
+ */
+export async function setProState(
+  next: ProState,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  return writeKey(PRO_KEY, normalizeProState(next));
+}
+
+/**
+ * Call `onChange` whenever the entitlement record is written from another surface,
+ * so a live page unlocks the moment a key is accepted in the options tab instead
+ * of on the next reload. Returns a disposer, matching `watchSitePrefs`.
+ */
+export function watchProState(onChange: (state: ProState) => void): () => void {
+  if (typeof chrome === "undefined" || !chrome.storage?.onChanged) return () => {};
+  const listener = (
+    changes: Record<string, chrome.storage.StorageChange>,
+    areaName: string,
+  ): void => {
+    if (areaName !== "local" || !(PRO_KEY in changes)) return;
+    onChange(normalizeProState(changes[PRO_KEY]?.newValue));
+  };
+  chrome.storage.onChanged.addListener(listener);
+  return () => chrome.storage.onChanged.removeListener(listener);
+}
+
+// --- The shop window: in-page prompt and messages --------------------------
+//
+// Which Pro surfaces are visible to a free reader is a product decision, and it
+// is not symmetrical:
+//
+//  - The capture control **is shown** to everybody and opens the prompt below when
+//    pressed. It is the only paid feature a reader who sets the extension up once
+//    and never opens the settings again will ever meet, because it sits in the
+//    control bar of every video they watch. A locked door that says what is behind
+//    it converts; a hidden one does not exist.
+//  - The drag grips and the per-channel rules are **not** rendered at all without
+//    entitlement. Both are reachable only by someone already looking around, so
+//    neither has a funnel to serve, and a grip that only shows a prompt when
+//    dragged would be an affordance that lies about what it does.
+//
+// Nothing here is scoped to the mode: the capture control sits in the player bar
+// whether windowed mode is on or off, so the prompt has to work either way.
+
+/** How long a capture message stays on screen, in ms. */
+const TOAST_DURATION_MS = 2_600;
+
+/** Class on the in-page message element. */
+const TOAST_CLASS = "wfs-toast";
+
+/** Class on the Pro prompt's backdrop. */
+const PRO_PROMPT_CLASS = "wfs-pro-prompt";
+
+/**
+ * Show a brief message over the video, replacing any message already showing.
+ *
+ * Returns a disposer so a session teardown can take the message with it: a
+ * navigation mid-message would otherwise leave an absolute-positioned line of
+ * text on a page the session no longer owns — the same class of leak the geometry
+ * nudge had.
+ */
+export function showToast(doc: Document, text: string): () => void {
+  for (const stale of Array.from(doc.querySelectorAll(`.${TOAST_CLASS}`))) stale.remove();
+
+  const toast = doc.createElement("div");
+  toast.className = TOAST_CLASS;
+  // Announced, because the reader is watching the video rather than the corner of
+  // it. `status` and not `alert`: a saved frame is not an interruption.
+  toast.setAttribute("role", "status");
+  toast.textContent = text;
+  doc.body.appendChild(toast);
+
+  const view = doc.defaultView ?? window;
+  const timer = view.setTimeout(() => toast.remove(), TOAST_DURATION_MS);
+  return () => {
+    view.clearTimeout(timer);
+    toast.remove();
+  };
+}
+
+/**
+ * Open the Pro prompt in the page. At most one at a time.
+ *
+ * The card is built with DOM calls rather than markup for the same reason
+ * everything else here is: YouTube enforces Trusted Types, so an `innerHTML`
+ * assignment is refused outright.
+ *
+ * `Get Pro` is a real anchor, so middle-click and "open in new tab" work and the
+ * browser handles the navigation. `I have a key` cannot be: the settings page is
+ * an extension URL, and navigating a tab to one from a page is blocked unless the
+ * page is listed as web-accessible — which would make the settings reachable from
+ * any site on the internet. It asks the worker instead.
+ *
+ * @returns a disposer, so a teardown closes the prompt with the session.
+ */
+export function showProPrompt(
+  doc: Document,
+  options: { reason: "capture" | "other"; openOptions: () => void },
+): () => void {
+  for (const stale of Array.from(doc.querySelectorAll(`.${PRO_PROMPT_CLASS}`))) stale.remove();
+
+  const copy = HELP_COPY.pro;
+
+  const backdrop = doc.createElement("div");
+  backdrop.className = PRO_PROMPT_CLASS;
+
+  const card = doc.createElement("div");
+  card.className = "wfs-pro-prompt__card";
+  // A dialog, and named by its own heading. Not `alertdialog`: nothing here is an
+  // error and nothing is lost by ignoring it.
+  card.setAttribute("role", "dialog");
+  card.setAttribute("aria-modal", "true");
+
+  const title = doc.createElement("p");
+  title.className = "wfs-pro-prompt__title";
+  title.textContent = options.reason === "capture" ? copy.captureTitle : copy.genericTitle;
+  const titleId = "wfs-pro-prompt-title";
+  title.id = titleId;
+  card.setAttribute("aria-labelledby", titleId);
+  card.appendChild(title);
+
+  const body = doc.createElement("p");
+  body.className = "wfs-pro-prompt__body";
+  body.textContent = copy.body;
+  card.appendChild(body);
+
+  const actions = doc.createElement("div");
+  actions.className = "wfs-pro-prompt__actions";
+
+  /**
+   * Where the Escape listener goes, and it has to be the WINDOW, not the document.
+   *
+   * The controller registers its own Escape handler on the document in the capture
+   * phase, and it gives back one layer of the mode. Two capture listeners on the
+   * same node run in registration order, and the controller's is registered on
+   * entry — long before this prompt exists — so a document-level listener here
+   * would run second and `stopPropagation` would arrive too late: one press would
+   * close the prompt AND drop the panel underneath it.
+   *
+   * The window is the first node in the capture path, ahead of the document, so a
+   * capturing listener here runs first whatever order they were registered in.
+   */
+  const keyHost: EventTarget = doc.defaultView ?? doc;
+
+  const close = (): void => {
+    backdrop.remove();
+    keyHost.removeEventListener("keydown", onKey, true);
+  };
+
+  /** Escape closes the prompt, and nothing else. */
+  function onKey(event: Event): void {
+    const key = event as KeyboardEvent;
+    if (key.key !== "Escape") return;
+    key.preventDefault();
+    key.stopPropagation();
+    close();
+  }
+  keyHost.addEventListener("keydown", onKey, true);
+
+  const buy = doc.createElement("a");
+  buy.className = "wfs-pro-prompt__action is-primary";
+  buy.href = PRO_PURCHASE_URL;
+  buy.target = "_blank";
+  buy.rel = "noopener noreferrer";
+  buy.textContent = copy.buy;
+  buy.addEventListener("click", () => close());
+  actions.appendChild(buy);
+
+  const haveKey = doc.createElement("button");
+  haveKey.type = "button";
+  haveKey.className = "wfs-pro-prompt__action";
+  haveKey.textContent = copy.haveKey;
+  haveKey.addEventListener("click", () => {
+    options.openOptions();
+    close();
+  });
+  actions.appendChild(haveKey);
+
+  const dismiss = doc.createElement("button");
+  dismiss.type = "button";
+  dismiss.className = "wfs-pro-prompt__action";
+  dismiss.textContent = copy.dismiss;
+  dismiss.addEventListener("click", () => close());
+  actions.appendChild(dismiss);
+
+  card.appendChild(actions);
+  backdrop.appendChild(card);
+
+  // A click on the backdrop dismisses, the same as `Not now`. Guarded on the
+  // target being the backdrop itself, or a click that started inside the card and
+  // ended on the edge of it would close the prompt mid-press.
+  backdrop.addEventListener("click", (event) => {
+    if (event.target === backdrop) close();
+  });
+
+  doc.body.appendChild(backdrop);
+  // Focus lands on the primary action rather than the card, so a keyboard reader
+  // arrives on the thing the prompt is for and one `Tab` reaches the way out.
+  buy.focus();
+
+  return close;
 }

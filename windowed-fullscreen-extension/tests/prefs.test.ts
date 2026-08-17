@@ -18,6 +18,7 @@ import {
   INSTALL_KEY,
   MAX_PIN_PROMPTS,
   MAX_RATING_PROMPTS,
+  MIN_DOCK_WIDTH_PX,
   MIN_SESSION_FOR_USAGE_MS,
   normalizeFirstRunState,
   normalizeInstallTimestamp,
@@ -88,7 +89,10 @@ test("round-trips a stored value", async () => {
   fakeStorage();
   await setSitePrefs("youtube", { autoApply: true, scrollable: true });
   const { prefs, loadFailed } = await getSitePrefs("youtube");
-  assert.deepEqual(prefs, { autoApply: true, scrollable: true });
+  // Spread from the defaults rather than written out, so a preference added later
+  // does not fail a test about the two fields being asserted here. The claim is
+  // "these round-trip and nothing else moved", and the spread says exactly that.
+  assert.deepEqual(prefs, { ...DEFAULT_SITE_PREFS, autoApply: true, scrollable: true });
   assert.equal(loadFailed, false);
 });
 
@@ -99,10 +103,34 @@ test("a patch leaves the fields it does not name alone", async () => {
   await setSitePrefs("youtube", { autoApply: true, scrollable: true });
 
   await setSitePrefs("youtube", { scrollable: false });
-  assert.deepEqual((await getSitePrefs("youtube")).prefs, { autoApply: true, scrollable: false });
+  assert.deepEqual((await getSitePrefs("youtube")).prefs, {
+    ...DEFAULT_SITE_PREFS,
+    autoApply: true,
+    scrollable: false,
+  });
 
   await setSitePrefs("youtube", { autoApply: false });
-  assert.deepEqual((await getSitePrefs("youtube")).prefs, { autoApply: false, scrollable: false });
+  assert.deepEqual((await getSitePrefs("youtube")).prefs, {
+    ...DEFAULT_SITE_PREFS,
+    autoApply: false,
+    scrollable: false,
+  });
+});
+
+test("a patch leaves the Pro fields alone, and vice versa", async () => {
+  // The widths and the channel list are written by different controls again — a
+  // drag in the page, a list in the settings — so the merge has to hold across the
+  // whole record, not just across the two checkboxes.
+  fakeStorage();
+  await setSitePrefs("youtube", { panelWidth: 420, channels: ["@one"] });
+  await setSitePrefs("youtube", { autoApply: true });
+
+  assert.deepEqual((await getSitePrefs("youtube")).prefs, {
+    ...DEFAULT_SITE_PREFS,
+    autoApply: true,
+    panelWidth: 420,
+    channels: ["@one"],
+  });
 });
 
 test("sites are namespaced, so writing one never disturbs another", async () => {
@@ -110,24 +138,31 @@ test("sites are namespaced, so writing one never disturbs another", async () => 
   await setSitePrefs("youtube", { autoApply: true });
   await setSitePrefs("vimeo", { autoApply: false, scrollable: true });
 
-  assert.deepEqual((await getSitePrefs("youtube")).prefs, { autoApply: true, scrollable: false });
-  assert.deepEqual((await getSitePrefs("vimeo")).prefs, { autoApply: false, scrollable: true });
+  assert.deepEqual((await getSitePrefs("youtube")).prefs, {
+    ...DEFAULT_SITE_PREFS,
+    autoApply: true,
+  });
+  assert.deepEqual((await getSitePrefs("vimeo")).prefs, {
+    ...DEFAULT_SITE_PREFS,
+    scrollable: true,
+  });
   assert.deepEqual(Object.keys(data).sort(), ["site:vimeo", "site:youtube"]);
 });
 
 test("a value written by an older version still reads as valid", async () => {
-  // `scrollable` did not exist in the first release. Its absence must resolve to
-  // the default, not condemn the whole record as corrupt.
+  // `scrollable` did not exist in the first release, and the four Pro fields did
+  // not exist before 1.4.0. Every absence must resolve to that field's default
+  // rather than condemning the whole record as corrupt.
   fakeStorage({ "site:youtube": { autoApply: true } });
   const { prefs, loadFailed } = await getSitePrefs("youtube");
-  assert.deepEqual(prefs, { autoApply: true, scrollable: false });
+  assert.deepEqual(prefs, { ...DEFAULT_SITE_PREFS, autoApply: true });
   assert.equal(loadFailed, false);
 });
 
 test("unknown fields from a newer version are ignored, not fatal", async () => {
   fakeStorage({ "site:youtube": { autoApply: true, scrollable: true, somethingNew: 7 } });
   const { prefs, loadFailed } = await getSitePrefs("youtube");
-  assert.deepEqual(prefs, { autoApply: true, scrollable: true });
+  assert.deepEqual(prefs, { ...DEFAULT_SITE_PREFS, autoApply: true, scrollable: true });
   assert.equal(loadFailed, false);
 });
 
@@ -438,14 +473,33 @@ test("a coerced record is a fresh object, so the defaults cannot be poisoned", (
 const SITE_ID = "youtube";
 const SITE_KEY = `site:${SITE_ID}`;
 
-/** Every well-formed per-site record: the domain `normalizeSitePrefs` must not touch. */
+/**
+ * Every well-formed per-site record: the domain `normalizeSitePrefs` must not
+ * touch.
+ *
+ * The two width fields are drawn from `{0} ∪ [MIN, MAX]` rather than from the
+ * whole integer range, because that IS the documented domain — a stored width
+ * outside it is coerced to the nearest bound, which is Property 11's business, not
+ * this property's.
+ */
 const validSitePrefs: Gen<SitePrefs> = record({
   autoApply: bool(),
   scrollable: bool(),
+  panelWidth: exhaustive([0, MIN_DOCK_WIDTH_PX, 380, 1400]),
+  chatWidth: exhaustive([0, MIN_DOCK_WIDTH_PX, 380, 1400]),
+  channels: exhaustive<readonly string[]>([[], ["@one"], ["@one", "@two"]]),
+  captureToClipboard: bool(),
 });
 
-/** The two field names a per-site record is allowed to hold, and nothing else. */
-const SITE_PREFS_FIELDS: readonly string[] = ["autoApply", "scrollable"];
+/** The field names a per-site record is allowed to hold, and nothing else. */
+const SITE_PREFS_FIELDS: readonly string[] = [
+  "autoApply",
+  "scrollable",
+  "panelWidth",
+  "chatWidth",
+  "channels",
+  "captureToClipboard",
+];
 
 /**
  * Every name belonging to one of the five new records — the top-level keys and
@@ -500,11 +554,11 @@ forAll(
   async (prefs, olderVersion, first, second, firstRun, pinPrompt) => {
     // --- R8.6: the new keys leave the per-site record alone -----------------
 
-    // Either shape the shipped version has written: the current two-field record,
-    // or the first release's single field, which must still read as valid.
+    // Either shape a shipped version has written: the current record, or the first
+    // release's single field, which must still read as valid.
     const stored = olderVersion ? { autoApply: prefs.autoApply } : { ...prefs };
     const expected: SitePrefs = olderVersion
-      ? { autoApply: prefs.autoApply, scrollable: DEFAULT_SITE_PREFS.scrollable }
+      ? { ...DEFAULT_SITE_PREFS, autoApply: prefs.autoApply }
       : { ...prefs };
 
     const data = fakeStorage({ [SITE_KEY]: stored });

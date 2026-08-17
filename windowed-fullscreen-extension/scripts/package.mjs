@@ -59,6 +59,54 @@ async function main() {
   const manifest = JSON.parse(await readFile(resolve(distDir, "manifest.json"), "utf8"));
   const version = manifest.version;
 
+  // Refuse to package a build pointed at the payment provider's TEST host.
+  //
+  // Not a comment asking someone to remember, because this is the one mistake in
+  // the licence path with no visible symptom on the developer's own machine: a
+  // test-mode build validates test-mode keys perfectly, and rejects every real one
+  // — so the first person to find out is a reader who paid $5 and was told their
+  // key was not accepted.
+  //
+  // The bundle is searched rather than the source, so it holds whatever the build
+  // actually emitted regardless of how the mode constant is spelled, and it cannot
+  // be defeated by a build that is stale relative to the source.
+  //
+  // Two hosts, because there are two ways to ship a test-mode build and they fail
+  // differently. A test API host rejects every real key. A test checkout link takes
+  // a reader to a page that accepts a test card and never charges anything, so the
+  // sale silently does not happen — which is worse, because nothing errors.
+  //
+  // Both needles are needed: `test.checkout.dodopayments.com` does not contain
+  // `test.dodopayments.com`, so the API-host check alone lets a test checkout link
+  // straight through. That gap shipped once as a possibility and is closed here.
+  //
+  // Split so this file does not contain the literals it is looking for, or the guard
+  // would trip on itself if `scripts/` were ever bundled.
+  const DOMAIN = ".dodopayments.com";
+  const TEST_HOSTS = [
+    { needle: "test" + DOMAIN, what: "licence API", constant: "DODO_API_BASE" },
+    { needle: "test.checkout" + DOMAIN, what: "checkout link", constant: "PRO_PURCHASE_URL" },
+  ];
+  const emitted = await collect(distDir);
+  for (const { needle, what, constant } of TEST_HOSTS) {
+    const testMode = [];
+    for (const file of emitted) {
+      if (!file.endsWith(".js")) continue;
+      if ((await readFile(file, "utf8")).includes(needle)) {
+        testMode.push(relative(distDir, file).split(sep).join("/"));
+      }
+    }
+    if (testMode.length > 0) {
+      console.error(
+        `[package] refusing: this build uses the provider's test ${what}.\n` +
+          `          Found in: ${testMode.join(", ")}\n` +
+          `          Point ${constant} at the live one in src/windowed-fullscreen.ts,\n` +
+          `          rebuild, and re-run. Both constants flip together.`,
+      );
+      process.exit(1);
+    }
+  }
+
   // The store will not accept the same version twice, and this script wipes
   // `release/` before writing, so packaging over an existing zip of the same
   // version produces an upload that gets rejected at the dashboard — after the
