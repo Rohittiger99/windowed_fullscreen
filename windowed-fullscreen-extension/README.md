@@ -31,7 +31,7 @@ Everything in the free tier is permanently free. The comment panel, both modes, 
 | Copy video link with current timestamp | Yes | — |
 | Shortcuts for windowed and comment buttons | Yes | — |
 | **Dragging any docked column as wide as you like** | No | Yes |
-| **Docking interactive video transcripts** | No | Yes |
+| **Docking interactive video transcripts & 1-click timestamped copy** | No | Yes |
 | **Auto-apply profiles for chosen channels** | No | Yes |
 | **Saving the current frame at source video resolution** | No | Yes |
 | **Custom filename templates ({title}, {date}, etc.)** | No | Yes |

@@ -369,6 +369,18 @@ function matchesSimple(el: StubElement, selector: string): boolean {
   if (/^[a-z][a-z0-9-]*$/i.test(selector)) {
     return el.tagName.toLowerCase() === selector.toLowerCase();
   }
+  // Support compound selectors like tag[attr="value"], tag.class, :is(...)
+  if (selector.startsWith(":is(") && selector.endsWith(")")) {
+    const inner = selector.slice(4, -1);
+    return matchesSelector(el, inner);
+  }
+  const match = selector.match(/^([a-z][a-z0-9-]*)?((?:\[[^\]]+\]|\.[a-z0-9-_]+|#[a-z0-9-_]+)+)$/i);
+  if (match) {
+    const tag = match[1];
+    if (tag && el.tagName.toLowerCase() !== tag.toLowerCase()) return false;
+    const parts = match[2].match(/\[[^\]]+\]|\.[a-z0-9-_]+|#[a-z0-9-_]+/gi) ?? [];
+    return parts.every((part) => matchesSimple(el, part));
+  }
   throw new Error(`stub querySelector: unsupported selector ${JSON.stringify(selector)}`);
 }
 

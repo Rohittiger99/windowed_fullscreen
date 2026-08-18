@@ -25,6 +25,8 @@ import {
   normalizeSitePrefs,
   importSettings,
   copyLinkAtCurrentTime,
+  extractTranscriptText,
+  copyTranscriptWithTimestamps,
   formatPlaybackTimestamp,
   resolveAdapter,
   type SitePrefs,
@@ -421,3 +423,152 @@ test("formatPlaybackTimestamp formats seconds into MM:SS and HH:MM:SS", () => {
   assert.equal(formatPlaybackTimestamp(3665), "1:01:05");
   assert.equal(formatPlaybackTimestamp(7325.8), "2:02:05");
 });
+
+test("extractTranscriptText extracts segments with timestamps formatted", () => {
+  const segment1 = {
+    querySelector: (sel: string) => {
+      if (sel.includes("timestamp")) return { textContent: "0:06" };
+      if (sel.includes("text")) return { textContent: "Yes, Will the video be uploaded on time?" };
+      return null;
+    },
+    textContent: "0:06 Yes, Will the video be uploaded on time?",
+  };
+  const segment2 = {
+    querySelector: (sel: string) => {
+      if (sel.includes("timestamp")) return { textContent: "0:13" };
+      if (sel.includes("text")) return { textContent: "Perfect Look, it all started from here." };
+      return null;
+    },
+    textContent: "0:13 Perfect Look, it all started from here.",
+  };
+
+  const doc = {
+    querySelectorAll: (sel: string) => {
+      if (sel.includes("transcript-segment")) return [segment1, segment2];
+      return [];
+    },
+  } as unknown as Document;
+
+  const result = extractTranscriptText(doc);
+  assert.equal(
+    result,
+    "0:06 Yes, Will the video be uploaded on time?\n0:13 Perfect Look, it all started from here.",
+  );
+});
+
+test("extractTranscriptText extracts chapter markers if no transcript segments", () => {
+  const chapter1 = {
+    querySelector: (sel: string) => {
+      if (sel.includes("time")) return { textContent: "0:00" };
+      if (sel.includes("title")) return { textContent: "Intro" };
+      return null;
+    },
+    textContent: "0:00 Intro",
+  };
+  const chapter2 = {
+    querySelector: (sel: string) => {
+      if (sel.includes("time")) return { textContent: "2:30" };
+      if (sel.includes("title")) return { textContent: "Main Content" };
+      return null;
+    },
+    textContent: "2:30 Main Content",
+  };
+
+  const doc = {
+    querySelectorAll: (sel: string) => {
+      if (sel.includes("macro-markers")) return [chapter1, chapter2];
+      return [];
+    },
+  } as unknown as Document;
+
+  const result = extractTranscriptText(doc);
+  assert.equal(result, "0:00 Intro\n2:30 Main Content");
+});
+
+test("extractTranscriptText extracts lines from open engagement panel content text", () => {
+  const panel = {
+    querySelectorAll: (sel: string) => {
+      if (sel.includes("role='button'")) {
+        return [
+          { textContent: "0:06 Yes, Will the video be uploaded on time? And the thumbnail?" },
+          { textContent: "0:13 Perfect Look, it all started from here." },
+        ];
+      }
+      return [];
+    },
+    querySelector: () => null,
+  };
+
+  const doc = {
+    querySelectorAll: (sel: string) => {
+      if (sel.includes("ytd-engagement-panel-section-list-renderer")) {
+        return [panel];
+      }
+      return [];
+    },
+    querySelector: () => null,
+  } as unknown as Document;
+
+  const result = extractTranscriptText(doc);
+  assert.equal(
+    result,
+    "0:06 Yes, Will the video be uploaded on time? And the thumbnail?\n0:13 Perfect Look, it all started from here.",
+  );
+});
+
+test("extractTranscriptText extracts Hindi and multilingual transcripts correctly", () => {
+  const segment1 = {
+    querySelector: (sel: string) => {
+      if (sel.includes("timestamp")) return { textContent: "0:00" };
+      if (sel.includes("text")) return { textContent: "तो गाइस आज मैं बन चुका हूं लाइब्रेरियन" };
+      return null;
+    },
+    textContent: "0:00 तो गाइस आज मैं बन चुका हूं लाइब्रेरियन",
+  };
+  const segment2 = {
+    querySelector: (sel: string) => {
+      if (sel.includes("timestamp")) return { textContent: "0:10" };
+      if (sel.includes("text")) return { textContent: "जो भी नया है प्लीज सब्सक्राइब टू द चैनल" };
+      return null;
+    },
+    textContent: "0:10 जो भी नया है प्लीज सब्सक्राइब टू द चैनल",
+  };
+
+  const doc = {
+    querySelectorAll: (sel: string) => {
+      if (sel.includes("transcript-segment")) return [segment1, segment2];
+      return [];
+    },
+    querySelector: () => null,
+  } as unknown as Document;
+
+  const result = extractTranscriptText(doc);
+  assert.equal(
+    result,
+    "0:00 तो गाइस आज मैं बन चुका हूं लाइब्रेरियन\n0:10 जो भी नया है प्लीज सब्सक्राइब टू द चैनल",
+  );
+});
+
+test("extractTranscriptText returns null when no transcript elements present", () => {
+  const doc = {
+    querySelectorAll: () => [],
+    querySelector: () => null,
+  } as unknown as Document;
+
+  assert.equal(extractTranscriptText(doc), null);
+});
+
+test("copyTranscriptWithTimestamps handles missing transcript gracefully", async () => {
+  const doc = {
+    querySelectorAll: () => [],
+    querySelector: () => null,
+  } as unknown as Document;
+
+  let message = "";
+  const copied = await copyTranscriptWithTimestamps(doc, (msg) => {
+    message = msg;
+  });
+  assert.equal(copied, false);
+  assert.equal(message, "No transcript found to copy.");
+});
+

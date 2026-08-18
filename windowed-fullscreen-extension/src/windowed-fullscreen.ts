@@ -508,7 +508,8 @@ export type ExtMessage =
   | { type: "GET_STATUS" }
   | { type: "TOGGLE_PANEL" }
   | { type: "CAPTURE" }
-  | { type: "COPY_LINK" };
+  | { type: "COPY_LINK" }
+  | { type: "COPY_TRANSCRIPT" };
 
 /**
  * Reply to an {@link ExtMessage}.
@@ -780,7 +781,7 @@ const YT = {
    * anyone pressed it.
    */
   transcriptPanel:
-    'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"]',
+    'ytd-engagement-panel-section-list-renderer:is([target-id="engagement-panel-searchable-transcript"], [target-id="engagement-panel-macro-markers-description-chapters"], [target-id="engagement-panel-macro-markers-auto-chapters"], [target-id="PAmodern_transcript_view"], [target-id="engagement-panel-transcript"], [target-id*="transcript"], [target-id*="macro-markers"], [target-id*="chapters"], :has(ytd-transcript-search-panel-renderer, ytd-transcript-renderer, ytd-macro-markers-list-renderer, ytd-macro-markers-panel-renderer))',
   /** The attribute YouTube sets when the panel is expanded/visible. */
   transcriptVisibilityAttr: "visibility",
   /** The value that means the panel is open. */
@@ -2164,7 +2165,8 @@ html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT
 /* The dock itself. Fixed to the right edge, offset by the sum of the outboard
    docks (chat + panel). */
 html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"] {
-  display: block !important;
+  display: flex !important;
+  flex-direction: column !important;
   box-sizing: border-box !important;
   position: fixed !important;
   top: 0 !important;
@@ -2174,9 +2176,9 @@ html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT
   width: var(--wfs-transcript-width) !important;
   min-width: 0 !important;
   max-width: var(--wfs-transcript-width) !important;
-  height: auto !important;
+  height: 100vh !important;
   min-height: 0 !important;
-  max-height: none !important;
+  max-height: 100vh !important;
   margin: 0 !important;
   padding: 0 !important;
   border: 0 !important;
@@ -2187,16 +2189,86 @@ html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT
   box-shadow: -1px 0 0 0 var(--wfs-edge) !important;
 }
 
-/* The transcript panel’s inner content container — let it fill the dock. */
-html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"] #content {
+/* Ensure the panel header stays pinned at the top and its close button remains clickable. */
+html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"] #header,
+html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"] ytd-engagement-panel-title-header-renderer #header {
+  flex: none !important;
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  position: relative !important;
   width: 100% !important;
   min-width: 0 !important;
   max-width: none !important;
-  height: 100% !important;
+  z-index: 2 !important;
+  box-sizing: border-box !important;
+}
+
+html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"] ytd-engagement-panel-title-header-renderer {
+  flex: none !important;
+  display: block !important;
+  position: relative !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  z-index: 2 !important;
+}
+
+/* The transcript panel’s inner content container — scrollable body filling remainder. */
+html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"] #content {
+  flex: 1 1 auto !important;
+  display: block !important;
+  position: relative !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  height: auto !important;
   min-height: 0 !important;
   max-height: none !important;
   overflow-y: auto !important;
   overflow-x: hidden !important;
+}
+
+/* One-click copy transcript button inside the engagement panel header. */
+.wfs-copy-transcript-btn {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  padding: 4px 10px !important;
+  margin-left: auto !important;
+  margin-right: 8px !important;
+  font-family: inherit !important;
+  font-size: 12px !important;
+  font-weight: 500 !important;
+  color: var(--wfs-fg, #f1f1f1) !important;
+  background: var(--wfs-surface-raised, rgba(255, 255, 255, 0.1)) !important;
+  border: 1px solid var(--wfs-edge, rgba(255, 255, 255, 0.18)) !important;
+  border-radius: 14px !important;
+  cursor: pointer !important;
+  transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease !important;
+  user-select: none !important;
+  line-height: 1.3 !important;
+  height: 28px !important;
+  box-sizing: border-box !important;
+  vertical-align: middle !important;
+}
+.wfs-copy-transcript-btn:hover {
+  background: var(--wfs-surface-hover, rgba(255, 255, 255, 0.22)) !important;
+  border-color: var(--wfs-edge-hover, rgba(255, 255, 255, 0.3)) !important;
+}
+.wfs-copy-transcript-btn:active {
+  transform: scale(0.96) !important;
+}
+.wfs-copy-transcript-btn.wfs-copied {
+  background: rgba(46, 160, 67, 0.25) !important;
+  border-color: rgba(46, 160, 67, 0.5) !important;
+  color: #3fb950 !important;
+}
+.wfs-copy-transcript-btn svg {
+  width: 13px !important;
+  height: 13px !important;
+  flex-shrink: 0 !important;
 }
 
 /* Neutralise containing blocks in the transcript’s ancestor chain, same
@@ -2580,6 +2652,12 @@ const youtubeAdapter: SiteAdapter = {
 
     /** Transcript's dock state: which panel, and whether it is expanded. */
     const readTranscriptState = (): { panel: Element | null; expanded: boolean } => {
+      const expandedPanel = doc.querySelector(
+        `ytd-engagement-panel-section-list-renderer[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]`,
+      );
+      if (expandedPanel) {
+        return { panel: expandedPanel, expanded: true };
+      }
       const panel = doc.querySelector(YT.transcriptPanel);
       return {
         panel,
@@ -5727,6 +5805,166 @@ export async function copyLinkAtCurrentTime(
 }
 
 /**
+ * Extract all transcript segments with their timestamps from the current document.
+ * Formats segments cleanly into "[timestamp] [text]" lines.
+ * Returns null if no transcript or timeline segments are present in the document.
+ */
+export function extractTranscriptText(doc: Document): string | null {
+  const lines: string[] = [];
+
+  // Strategy 1: Direct segment elements anywhere in the document (ytd-transcript-segment-renderer)
+  const segments = doc.querySelectorAll?.(
+    "ytd-transcript-segment-renderer, ytd-transcript-search-panel-renderer ytd-transcript-segment-renderer, .ytd-transcript-segment-list-renderer ytd-transcript-segment-renderer, [class*='transcript-segment']",
+  );
+
+  if (segments && segments.length > 0) {
+    for (const segment of Array.from(segments)) {
+      const timeEl = segment.querySelector?.(
+        ".segment-timestamp, [class*='timestamp'], [class*='time'], div.segment-timestamp, span.segment-timestamp, #time, #segment-timestamp",
+      );
+      const textEl = segment.querySelector?.(
+        ".segment-text, [class*='text'], yt-formatted-string.segment-text, .yt-core-attributed-string, yt-formatted-string, #text",
+      );
+
+      let timeStr = (timeEl?.textContent ?? "").trim();
+      let textStr = (textEl?.textContent ?? "").trim();
+
+      if (!timeStr) {
+        const full = (segment.textContent ?? "").trim();
+        const m = full.match(/^(\d{1,2}:\d{2}(?::\d{2})?)\s*([\s\S]*)$/);
+        if (m) {
+          timeStr = m[1].trim();
+          textStr = m[2].trim();
+        }
+      } else if (!textStr) {
+        textStr = (segment.textContent ?? "").replace(timeStr, "").trim();
+      }
+
+      textStr = textStr.replace(/\s+/g, " ");
+      if (timeStr && textStr) {
+        lines.push(`${timeStr} ${textStr}`);
+      } else if (textStr) {
+        lines.push(textStr);
+      }
+    }
+    if (lines.length > 0) return lines.join("\n");
+  }
+
+  // Strategy 2: Chapter / Macro-markers items (ytd-macro-markers-list-item-renderer)
+  const chapterItems = doc.querySelectorAll?.(
+    "ytd-macro-markers-list-item-renderer, ytd-macro-markers-panel-renderer ytd-macro-markers-list-item-renderer, [class*='macro-markers-list-item']",
+  );
+  if (chapterItems && chapterItems.length > 0) {
+    for (const item of Array.from(chapterItems)) {
+      const timeEl = item.querySelector?.("#time, .time, [class*='time'], div#time");
+      const textEl = item.querySelector?.("#details #title, #title, .title, [class*='title']");
+      const timeStr = (timeEl?.textContent ?? "").trim();
+      let textStr = (textEl?.textContent ?? "").trim();
+      if (!textStr) {
+        textStr = (item.textContent ?? "").replace(timeStr, "").trim();
+      }
+      textStr = textStr.replace(/\s+/g, " ");
+      if (timeStr && textStr) {
+        lines.push(`${timeStr} ${textStr}`);
+      } else if (textStr) {
+        lines.push(textStr);
+      }
+    }
+    if (lines.length > 0) return lines.join("\n");
+  }
+
+  // Strategy 3: Check ALL engagement panels in the document
+  const allPanels = doc.querySelectorAll?.("ytd-engagement-panel-section-list-renderer");
+  if (allPanels && allPanels.length > 0) {
+    for (const panel of Array.from(allPanels)) {
+      const rows = panel.querySelectorAll?.(
+        "#content [role='button'], #content [class*='segment'], #content [class*='renderer'], #content [class*='item'], #content > div > div > *",
+      );
+      if (rows && rows.length > 0) {
+        const panelLines: string[] = [];
+        for (const row of Array.from(rows)) {
+          const text = (row.textContent ?? "").trim();
+          const m = text.match(/^(\d{1,2}:\d{2}(?::\d{2})?)\s+([\s\S]+)$/);
+          if (m) {
+            const time = m[1].trim();
+            const cleanText = m[2].trim().replace(/\s+/g, " ");
+            panelLines.push(`${time} ${cleanText}`);
+          }
+        }
+        if (panelLines.length > 0) return panelLines.join("\n");
+      }
+
+      // Strategy 4: Raw text parsing inside panel #content
+      const contentEl = panel.querySelector?.("#content");
+      if (contentEl) {
+        const rawText = contentEl.textContent ?? "";
+        const regex = /(\d{1,2}:\d{2}(?::\d{2})?)\s*([^\n\d]+(?:(?!\d{1,2}:\d{2})[^\n])*)/g;
+        let match: RegExpExecArray | null;
+        const panelLines: string[] = [];
+        while ((match = regex.exec(rawText)) !== null) {
+          const time = match[1].trim();
+          const cleanText = match[2].trim().replace(/\s+/g, " ");
+          if (cleanText && cleanText !== "Timeline" && cleanText !== "Transcript" && cleanText !== "Search transcript") {
+            panelLines.push(`${time} ${cleanText}`);
+          }
+        }
+        if (panelLines.length > 0) return panelLines.join("\n");
+      }
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Copy the video transcript with timestamps to the clipboard.
+ */
+export async function copyTranscriptWithTimestamps(
+  doc: Document,
+  say?: (msg: string) => void,
+): Promise<boolean> {
+  try {
+    const text = extractTranscriptText(doc);
+    if (!text) {
+      say?.("No transcript found to copy.");
+      return false;
+    }
+
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        say?.("Transcript copied with timestamps.");
+        return true;
+      }
+    } catch {
+      // Fallback to execCommand below.
+    }
+
+    if (doc.createElement && doc.body) {
+      const textarea = doc.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      textarea.style.pointerEvents = "none";
+      doc.body.appendChild(textarea);
+      textarea.focus();
+      textarea.select();
+      const ok = doc.execCommand?.("copy") ?? false;
+      textarea.remove();
+      if (ok) {
+        say?.("Transcript copied with timestamps.");
+        return true;
+      }
+    }
+    say?.("Could not copy transcript.");
+    return false;
+  } catch {
+    say?.("Could not copy transcript.");
+    return false;
+  }
+}
+
+/**
  * Build the filename for a captured frame: the site's own name for what is
  * playing, then the wall-clock time, then `.png`.
  *
@@ -7267,36 +7505,162 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
     });
   };
 
+  /** Injects a copy button into the transcript header if present and not already injected. */
+  const updateTranscriptCopyButton = (): void => {
+    const panels = doc.querySelectorAll(
+      `ytd-engagement-panel-section-list-renderer[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"], ytd-engagement-panel-section-list-renderer:not([${YT.transcriptVisibilityAttr}="ENGAGEMENT_PANEL_VISIBILITY_HIDDEN"])`,
+    );
+    for (const panel of Array.from(panels)) {
+      const headerRow = panel.querySelector<HTMLElement>(
+        "ytd-engagement-panel-title-header-renderer #header, #header.ytd-engagement-panel-title-header-renderer",
+      );
+      if (!headerRow) continue;
+
+      const existing = headerRow.querySelector(".wfs-copy-transcript-btn");
+      if (existing) continue;
+
+      const copyBtn = doc.createElement("button");
+      copyBtn.className = "wfs-copy-transcript-btn";
+      copyBtn.setAttribute("type", "button");
+      copyBtn.setAttribute("title", "Copy transcript with timestamps");
+      copyBtn.innerHTML = `
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
+        <span class="wfs-copy-label">Copy Transcript</span>
+      `;
+
+      copyBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!isPro(pro)) {
+          offerPro("other");
+          return;
+        }
+        void copyTranscriptWithTimestamps(doc, say).then((success) => {
+          if (success) {
+            const label = copyBtn.querySelector(".wfs-copy-label");
+            if (label) {
+              const prevText = label.textContent;
+              label.textContent = "Copied! ✓";
+              copyBtn.classList.add("wfs-copied");
+              setTimeout(() => {
+                label.textContent = prevText;
+                copyBtn.classList.remove("wfs-copied");
+              }, 2000);
+            }
+          }
+        });
+      });
+
+      const visibilityBtn = headerRow.querySelector("#visibility-button, yt-icon-button#visibility-button, #information-button");
+      if (visibilityBtn) {
+        headerRow.insertBefore(copyBtn, visibilityBtn);
+      } else {
+        headerRow.appendChild(copyBtn);
+      }
+    }
+  };
+
   const toggleTranscript = (): void => {
     if (!isPro(pro)) {
       offerPro("other");
       return;
     }
-    const panel = doc.querySelector(YT.transcriptPanel);
-    const isExpanded =
-      panel?.getAttribute(YT.transcriptVisibilityAttr) === YT.transcriptExpandedValue;
 
-    if (isExpanded && panel) {
-      const closeBtn = panel.querySelector<HTMLButtonElement>(
-        '#visibility-button, button[aria-label*="Close" i], #close-button button',
-      );
-      if (closeBtn) {
-        closeBtn.click();
-      } else {
-        panel.setAttribute(YT.transcriptVisibilityAttr, "ENGAGEMENT_PANEL_VISIBILITY_HIDDEN");
+    const openPanels = Array.from(
+      doc.querySelectorAll<HTMLElement>(
+        `ytd-engagement-panel-section-list-renderer[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]`,
+      ),
+    );
+
+    if (openPanels.length > 0) {
+      for (const openPanel of openPanels) {
+        const closeBtn = openPanel.querySelector<HTMLButtonElement | HTMLElement>(
+          'yt-icon-button#visibility-button button, #visibility-button button, button[aria-label*="Close" i], #close-button button, #visibility-button, ytd-engagement-panel-title-header-renderer button',
+        );
+        if (closeBtn) {
+          closeBtn.click();
+        }
+        openPanel.setAttribute(YT.transcriptVisibilityAttr, "ENGAGEMENT_PANEL_VISIBILITY_HIDDEN");
       }
       return;
     }
 
-    if (panel) {
-      panel.setAttribute(YT.transcriptVisibilityAttr, YT.transcriptExpandedValue);
+    const candidates = [
+      'ytd-video-description-transcript-section-renderer button',
+      'button[aria-label*="Show transcript" i]',
+      'button[aria-label*="Transcript" i]',
+      '#structured-description ytd-video-description-transcript-section-renderer button',
+      'ytd-macro-markers-entry-point-renderer button',
+      'button[aria-label*="Key moments" i]',
+      'button[aria-label*="Chapters" i]',
+      'button[aria-label*="In this video" i]',
+      '.ytp-chapter-title',
+      '.ytp-chapter-container',
+    ];
+
+    let clicked = false;
+    for (const selector of candidates) {
+      const btn = doc.querySelector<HTMLButtonElement | HTMLElement>(selector);
+      if (btn) {
+        btn.click();
+        clicked = true;
+        break;
+      }
     }
-    const showTranscriptBtn = doc.querySelector<HTMLButtonElement>(
-      'ytd-video-description-transcript-section-renderer button, button[aria-label*="Show transcript" i], button[aria-label*="Transcript" i]',
-    );
-    if (showTranscriptBtn) {
-      showTranscriptBtn.click();
+
+    if (!clicked) {
+      const expandDescriptionBtn = doc.querySelector<HTMLButtonElement | HTMLElement>(
+        '#description #expand, ytd-watch-metadata #description, tp-yt-paper-button#expand, ytd-text-inline-expander #expand, ytd-expandable-metadata-renderer',
+      );
+      expandDescriptionBtn?.click();
+
+      setTimeout(() => {
+        const transcriptBtn = doc.querySelector<HTMLButtonElement | HTMLElement>(
+          'ytd-video-description-transcript-section-renderer button, button[aria-label*="Show transcript" i], button[aria-label*="Transcript" i]',
+        );
+        if (transcriptBtn) {
+          transcriptBtn.click();
+        } else {
+          const panel = doc.querySelector<HTMLElement>(YT.transcriptPanel);
+          if (panel) {
+            panel.setAttribute(YT.transcriptVisibilityAttr, YT.transcriptExpandedValue);
+          }
+        }
+      }, 100);
     }
+
+    const switchTab = () => {
+      const panel = doc.querySelector<HTMLElement>(
+        `ytd-engagement-panel-section-list-renderer[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]`,
+      );
+      if (panel) {
+        const allTabs = Array.from(
+          panel.querySelectorAll<HTMLElement>(
+            'tp-yt-paper-tab, [role="tab"], yt-tab-shape, button[role="tab"]',
+          ),
+        );
+        const transcriptTab =
+          allTabs.find((tab) =>
+            /transcript/i.test(
+              tab.textContent ??
+                tab.getAttribute("aria-label") ??
+                tab.getAttribute("tab-title") ??
+                "",
+            ),
+          ) ?? allTabs[1];
+
+        if (transcriptTab && transcriptTab.getAttribute("aria-selected") !== "true") {
+          transcriptTab.click();
+        }
+      }
+      updateTranscriptCopyButton();
+    };
+
+    setTimeout(switchTab, 200);
+    setTimeout(switchTab, 600);
   };
 
   /** Tracked button elements for lock badge updates. */
@@ -7475,6 +7839,7 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
    */
   const disposeSiteDockChange = adapter.onSiteDockChange?.(doc, () => {
     controller.refreshGeometry();
+    updateTranscriptCopyButton();
   });
 
   void getSitePrefs(adapter.siteId).then(({ prefs: stored }) => {
@@ -7518,6 +7883,13 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
           });
           return { ok: true, active: controller.isActive };
         }
+        case "COPY_TRANSCRIPT":
+          if (!isPro(pro)) {
+            offerPro("other");
+            return { ok: false, error: "pro_required" };
+          }
+          void copyTranscriptWithTimestamps(doc, say);
+          return { ok: true, active: controller.isActive };
         case "GET_STATUS":
           // The channel rides along so the popup can offer "always on this channel"
           // without a second round trip. Null on a page that has not rendered the
