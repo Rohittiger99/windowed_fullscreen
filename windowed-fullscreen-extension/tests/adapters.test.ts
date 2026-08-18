@@ -88,10 +88,16 @@ test("the mode a preference selects", () => {
   assert.equal(DEFAULT_SITE_PREFS.scrollable, false);
   // The Pro fields default to "nothing chosen", which is what a free install has
   // and what the free behaviour reads as.
-  assert.equal(DEFAULT_SITE_PREFS.panelWidth, 0);
-  assert.equal(DEFAULT_SITE_PREFS.chatWidth, 0);
+  assert.equal(DEFAULT_SITE_PREFS.dockWidths.panel, 0);
+  assert.equal(DEFAULT_SITE_PREFS.dockWidths.chat, 0);
+  assert.equal(DEFAULT_SITE_PREFS.dockWidths.transcript, 0);
   assert.deepEqual(DEFAULT_SITE_PREFS.channels, []);
   assert.equal(DEFAULT_SITE_PREFS.captureToClipboard, false);
+  assert.equal(DEFAULT_SITE_PREFS.letterboxColor, "");
+  assert.equal(DEFAULT_SITE_PREFS.ambientGlow, false);
+  assert.equal(DEFAULT_SITE_PREFS.captureFilenameTemplate, "");
+  assert.equal(DEFAULT_SITE_PREFS.captureBurnTimestamp, false);
+  assert.equal(DEFAULT_SITE_PREFS.cursorAutoHide, true);
 });
 
 test("chrome selectors differ per mode, and callers cannot mutate the shared list", () => {

@@ -194,11 +194,15 @@ FREE, AND WHAT PRO ADDS
 Everything above is free, and stays free. All of it has been free since the
 first release and none of it has moved.
 
-Pro is $5 once — no subscription, no account, no login — and adds three things:
-• Drag comments or live chat as wide as you like, and it is remembered
-• Save the current frame as an image, at the video's own resolution
-• Switch the mode on automatically for chosen channels rather than the whole
-  site
+Pro is $10 once (lifetime) — no subscription, no account, no login:
+• Drag comment, live chat, or transcript docks as wide as you like
+• Dock interactive video transcripts into a dedicated column
+• Save the current frame at original video resolution with custom filename templates
+• Burn timestamp watermarks directly onto saved frames
+• Softly illuminate letterbox bars with dynamic Ambient Glow
+• Choose custom letterbox colors & rich gradient themes
+• Automatically hide mouse cursor after 3 seconds of idle
+• Switch the mode and layouts automatically for chosen channels
 
 One purchase covers several devices, and Remove key frees a device up again.
 

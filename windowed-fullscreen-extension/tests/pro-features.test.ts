@@ -12,13 +12,20 @@ import {
   captureFilename,
   channelRuleMatches,
   clampDockWidth,
+  DEFAULT_DOCK_WIDTHS,
   DEFAULT_SITE_PREFS,
+  findChannelRule,
+  newChannelRule,
   DOCK_DRAG_RESERVE_PX,
   MAX_CHANNEL_ID_LENGTH,
   MAX_CHANNEL_RULES,
   MIN_DOCK_WIDTH_PX,
   normalizeChannelRules,
   normalizeDockWidth,
+  normalizeSitePrefs,
+  importSettings,
+  copyLinkAtCurrentTime,
+  formatPlaybackTimestamp,
   resolveAdapter,
   type SitePrefs,
 } from "../src/windowed-fullscreen.ts";
@@ -159,9 +166,42 @@ test("the drag floor is the width the stylesheet would have drawn", () => {
 
 test("the rule list is coerced entry by entry, not condemned whole", () => {
   assert.deepEqual(normalizeChannelRules(["@one", 7, "", "  @two  ", null, "@one"]), [
-    "@one",
-    "@two",
+    newChannelRule("@one"),
+    newChannelRule("@two"),
   ]);
+});
+
+test("a rule written before 2.0.0 reads back asking for no layout of its own", () => {
+  // The list held bare identifiers through 1.4.0. A string has to upgrade to a rule
+  // that behaves exactly as it did, or updating the extension silently changes what
+  // every existing rule does.
+  assert.deepEqual(normalizeChannelRules(["@one"]), [newChannelRule("@one")]);
+  assert.deepEqual(newChannelRule("@one"), {
+    id: "@one",
+    scrollable: null,
+    panel: false,
+    dockWidths: DEFAULT_DOCK_WIDTHS,
+  });
+});
+
+test("a rule carries its own layout, and a damaged field falls back rather than voiding it", () => {
+  assert.deepEqual(
+    normalizeChannelRules([
+      { id: "@one", scrollable: true, panel: true, dockWidths: { panel: 520, chat: 0 } },
+      { id: "@two", scrollable: "yes", panel: "yes", dockWidths: 7 },
+    ]),
+    [
+      {
+        id: "@one",
+        scrollable: true,
+        panel: true,
+        dockWidths: { panel: 520, chat: 0, transcript: 0 },
+      },
+      // Not a boolean means "no preference of its own", which is null for the mode
+      // and false for the panel. The rule itself survives.
+      { id: "@two", scrollable: null, panel: false, dockWidths: DEFAULT_DOCK_WIDTHS },
+    ],
+  );
 });
 
 test("the rule list is capped, and a non-list reads as no rules", () => {
@@ -177,11 +217,14 @@ test("an overlong identifier is dropped rather than truncated", () => {
   // Truncating would store a rule that matches a different channel, or none, and
   // look like it was saved.
   const long = `@${"a".repeat(MAX_CHANNEL_ID_LENGTH)}`;
-  assert.deepEqual(normalizeChannelRules([long, "@fine"]), ["@fine"]);
+  assert.deepEqual(normalizeChannelRules([long, "@fine"]), [newChannelRule("@fine")]);
 });
 
 test("a rule matches its channel and nothing else", () => {
-  const prefs: SitePrefs = { ...DEFAULT_SITE_PREFS, channels: ["@one", "@two"] };
+  const prefs: SitePrefs = {
+    ...DEFAULT_SITE_PREFS,
+    channels: [newChannelRule("@one"), newChannelRule("@two")],
+  };
   assert.equal(channelRuleMatches(prefs, { id: "@one", label: "One" }), true);
   assert.equal(channelRuleMatches(prefs, { id: "@three", label: "Three" }), false);
   // A renamed channel still matches: the rule is keyed on the identifier, never on
@@ -190,10 +233,50 @@ test("a rule matches its channel and nothing else", () => {
 });
 
 test("no channel and no rules both mean no", () => {
-  const prefs: SitePrefs = { ...DEFAULT_SITE_PREFS, channels: ["@one"] };
+  const prefs: SitePrefs = { ...DEFAULT_SITE_PREFS, channels: [newChannelRule("@one")] };
   assert.equal(channelRuleMatches(prefs, null), false);
   assert.equal(channelRuleMatches(prefs, { id: "", label: "" }), false);
   assert.equal(channelRuleMatches(DEFAULT_SITE_PREFS, { id: "@one", label: "One" }), false);
+});
+
+test("findChannelRule returns the matched rule with its layout profile", () => {
+  const ruleScrollable = {
+    id: "@scrollableChannel",
+    scrollable: true,
+    panel: true,
+    dockWidths: { panel: 450, chat: 0, transcript: 0 },
+  };
+  const ruleCover = {
+    id: "@coverChannel",
+    scrollable: false,
+    panel: false,
+    dockWidths: DEFAULT_DOCK_WIDTHS,
+  };
+  const ruleDefault = {
+    id: "@defaultChannel",
+    scrollable: null,
+    panel: true,
+    dockWidths: DEFAULT_DOCK_WIDTHS,
+  };
+  const prefs: SitePrefs = {
+    ...DEFAULT_SITE_PREFS,
+    channels: [ruleScrollable, ruleCover, ruleDefault],
+  };
+
+  assert.deepEqual(
+    findChannelRule(prefs, { id: "@scrollableChannel", label: "Scrollable" }),
+    ruleScrollable,
+  );
+  assert.deepEqual(
+    findChannelRule(prefs, { id: "@coverChannel", label: "Cover" }),
+    ruleCover,
+  );
+  assert.deepEqual(
+    findChannelRule(prefs, { id: "@defaultChannel", label: "Default" }),
+    ruleDefault,
+  );
+  assert.equal(findChannelRule(prefs, { id: "@other", label: "Other" }), null);
+  assert.equal(findChannelRule(prefs, null), null);
 });
 
 // --- The adapter's channel reading ----------------------------------------
@@ -211,16 +294,23 @@ test("the adapter reads a channel identifier, never a display name or a URL", ()
 
 test("the dock width CSS overrides the defaults and omits an unset dock", () => {
   const adapter = resolveAdapter("https://www.youtube.com/watch?v=abc")!;
-  const css = adapter.getDockWidthCss!({ panelPx: 420, chatPx: 0 });
+  const css = adapter.getDockWidthCss!({ panel: 420, chat: 0, transcript: 0 });
 
   assert.match(css, /--wfs-panel-width:\s*420px/);
   assert.ok(!/--wfs-chat-width/.test(css), "an unset dock still emitted a rule");
+  assert.ok(!/--wfs-transcript-width/.test(css), "an unset transcript dock still emitted a rule");
+
+  const transcriptCss = adapter.getDockWidthCss!({ panel: 0, chat: 0, transcript: 480 });
+  assert.match(transcriptCss, /--wfs-transcript-width:\s*480px/);
+  assert.ok(!/--wfs-panel-width/.test(transcriptCss));
+  assert.ok(!/--wfs-chat-width/.test(transcriptCss));
+
   // Not inline on <html>, and the selectors have to stay one class short of the
   // fullscreen ones or the fullscreen handoff breaks — see `getDockWidthCss`.
   assert.ok(!/:fullscreen/.test(css), "the width overrode the fullscreen collapse");
   assert.ok(!/!important/.test(css), "an !important here would outrank the fullscreen rule");
 
-  assert.equal(adapter.getDockWidthCss!({ panelPx: 0, chatPx: 0 }), "");
+  assert.equal(adapter.getDockWidthCss!(DEFAULT_DOCK_WIDTHS), "");
 });
 
 // --- Capture filenames ----------------------------------------------------
@@ -245,4 +335,89 @@ test("a site with no name for what is playing still produces a usable filename",
   // A stem that survives sanitising as nothing at all must not leave a double dash
   // where the name should be.
   assert.equal(captureFilename("///", at), "windowed-fullscreen-frame-2026-01-01-000000.png");
+});
+
+test("captureFilename respects custom templates", () => {
+  const at = new Date(2026, 7, 13, 9, 5, 3);
+  assert.equal(
+    captureFilename("video123", at, "{title}_{date}"),
+    "video123_2026-08-13.png",
+  );
+  assert.equal(
+    captureFilename("video123", at, "custom-{stem}-{time}"),
+    "custom-video123-090503.png",
+  );
+  assert.equal(
+    captureFilename("video123", at, "{site}-{timestamp}"),
+    "windowed-fullscreen-2026-08-13-090503.png",
+  );
+  assert.equal(
+    captureFilename("youtube-123", at, "{title}-{timestamp}", {
+      videoTitle: "Amazing Tutorial",
+      playbackTimestamp: "12-34",
+    }),
+    "Amazing-Tutorial-12-34.png",
+  );
+  assert.equal(
+    captureFilename("youtube-123", at, "{channel}-{title}-{timestamp}", {
+      videoTitle: "My Video",
+      channelName: "@TechChannel",
+      playbackTimestamp: "01-15-30",
+    }),
+    "TechChannel-My-Video-01-15-30.png",
+  );
+});
+
+test("normalizeSitePrefs coerces 2.0.0 preferences safely", () => {
+  const valid = {
+    autoApply: true,
+    scrollable: true,
+    dockWidths: { panel: 400, chat: 350, transcript: 320 },
+    channels: [{ id: "@channel", scrollable: false, panel: true, dockWidths: DEFAULT_DOCK_WIDTHS }],
+    captureToClipboard: true,
+    letterboxColor: "#123456",
+    ambientGlow: true,
+    captureFilenameTemplate: "{title}-{date}",
+    captureBurnTimestamp: true,
+    cursorAutoHide: false,
+  };
+  assert.deepEqual(normalizeSitePrefs(valid), valid);
+
+  // Missing new fields default safely
+  const older = {
+    autoApply: true,
+    scrollable: false,
+  };
+  const normalized = normalizeSitePrefs(older)!;
+  assert.equal(normalized.autoApply, true);
+  assert.equal(normalized.letterboxColor, "");
+  assert.equal(normalized.ambientGlow, false);
+  assert.equal(normalized.captureFilenameTemplate, "");
+  assert.equal(normalized.captureBurnTimestamp, false);
+  assert.equal(normalized.cursorAutoHide, true);
+});
+
+test("importSettings validates json format", async () => {
+  const badJson = await importSettings("youtube", "{ invalid json }");
+  assert.equal(badJson.ok, false);
+
+  const nonPrefJson = await importSettings("youtube", JSON.stringify({ other: "data" }));
+  assert.equal(nonPrefJson.ok, false);
+});
+
+test("copyLinkAtCurrentTime handles missing video gracefully", async () => {
+  const doc = {
+    location: { href: "https://www.youtube.com/watch?v=abc" },
+    defaultView: null,
+  } as unknown as Document;
+  const copied = await copyLinkAtCurrentTime(doc, null);
+  assert.equal(copied, false);
+});
+
+test("formatPlaybackTimestamp formats seconds into MM:SS and HH:MM:SS", () => {
+  assert.equal(formatPlaybackTimestamp(0), "00:00");
+  assert.equal(formatPlaybackTimestamp(9), "00:09");
+  assert.equal(formatPlaybackTimestamp(75), "01:15");
+  assert.equal(formatPlaybackTimestamp(3665), "1:01:05");
+  assert.equal(formatPlaybackTimestamp(7325.8), "2:02:05");
 });

@@ -71,7 +71,7 @@
       }
 
       #app {
-        max-width: 520px;
+        max-width: 880px;
         margin: 0 auto;
         padding: 32px 36px 40px;
         background: var(--wfs-surface);
@@ -93,6 +93,14 @@
         margin-top: 28px;
         padding-top: 24px;
         border-top: 1px solid var(--wfs-border);
+      }
+
+      #app section:empty,
+      #app [data-wfs-prompt-host]:empty {
+        display: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        border: none !important;
       }
 
       #app h2 {
@@ -161,27 +169,60 @@
         max-width: 58ch;
       }
 
+      /* --- Feedback Toast (Floating, Fixed, Always Visible) ----------------- */
       [data-wfs-status],
       [data-wfs-error] {
-        margin-top: 20px;
+        position: fixed;
+        bottom: 24px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 99999;
+        pointer-events: none;
+        display: none;
         font-size: 13px;
+        line-height: 1.4;
+        font-weight: 600;
         border-radius: 10px;
+        box-shadow: 0 12px 30px -4px rgba(0, 0, 0, 0.7), 0 4px 12px rgba(0, 0, 0, 0.4);
+        backdrop-filter: blur(16px);
+        -webkit-backdrop-filter: blur(16px);
+        text-align: center;
+        margin: 0;
+        max-width: 480px;
+        width: calc(100% - 48px);
+        animation: wfsOptionsToastFloat 220ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
       }
 
       [data-wfs-status]:not(:empty),
       [data-wfs-error]:not(:empty) {
-        padding: 11px 14px;
-        font-weight: 500;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 12px 18px;
+        box-sizing: border-box;
       }
 
       [data-wfs-status]:not(:empty) {
-        color: var(--wfs-on);
-        background: var(--wfs-on-bg);
+        color: #4ade80;
+        background: rgba(10, 36, 22, 0.95);
+        border: 1px solid rgba(74, 222, 128, 0.4);
       }
 
       [data-wfs-error]:not(:empty) {
-        color: var(--wfs-danger);
-        background: var(--wfs-danger-bg);
+        color: #f87171;
+        background: rgba(45, 10, 15, 0.95);
+        border: 1px solid rgba(248, 113, 113, 0.4);
+      }
+
+      @keyframes wfsOptionsToastFloat {
+        from {
+          opacity: 0;
+          transform: translate(-50%, 14px) scale(0.95);
+        }
+        to {
+          opacity: 1;
+          transform: translate(-50%, 0) scale(1);
+        }
       }
 
       /*
@@ -777,37 +818,8 @@
         border-color: #2563eb;
       }
 
-      /* A column, not the checkbox row `#app label` sets up: this label captions a
-         text field rather than sitting beside a box. The hover tint is dropped for
-         the same reason — nothing here is clickable except the field itself. */
-      #app [data-wfs-pro-field],
-      #app [data-wfs-channel-field] {
-        display: flex;
-        flex-direction: column;
-        align-items: stretch;
-        gap: 4px;
-        margin: 0;
-        padding: 0;
-        cursor: default;
-      }
-
-      #app [data-wfs-pro-field]:hover,
-      #app [data-wfs-channel-field]:hover {
-        background: none;
-      }
-
-      #app [data-wfs-pro-field] > span,
-      #app [data-wfs-channel-field] > span {
-        font-size: 11px;
-        font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: var(--wfs-muted);
-      }
-
-      /* Monospace and tabular, because both fields hold an identifier the reader
-         has to be able to compare against something they were sent. */
-      #app input[type="text"] {
+      /* `width: 100%` with `box-sizing` already global */
+      #app input[type="text"]:not(.wfs-channel-input) {
         width: 100%;
         min-height: 32px;
         padding: 6px 10px;
@@ -825,9 +837,7 @@
       }
 
       #app [data-wfs-pro-activate],
-      #app [data-wfs-pro-remove],
-      #app [data-wfs-channel-add],
-      #app [data-wfs-channel-remove] {
+      #app [data-wfs-pro-remove] {
         min-height: 28px;
         margin-top: 10px;
         padding: 5px 12px;
@@ -842,17 +852,13 @@
       }
 
       #app [data-wfs-pro-activate]:hover,
-      #app [data-wfs-pro-remove]:hover,
-      #app [data-wfs-channel-add]:hover,
-      #app [data-wfs-channel-remove]:hover {
+      #app [data-wfs-pro-remove]:hover {
         background: var(--wfs-accent-dim-hover);
         color: var(--wfs-accent-hover);
       }
 
       #app [data-wfs-pro-activate]:focus-visible,
-      #app [data-wfs-pro-remove]:focus-visible,
-      #app [data-wfs-channel-add]:focus-visible,
-      #app [data-wfs-channel-remove]:focus-visible {
+      #app [data-wfs-pro-remove]:focus-visible {
         outline: none;
         box-shadow: var(--wfs-ring);
       }
@@ -862,50 +868,628 @@
         font-size: 12px;
       }
 
-      /* --- Per-channel rules ------------------------------------------------ */
-      #app [data-wfs-channel-section] {
-        margin-top: 20px;
+      /* --- Collage Dashboard Grid --- */
+      #app .wfs-collage-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 16px;
+        margin-top: 16px;
       }
 
-      #app [data-wfs-channel-section] h3 {
-        font-size: 11px;
+      @media (max-width: 720px) {
+        #app .wfs-collage-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      /* Card spanning for full-width components */
+      #app [data-wfs-card="channels"],
+      #app [data-wfs-card="backup"] {
+        grid-column: 1 / -1;
+      }
+
+      /* --- Visual Group Cards --- */
+      #app .wfs-card {
+        background: var(--wfs-elevated);
+        border: 1px solid var(--wfs-border);
+        border-radius: 14px;
+        padding: 18px 20px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        box-shadow: var(--wfs-glow);
+        transition: transform 120ms ease, box-shadow 140ms ease, border-color 140ms ease;
+      }
+
+      #app .wfs-card:hover {
+        border-color: rgba(255, 255, 255, 0.12);
+        box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+      }
+
+      #app .wfs-card__header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 8px;
+        margin-bottom: 2px;
+      }
+
+      #app .wfs-card__header-text {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        flex: 1;
+      }
+
+      #app .wfs-card__title {
+        font-size: 14.5px;
         font-weight: 700;
-        text-transform: uppercase;
-        letter-spacing: 0.1em;
+        color: var(--wfs-text);
+        letter-spacing: -0.01em;
+      }
+
+      #app .wfs-card__subtitle {
+        font-size: 12px;
         color: var(--wfs-muted);
+        line-height: 1.4;
       }
 
+      /* Tier badges on cards */
+      #app .wfs-card__badge {
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        padding: 2px 8px;
+        border-radius: 12px;
+        white-space: nowrap;
+        flex: none;
+      }
+
+      #app .wfs-card__badge.is-free {
+        color: var(--wfs-on);
+        background: var(--wfs-on-bg);
+        border: 1px solid rgba(109, 214, 156, 0.25);
+      }
+
+      #app .wfs-card__badge.is-pro {
+        color: #a78bfa;
+        background: rgba(139, 92, 246, 0.12);
+        border: 1px solid rgba(139, 92, 246, 0.3);
+      }
+
+      #app .wfs-card__badge.is-mix {
+        color: var(--wfs-accent);
+        background: var(--wfs-accent-dim);
+        border: 1px solid rgba(232, 168, 56, 0.3);
+      }
+
+      /* Modern Horizontal Setting Rows */
+      #app .wfs-setting-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 12px 14px;
+        margin: 0;
+        background: var(--wfs-bg);
+        border: 1px solid var(--wfs-border);
+        border-radius: 10px;
+        cursor: pointer;
+        transition: background 140ms ease, border-color 140ms ease, transform 100ms ease;
+      }
+
+      #app .wfs-setting-row:hover {
+        background: var(--wfs-accent-dim);
+        border-color: rgba(232, 168, 56, 0.25);
+      }
+
+      #app .wfs-setting-info {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        flex: 1;
+        min-width: 0;
+      }
+
+      #app .wfs-setting-title {
+        font-size: 13.5px;
+        font-weight: 600;
+        color: var(--wfs-text);
+        line-height: 1.4;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      #app .wfs-setting-desc {
+        font-size: 12px;
+        color: var(--wfs-muted);
+        line-height: 1.4;
+        margin: 0;
+      }
+
+      #app .wfs-pro-lock {
+        font-size: 12px;
+        opacity: 0.75;
+      }
+
+      /* iOS-style toggle switches */
+      #app .wfs-switch {
+        position: relative;
+        width: 42px;
+        height: 24px;
+        flex: none;
+        cursor: pointer;
+      }
+
+      #app .wfs-switch input {
+        opacity: 0;
+        width: 0;
+        height: 0;
+        position: absolute;
+        margin: 0;
+      }
+
+      #app .wfs-slider {
+        position: absolute;
+        cursor: pointer;
+        inset: 0;
+        background: var(--wfs-surface);
+        border: 1px solid var(--wfs-border);
+        border-radius: 24px;
+        transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+      }
+
+      #app .wfs-slider::before {
+        content: "";
+        position: absolute;
+        height: 18px;
+        width: 18px;
+        left: 2px;
+        bottom: 2px;
+        background: var(--wfs-muted);
+        border-radius: 50%;
+        transition: transform 160ms cubic-bezier(0.175, 0.885, 0.32, 1.275), background 160ms ease;
+      }
+
+      #app .wfs-switch input:checked + .wfs-slider {
+        background: var(--wfs-accent);
+        border-color: var(--wfs-accent);
+      }
+
+      #app .wfs-switch input:checked + .wfs-slider::before {
+        transform: translateX(18px);
+        background: #ffffff;
+      }
+
+      #app .wfs-switch input:focus-visible + .wfs-slider {
+        box-shadow: var(--wfs-ring);
+      }
+
+      /* Backup & Restore Action Row */
+      #app [data-wfs-backup-row] {
+        display: flex;
+        gap: 12px;
+        flex-wrap: wrap;
+        margin-top: 4px;
+      }
+
+      #app [data-wfs-backup-row] button {
+        flex: 1;
+        min-width: 150px;
+        padding: 10px 16px;
+        font-size: 13px;
+        font-weight: 600;
+        border-radius: 8px;
+        border: 1px solid var(--wfs-border);
+        background: var(--wfs-surface);
+        color: var(--wfs-text);
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        transition: all 140ms ease;
+      }
+
+      #app [data-wfs-backup-row] button:hover {
+        border-color: var(--wfs-accent);
+        background: var(--wfs-accent-dim);
+        color: var(--wfs-accent);
+      }
+
+      #app .wfs-card-btn {
+        align-self: flex-start;
+        padding: 6px 14px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--wfs-text);
+        background: var(--wfs-surface);
+        border: 1px solid var(--wfs-border);
+        border-radius: 6px;
+        cursor: pointer;
+        transition: background 140ms ease, border-color 140ms ease;
+      }
+
+      #app .wfs-card-btn:hover {
+        background: var(--wfs-accent-dim);
+        border-color: var(--wfs-accent);
+      }
+
+      /* Quick Action Button */
+      #app .wfs-quick-action-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        padding: 9px 16px;
+        font-size: 13px;
+        font-weight: 600;
+        color: #fff;
+        background: linear-gradient(135deg, #e8a838, #c47f0a);
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: transform 100ms ease, box-shadow 140ms ease, opacity 140ms ease;
+      }
+
+      #app .wfs-quick-action-btn:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 14px rgba(232, 168, 56, 0.25);
+      }
+
+      /* --- Custom Letterbox Palette & Themes --- */
+      #app .wfs-letterbox-section {
+        background: var(--wfs-surface);
+        border: 1px solid var(--wfs-border);
+        border-radius: 10px;
+        padding: 16px;
+        margin-top: 6px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+
+      #app .wfs-letterbox-header {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      #app .wfs-letterbox-title {
+        font-size: 13.5px;
+        font-weight: 700;
+        color: var(--wfs-text);
+      }
+
+      #app .wfs-letterbox-note {
+        font-size: 12px;
+        color: var(--wfs-muted);
+        line-height: 1.4;
+        margin: 0;
+      }
+
+      #app .wfs-swatch-group-label {
+        font-size: 11px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--wfs-muted);
+        margin-top: 6px;
+      }
+
+      #app .wfs-presets-container {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        margin-top: 4px;
+      }
+
+      #app .wfs-preset-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      #app .wfs-color-swatch {
+        width: 30px;
+        height: 30px;
+        border-radius: 6px;
+        border: 1px solid rgba(0, 0, 0, 0.5);
+        cursor: pointer;
+        flex: none;
+        transition: transform 120ms ease, outline 120ms ease, border-color 120ms ease;
+      }
+
+      #app .wfs-color-swatch:hover {
+        transform: scale(1.15);
+      }
+
+      #app .wfs-color-swatch.is-selected {
+        outline: 2px solid #ffffff;
+        outline-offset: 1px;
+        transform: scale(1.1);
+        box-shadow: 0 0 10px rgba(255, 255, 255, 0.4);
+      }
+
+      #app .wfs-theme-swatch {
+        transform: skewX(-12deg);
+        min-height: 30px;
+        padding: 6px 14px;
+        border-radius: 5px;
+        border: 1px solid rgba(0, 0, 0, 0.6);
+        box-shadow: 2px 2px 0px rgba(0, 0, 0, 0.85);
+        color: #ffffff;
+        font-size: 11px;
+        font-weight: 800;
+        font-style: italic;
+        text-transform: uppercase;
+        letter-spacing: 0.6px;
+        cursor: pointer;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+        transition: transform 120ms ease, box-shadow 140ms ease;
+      }
+
+      #app .wfs-theme-swatch:hover {
+        transform: skewX(-12deg) translateY(-1px);
+        box-shadow: 2px 3px 0px rgba(0, 0, 0, 1);
+      }
+
+      #app .wfs-theme-swatch.is-selected {
+        border-color: #ffffff;
+        box-shadow: 0 0 0 2px #ffffff, 2px 2px 0px rgba(0, 0, 0, 0.9);
+      }
+
+      #app .wfs-color-custom-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-top: 6px;
+      }
+
+      #app .wfs-color-preview-box {
+        width: 42px;
+        height: 34px;
+        border-radius: 6px;
+        border: 1.5px solid rgba(255, 255, 255, 0.15);
+        background: #000000;
+        flex: none;
+        box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.5);
+      }
+
+      #app .wfs-color-hex-input {
+        flex: 1;
+        min-height: 34px;
+        padding: 6px 10px;
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        font-size: 12px;
+        color: var(--wfs-text);
+        background: var(--wfs-bg);
+        border: 1px solid var(--wfs-border);
+        border-radius: 6px;
+      }
+
+      #app .wfs-color-hex-input:focus {
+        outline: none;
+        border-color: var(--wfs-accent);
+        box-shadow: var(--wfs-ring);
+      }
+
+      #app .wfs-color-reset-btn {
+        padding: 6px 14px;
+        font-size: 11px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+        color: #000000;
+        background: #ff6b9d;
+        border: 1px solid rgba(0, 0, 0, 0.3);
+        border-radius: 6px;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: background 120ms ease, transform 100ms ease;
+      }
+
+      #app .wfs-color-reset-btn:hover {
+        background: #ff528a;
+        transform: translateY(-1px);
+      }
+
+      #app .wfs-color-reset-btn:active {
+        transform: translateY(0);
+      }
+
+      /* --- Screenshot Filename Format --- */
+      #app .wfs-template-group {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 10px 12px;
+        background: var(--wfs-alt);
+        border: 1px solid var(--wfs-border);
+        border-radius: 10px;
+      }
+
+      #app .wfs-template-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      #app .wfs-template-title {
+        font-size: 13.5px;
+        font-weight: 600;
+        color: var(--wfs-text);
+      }
+
+      #app .wfs-template-input {
+        width: 100%;
+        box-sizing: border-box;
+        min-height: 32px;
+        padding: 6px 10px;
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        font-size: 12px;
+        color: #ffffff;
+        background: #0b0a14;
+        border: 1px solid var(--wfs-border);
+        border-radius: 6px;
+      }
+
+      #app .wfs-template-input:focus {
+        outline: none;
+        border-color: var(--wfs-accent);
+        box-shadow: 0 0 0 2px rgba(147, 51, 234, 0.25);
+      }
+
+      #app .wfs-template-tags {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px;
+      }
+
+      #app .wfs-tag-badge {
+        padding: 3px 8px;
+        font-size: 11px;
+        font-weight: 600;
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        color: var(--wfs-accent-text);
+        background: var(--wfs-accent-dim);
+        border: 1px solid rgba(147, 51, 234, 0.3);
+        border-radius: 5px;
+        cursor: pointer;
+        transition: background 120ms ease, transform 100ms ease;
+      }
+
+      #app .wfs-tag-badge:hover {
+        background: rgba(147, 51, 234, 0.2);
+        transform: translateY(-1px);
+      }
+
+      /* --- Auto-Fullscreen Channels --- */
+      #app .wfs-channel-list,
       #app [data-wfs-channel-list] {
-        margin: 10px 0 12px;
-        padding: 0;
         list-style: none;
+        margin: 0 0 6px 0;
+        padding: 0 2px 0 0;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        max-height: 120px;
+        overflow-y: auto;
+        scrollbar-width: thin;
       }
 
-      /* Each rule is a row: the identifier, then the way to take it off. The
-         identifier is allowed to wrap and the button is not, so a long handle never
-         pushes Remove off the popup's 320 px. */
+      #app .wfs-channel-item,
       #app [data-wfs-channel-item] {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 10px;
-        min-width: 0;
-        padding: 6px 0;
-        border-bottom: 1px solid var(--wfs-border);
+        gap: 8px;
+        padding: 4px 8px;
+        background: var(--wfs-alt);
+        border: 1px solid var(--wfs-border);
+        border-radius: 6px;
+        min-height: 28px;
+        box-sizing: border-box;
       }
 
+      #app .wfs-channel-name,
       #app [data-wfs-channel-item] > span {
-        min-width: 0;
         font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-        font-size: 13px;
-        overflow-wrap: anywhere;
+        font-size: 11.5px;
+        font-weight: 600;
+        color: #ffffff;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        flex: 1;
+        min-width: 0;
       }
 
+      #app .wfs-channel-remove-btn,
       #app [data-wfs-channel-remove] {
         flex: none;
-        margin-top: 0;
-        padding: 3px 9px;
-        font-size: 12px;
+        margin: 0 !important;
+        padding: 2px 7px;
+        font-size: 10px;
+        font-weight: 700;
+        color: #ff6b9d;
+        background: rgba(255, 107, 157, 0.1);
+        border: 1px solid rgba(255, 107, 157, 0.25);
+        border-radius: 4px;
+        cursor: pointer;
+        line-height: 1.2;
+        transition: background 120ms ease;
+      }
+
+      #app .wfs-channel-remove-btn:hover,
+      #app [data-wfs-channel-remove]:hover {
+        background: rgba(255, 107, 157, 0.22);
+      }
+
+      #app .wfs-channel-add-row,
+      #app [data-wfs-channel-field] {
+        display: flex !important;
+        flex-direction: row !important;
+        align-items: center !important;
+        gap: 6px !important;
+        width: 100% !important;
+        margin: 0 !important;
+        padding: 0 !important;
+      }
+
+      #app .wfs-channel-input,
+      #app [data-wfs-channel-input] {
+        flex: 1 !important;
+        min-width: 0 !important;
+        width: auto !important;
+        min-height: 28px !important;
+        height: 28px !important;
+        padding: 4px 8px !important;
+        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+        font-size: 11.5px !important;
+        color: #ffffff;
+        background: #0b0a14 !important;
+        border: 1px solid var(--wfs-border) !important;
+        border-radius: 6px !important;
+        margin: 0 !important;
+        box-sizing: border-box;
+      }
+
+      #app .wfs-channel-input:focus,
+      #app [data-wfs-channel-input]:focus {
+        outline: none;
+        border-color: var(--wfs-accent);
+        box-shadow: 0 0 0 2px rgba(147, 51, 234, 0.25);
+      }
+
+      #app .wfs-channel-add-btn,
+      #app [data-wfs-channel-add] {
+        flex: none !important;
+        min-height: 28px !important;
+        height: 28px !important;
+        margin: 0 !important;
+        padding: 0 12px !important;
+        font-size: 11px !important;
+        font-weight: 700 !important;
+        color: #ffffff !important;
+        background: linear-gradient(135deg, #7c3aed, #9333ea) !important;
+        border: 1px solid rgba(255, 255, 255, 0.12) !important;
+        border-radius: 6px !important;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: transform 100ms ease;
+      }
+
+      #app .wfs-channel-add-btn:hover,
+      #app [data-wfs-channel-add]:hover {
+        transform: translateY(-1px);
+        background: linear-gradient(135deg, #8b5cf6, #a855f7) !important;
       }
 
       /* --- Pro showcase card ------------------------------------------------ */

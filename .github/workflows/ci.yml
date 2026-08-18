@@ -10,6 +10,8 @@ name: CI
 on:
   push:
     branches: ["**"]
+    # Release tags, so the packaging guard below has something to fire on.
+    tags: ["v*"]
   pull_request:
 
 jobs:
@@ -42,7 +44,20 @@ jobs:
       - name: Build
         run: npm run build
 
+      # Tags only, and that is the whole point of the condition.
+      #
+      # `npm run package` refuses any bundle containing the provider's test hosts,
+      # and test mode is the correct state for the entire development phase — you
+      # cannot work against live licence keys without buying the product to test it.
+      # Running this per commit therefore made CI red on every commit that was not a
+      # release, which is a check nobody reads.
+      #
+      # Nothing is lost by moving it. The guard exists to stop a test-mode build
+      # reaching the store, the zip is the only thing that can be uploaded, and this
+      # is the only step that writes one. `tests/entitlement.test.ts` still asserts
+      # per commit that the API host and the checkout link are in the same mode.
       - name: Package
+        if: startsWith(github.ref, 'refs/tags/v')
         run: npm run package
 
       - uses: actions/upload-artifact@v4

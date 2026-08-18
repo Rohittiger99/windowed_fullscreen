@@ -713,36 +713,43 @@ test("a failed deactivation reports false rather than throwing", async () => {
 
 // --- The hosts the build talks to ------------------------------------------
 
-test("the build talks to the provider's live host", async () => {
-  // The one mistake in this path with no symptom on a developer's own machine: a
-  // test-mode build validates test-mode keys perfectly and rejects every real one,
-  // so the first person to notice is a reader who paid. `scripts/package.mjs`
-  // refuses to write a release zip that contains the test host; this fails the
-  // suite, which is earlier and louder.
+test("the licence API and the checkout link are in the same mode", async () => {
+  // Not "both are live". Test mode is the correct state for the whole development
+  // phase — working against live keys means buying the product to test it — and an
+  // earlier version of this file asserted liveness here, which made the suite red
+  // for every commit that was not a release. A permanently red check is a check
+  // nobody reads, and it hid nothing useful: whether a *shipped* build is live is
+  // answered by `scripts/package.mjs`, which searches the emitted bundle and is the
+  // only thing that can produce an upload.
+  //
+  // What is left is the half no other guard covers, and it is the quietest form of
+  // the bug. A live API host with a test checkout link sends the reader to a page
+  // that accepts a test card, charges nothing, and issues a key the live host will
+  // never recognise — a purchase that silently did not happen, with no error
+  // anywhere. The two constants are different strings, so nothing but this makes
+  // them move together.
   const { calls } = fakeFetch(200, { valid: true });
+  let apiUrl: string | undefined;
   try {
     await validateLicenceKey(GOOD_KEY);
-    assert.equal(
-      calls[0]?.url,
-      "https://live.dodopayments.com/licenses/validate",
-      "the build is pointed at the wrong provider host",
-    );
+    apiUrl = calls[0]?.url;
   } finally {
     restoreFetch();
   }
-});
 
-test("the buy button goes to the provider's live checkout", () => {
-  // The same mistake in its quieter form. A test checkout link accepts a test card
-  // and charges nothing, so a reader completes a purchase, receives a key that no
-  // live validate call will recognise, and nothing anywhere reports an error.
-  //
-  // Asserted separately from the API host because the two are different strings that
-  // must move together, and because a substring check for the API host does not
-  // catch `test.checkout.dodopayments.com`.
-  assert.ok(
-    PRO_PURCHASE_URL.startsWith("https://live.checkout.dodopayments.com/"),
-    `the buy button points at ${PRO_PURCHASE_URL}, which is not the live checkout`,
+  const apiLive = apiUrl?.startsWith("https://live.dodopayments.com/") ?? false;
+  const apiTest = apiUrl?.startsWith("https://test.dodopayments.com/") ?? false;
+  assert.ok(apiLive || apiTest, `the licence API host is neither mode: ${apiUrl}`);
+
+  // Checked with the live prefix rather than the test one, because a substring
+  // search for the API host does not catch `test.checkout.dodopayments.com`.
+  const checkoutLive = PRO_PURCHASE_URL.startsWith("https://live.checkout.dodopayments.com/");
+
+  assert.equal(
+    apiLive,
+    checkoutLive,
+    `the licence API is ${apiLive ? "live" : "test"} mode but the checkout link is ` +
+      `${checkoutLive ? "live" : "test"} mode: ${PRO_PURCHASE_URL}`,
   );
 });
 

@@ -4,6 +4,33 @@ Notable changes per released version. `manifest.json` owns the version number an
 is bumped immediately before packaging, so the top section here is unreleased work
 until that bump happens.
 
+## 2.0.0
+
+### Added — Pro Tier ($10 One-Time Lifetime)
+
+- **9 Pro Features Package**:
+  1. **Dock Resizing**: Independent drag resizing for comment panel, live chat dock, and transcript dock.
+  2. **Channel Profiles & Layout Rules**: Per-channel automation for mode, layout, and docked panels.
+  3. **High-Res Frame Capture**: Capture frames directly at source video resolution without UI artifacts.
+  4. **Transcript Dock Column**: Dedicated third docking column for interactive video transcripts.
+  5. **Custom Filename Templates**: Customizable template variables (`{title}`, `{date}`, `{time}`, `{timestamp}`, `{site}`).
+  6. **Burn Timestamp Watermark**: Option to render timestamp badges directly onto captured images.
+  7. **Ambient Glow Letterbox**: Real-time canvas color-sampling ambient illumination for letterbox bars.
+  8. **Custom Letterbox Palettes & Gradient Themes**: 8 solid cinema color swatches, 6 curated gradient mix themes, and custom color picker with hex input.
+  9. **Idle Cursor Auto-Hide**: Automatically fades the mouse cursor after 3 seconds of inactivity in windowed mode.
+
+### Added — Controls & UX
+
+- **Player Bar Controls**:
+  - Injected **Transcript Button** to quickly dock/undock YouTube transcripts.
+  - Injected **Copy Video Link at Timestamp Button** with clipboard copy fallback and formatted feedback (`Link copied at MM:SS`).
+  - Injected **Capture Frame Button** and **Windowed Mode / Panel Toggles**.
+- **Settings UI Modernization**:
+  - Grouped all controls into 6 clean visual cards: *Viewing Modes & Playback*, *Letterbox & Ambient Appearance*, *Docked Columns & Side Panels*, *Media Capture & Video Sharing*, *Channel Profiles & Rules*, and *Settings Backup & Restore*.
+  - **Quick Action Toolbar** in extension popup (*Copy Link @ Time*, *Comments*, *Capture Frame*).
+  - **Backup & Restore**: Export settings to JSON and import validated settings JSON.
+- **Mutual Exclusivity Logic**: Selecting custom letterbox colors/themes automatically turns off ambient glow, and enabling ambient glow activates dynamic video color extraction.
+
 ## 1.4.0
 
 ### Added — Pro

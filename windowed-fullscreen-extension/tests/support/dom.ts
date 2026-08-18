@@ -234,6 +234,18 @@ export class StubElement {
     return child;
   }
 
+  insertBefore(child: StubElement, referenceNode: StubElement | null): StubElement {
+    child.parentNode = this;
+    const index = referenceNode ? this.children.indexOf(referenceNode) : -1;
+    if (index >= 0) {
+      this.children.splice(index, 0, child);
+    } else {
+      this.children.push(child);
+    }
+    this.journal.record("write", "child.append", this, child.tagName);
+    return child;
+  }
+
   append(...nodes: StubElement[]): void {
     for (const node of nodes) this.appendChild(node);
   }

@@ -161,7 +161,7 @@ export interface SiteAdapter {
    * An adapter whose docks are not resizable omits this, and the resize grips are
    * never mounted.
    */
-  getDockWidthCss?(widths: { panelPx: number; chatPx: number }): string;
+  getDockWidthCss?(widths: DockWidths): string;
 
   /**
    * The width one dock is occupying right now, in CSS px, or null when that dock
@@ -174,7 +174,28 @@ export interface SiteAdapter {
    * the outside. Measuring the docked element is the only honest answer, and which
    * element that is belongs here.
    */
-  measureDockWidth?(doc: Document, dock: "panel" | "chat"): number | null;
+  measureDockWidth?(doc: Document, dock: DockId): number | null;
+
+  /**
+   * The docks this site actually has, outboard to inboard. Omitted, or empty, means
+   * no dock is resizable here.
+   *
+   * §9 used to iterate a hard-coded `["panel", "chat"]` when mounting the grips,
+   * which meant the generic resize code knew how many docks a site has and which —
+   * site knowledge, in the one section that must never hold any. Asking the adapter
+   * is what lets a dock be added in §3 alone.
+   */
+  supportedDocks?: readonly DockId[];
+
+  /**
+   * Whether one of the site's own docks is taking width right now.
+   *
+   * Only asked about docks whose open-or-shut state belongs to the site — live chat
+   * is the site's element, driven by its own `collapsed` attribute with no state of
+   * ours. The comment panel is not asked about here, because that one is our own
+   * mode state and the core already knows it.
+   */
+  isDockActive?(doc: Document, dock: DockId): boolean;
 
   /**
    * The width this adapter's own stylesheet would give a dock at this viewport
@@ -311,47 +332,140 @@ interface LayoutSnapshot {
   scrollY: number;
 }
 
+/**
+ * Which dock a width, a grip, or a rule is about.
+ *
+ * Declared here rather than beside the grip code that used to own it, because
+ * three things ahead of that code now speak in terms of it: the adapter interface
+ * above, {@link SitePrefs} below, and the stylesheet tokens in §3. A union rather
+ * than a string is what makes `tsc` the checklist when a dock is added — every
+ * exhaustive `Record<DockId, …>` in the file becomes an error until the new dock
+ * is handled, which is how the transcript dock was added without hunting for call
+ * sites by hand.
+ */
+export type DockId = "panel" | "chat" | "transcript";
+
+/**
+ * Every dock, ordered **outboard to inboard** — the order they sit in from the
+ * window's edge towards the video.
+ *
+ * The order is load-bearing, not cosmetic. Each dock's inboard offset is the sum
+ * of the widths of the docks outboard of it, so a width has to be resolved after
+ * everything outside it and before everything inside it. Iterating this array is
+ * what guarantees that; see `applyDockWidths` in §9.
+ */
+export const DOCK_IDS: readonly DockId[] = ["chat", "panel", "transcript"];
+
+/**
+ * A width in CSS px for every dock, 0 meaning "let the stylesheet's own
+ * responsive `clamp()` decide".
+ *
+ * Exhaustive over {@link DockId} rather than a partial record, so no consumer has
+ * to decide what a missing dock means. 0 already says it.
+ */
+export type DockWidths = Readonly<Record<DockId, number>>;
+
+/** Every dock at its stylesheet default. */
+export const DEFAULT_DOCK_WIDTHS: DockWidths = { panel: 0, chat: 0, transcript: 0 };
+
+/**
+ * One per-channel rule: the channel, and the layout the mode should come up in
+ * for it. Pro.
+ *
+ * This began as a bare `string` — a list of channels to switch the mode on for.
+ * The identifier is still the only required part, and a rule that carries nothing
+ * else behaves exactly as the old list did, which is what let the stored shape
+ * change without a migration step. Everything else is the layout that channel
+ * wants, so a lecture channel can open scrollable with the comments docked while a
+ * livestream channel opens covered with chat wide.
+ */
+export interface ChannelRule {
+  /**
+   * The channel's identifier as the adapter reports it — a handle, never a URL and
+   * never a display name, so a rename does not quietly break the rule.
+   */
+  id: string;
+  /**
+   * Which mode to enter for this channel, or null to follow the site's own
+   * `scrollable` preference.
+   *
+   * Null rather than a copy of the site value, so changing the site preference
+   * still moves every rule that never asked for something different.
+   */
+  scrollable: boolean | null;
+  /** Dock the comment panel as the mode comes up for this channel. */
+  panel: boolean;
+  /** Widths for this channel, each 0 to fall back to the site's own width. */
+  dockWidths: DockWidths;
+}
+
 /** Per-site preferences. */
 export interface SitePrefs {
   autoApply: boolean;
   /** Use {@link WindowedMode} `scrollable` instead of `cover`. */
   scrollable: boolean;
   /**
-   * The reader's chosen comment-panel width in CSS px, or 0 for the stylesheet's
-   * own responsive default. Pro; a free install never writes anything but 0.
+   * The reader's chosen width per dock in CSS px, 0 for the stylesheet's own
+   * responsive default. Pro; a free install never writes anything but 0.
    *
    * 0 rather than `null` for "unset", so the field passes the same whole-number
    * check every other stored count uses and the coercion needs no special case.
    * The distinction matters: a stored 0 means "let the sheet's `clamp()` decide",
    * which follows the window, where a stored number is a fixed px width that does
    * not.
+   *
+   * One record rather than a field per dock, so adding a dock does not add a
+   * preference field, a normalizer call, and a patch shape to keep in step.
    */
-  panelWidth: number;
-  /** The same for the live-chat dock. */
-  chatWidth: number;
+  dockWidths: DockWidths;
   /**
-   * Channels the mode enters on automatically, whatever {@link autoApply} says.
-   * Pro. Identifiers as the adapter reports them, so nothing here is a URL.
+   * Channels the mode enters on automatically, whatever {@link autoApply} says,
+   * and the layout it comes up in for each. Pro.
    *
    * Capped at {@link MAX_CHANNEL_RULES} on write, because this is the one stored
    * field a reader can grow without bound.
    */
-  channels: readonly string[];
+  channels: readonly ChannelRule[];
   /**
    * Put a captured frame on the clipboard instead of downloading it. Only reached
    * by a Pro install, since capture itself is Pro.
    */
   captureToClipboard: boolean;
+  /**
+   * Custom background colour for the letterbox bars around the video. Empty string
+   * for default black. Pro.
+   */
+  letterboxColor: string;
+  /**
+   * Dynamically sample video edge colours to softly illuminate the letterbox bars. Pro.
+   */
+  ambientGlow: boolean;
+  /**
+   * Custom template for naming saved frame screenshots. Empty string for default. Pro.
+   */
+  captureFilenameTemplate: string;
+  /**
+   * Burn the video playback timestamp into the corner of captured frames. Pro.
+   */
+  captureBurnTimestamp: boolean;
+  /**
+   * Automatically hide the mouse cursor after a period of inactivity. Free.
+   */
+  cursorAutoHide: boolean;
 }
 
 /** Documented defaults applied when nothing is stored. */
 export const DEFAULT_SITE_PREFS: SitePrefs = {
   autoApply: false,
   scrollable: false,
-  panelWidth: 0,
-  chatWidth: 0,
+  dockWidths: DEFAULT_DOCK_WIDTHS,
   channels: [],
   captureToClipboard: false,
+  letterboxColor: "",
+  ambientGlow: false,
+  captureFilenameTemplate: "",
+  captureBurnTimestamp: false,
+  cursorAutoHide: true,
 };
 
 /** The mode a site's preferences select. */
@@ -393,7 +507,8 @@ export type ExtMessage =
   | { type: "TOGGLE" }
   | { type: "GET_STATUS" }
   | { type: "TOGGLE_PANEL" }
-  | { type: "CAPTURE" };
+  | { type: "CAPTURE" }
+  | { type: "COPY_LINK" };
 
 /**
  * Reply to an {@link ExtMessage}.
@@ -648,6 +763,28 @@ const YT = {
    * content the user scrolled down for, so they stay.
    */
   chromeCoverOnly: ["#comments"],
+  /**
+   * The transcript engagement panel. YouTube shows it inside `#secondary` (an
+   * ancestor this mode hides), so docking it requires the same un-hiding treatment
+   * as live chat: `#secondary` is revealed as a bare host and the transcript panel
+   * is fixed into its own column.
+   *
+   * `target-id` is the attribute YouTube uses to identify each engagement panel;
+   * `engagement-panel-searchable-transcript` is the value for the transcript. The
+   * panel is ABSENT on pages that have no transcript (music, some shorts), so
+   * nothing matches and this section costs nothing.
+   *
+   * The `[visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]` guard is what
+   * distinguishes "the transcript exists" from "the reader opened it". Without it,
+   * the dock would appear the moment the page has a transcript button, before
+   * anyone pressed it.
+   */
+  transcriptPanel:
+    'ytd-engagement-panel-section-list-renderer[target-id="engagement-panel-searchable-transcript"]',
+  /** The attribute YouTube sets when the panel is expanded/visible. */
+  transcriptVisibilityAttr: "visibility",
+  /** The value that means the panel is open. */
+  transcriptExpandedValue: "ENGAGEMENT_PANEL_VISIBILITY_EXPANDED",
 } as const;
 
 /** Hosts treated as YouTube. */
@@ -666,6 +803,72 @@ const DOCK_DEFAULT_VIEWPORT_SHARE = 0.26;
 
 /** The `440px` upper bound, so a wide monitor does not hand the dock the stage. */
 const DOCK_DEFAULT_CEILING_PX = 440;
+
+/**
+ * What each of this site's docks is called in the stylesheet, and how to find it.
+ *
+ * The one table every generic dock path reads through, so the width code, the
+ * measuring code, and the grips never name a YouTube element between them. Adding a
+ * dock is an entry here plus its rules in {@link YT_ACTIVE_MODE_CSS}, and nothing
+ * outside §3 changes.
+ *
+ * Partial over {@link DockId} on purpose: the union names every dock the extension
+ * knows how to draw, and a given site need not have all of them.
+ */
+const YT_DOCKS: Partial<
+  Readonly<
+    Record<
+      DockId,
+      {
+        /** The custom property the stylesheet sizes this dock with. */
+        widthVar: string;
+        /**
+         * The selector a chosen width is written against. Deliberately one class
+         * short of the fullscreen rules that collapse this dock to `0px`, so those
+         * still win — see `getDockWidthCss`.
+         */
+        widthSelector: string;
+        /** The docked element itself, for measuring what is on screen. */
+        element: string;
+        /**
+         * Matches only while the site is showing this dock. Absent for a dock whose
+         * open-or-shut state is ours rather than the site's, which is the comment
+         * panel: the core knows that one from the class it sets itself.
+         */
+        activeQuery?: string;
+      }
+    >
+  >
+> = {
+  chat: {
+    widthVar: "--wfs-chat-width",
+    widthSelector: "html.wfs-windowed:has(#chat:not([collapsed]))",
+    element: YT.liveChat,
+    activeQuery: "#chat:not([collapsed])",
+  },
+  panel: {
+    widthVar: "--wfs-panel-width",
+    widthSelector: "html.wfs-windowed.wfs-side-panel",
+    element: YT.sideContent,
+  },
+  transcript: {
+    widthVar: "--wfs-transcript-width",
+    widthSelector:
+      `html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"])`,
+    element: YT.transcriptPanel,
+    activeQuery:
+      `${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]`,
+  },
+};
+
+/**
+ * This site's docks, outboard to inboard — chat holds the window edge and the
+ * comment panel sits inside it.
+ *
+ * Derived from {@link DOCK_IDS} rather than written out again, so the two orders
+ * cannot disagree about which dock is outside which.
+ */
+const YT_DOCK_ORDER: readonly DockId[] = DOCK_IDS.filter((dock) => dock in YT_DOCKS);
 
 /**
  * YouTube's active-mode CSS. Scoped under `html.wfs-windowed` (a class the
@@ -706,12 +909,40 @@ html.wfs-windowed {
   --wfs-edge: rgba(0, 0, 0, 0.14);
   --wfs-scrim: rgba(255, 255, 255, 0.94);
 
-  /* How much of the window's right edge is currently given to a dock — the
-     comment panel, the live-chat panel, or both. Zero when nothing is docked,
-     which is what makes it safe for the masthead below to read unconditionally.
-     Every rule that narrows something to clear a dock reads this one property, so
-     the docks cannot disagree about where their shared edge is. */
-  --wfs-docked-width: 0px;
+  /* Per-dock width variables. Each defaults to 0px and is set to its responsive
+     clamp() only by the rule that fires when that dock is up. The total is one
+     sum, so adding a dock is one variable — no combinatorial explosion.
+
+     The order they appear in is irrelevant to the arithmetic; what matters is
+     that the per-dock activation rules only set their OWN variable and never
+     touch the sum, so a dock going up cannot knock another dock's width out. */
+  --wfs-chat-width: 0px;
+  --wfs-panel-width: 0px;
+  --wfs-transcript-width: 0px;
+
+  /* Custom or ambient letterbox bar background colour. Defaults to black. */
+  --wfs-letterbox-color: #000;
+
+  /* How much of the window's right edge is currently given to docks — the
+     comment panel, the live-chat panel, the transcript dock, or any combination.
+     Zero when nothing is docked, which is what makes it safe for the masthead
+     below to read unconditionally. Every rule that narrows something to clear a
+     dock reads this one property, so the docks cannot disagree about where their
+     shared edge is.
+
+     Computed from the per-dock variables rather than set per combination, which
+     is the whole point of the Phase 2 refactor: two docks needed three rules,
+     three would need seven, and that table rots. */
+  --wfs-docked-width: calc(
+    var(--wfs-chat-width) + var(--wfs-panel-width) + var(--wfs-transcript-width)
+  );
+
+  /* How far in from the window's right edge the comment panel sits. Zero on its
+     own; the sum of the docks outboard of it when others are up. Both the panel
+     and its close button read this, so the button cannot drift off the panel's
+     corner. Declared here so a panel that is the only dock on screen reads 0px
+     without needing a rule to set it. */
+  --wfs-panel-right: 0px;
 
   --wfs-z-player: 2147483630;
   --wfs-z-panel: 2147483634;
@@ -747,7 +978,7 @@ html.wfs-windowed:not(.wfs-scrollable) .html5-video-player {
   max-height: 100vh !important;
   margin: 0 !important;
   z-index: var(--wfs-z-player) !important;
-  background: #000 !important;
+  background: var(--wfs-letterbox-color) !important;
 }
 
 /* Override the inline px sizing YouTube applies to the video container. */
@@ -829,7 +1060,8 @@ html.wfs-windowed .ytp-overlay-top-right,
 html.wfs-windowed .ytp-gradient-top,
 html.wfs-windowed .ytp-title,
 html.wfs-windowed .ytp-show-cards-title,
-html.wfs-windowed .ytp-ce-element {
+html.wfs-windowed .ytp-ce-element,
+html.wfs-windowed .ytp-endscreen {
   display: none !important;
 }
 
@@ -1033,7 +1265,7 @@ html.wfs-windowed.wfs-scrollable .html5-video-player {
   height: 100vh !important;
   max-height: 100vh !important;
   margin: 0 !important;
-  background: #000 !important;
+  background: var(--wfs-letterbox-color) !important;
 }
 
 /* Flatten the container chain between #primary-inner and the player.
@@ -1293,17 +1525,13 @@ html.wfs-windowed:is(.wfs-scrollable, .wfs-side-panel) ytd-item-section-renderer
 html.wfs-windowed.wfs-side-panel {
   /* Wide enough for a comment thread, capped so the video keeps the stage. This
      is a border-box width: the panel's own padding comes out of it, which is
-     what keeps it flush with the space the player gives back. */
+     what keeps it flush with the space the player gives back.
+
+     --wfs-docked-width is not set here. It is a composed sum of the per-dock
+     variables (see the root rule), so setting --wfs-panel-width is all that is
+     needed — the total updates automatically. */
   --wfs-panel-width: clamp(320px, 26vw, 440px);
   --wfs-panel-pad: 16px;
-  /* How far in from the window's right edge the panel sits. Zero on its own;
-     chat's width when chat is docked outboard of it. Both the panel and its close
-     button read this, so the button cannot drift off the panel's corner. */
-  --wfs-panel-right: 0px;
-  /* What the window's right edge has given up, which the masthead reads so it
-     stops short of the panel rather than revealing over its close button. The
-     chat section overrides this where chat is docked as well. */
-  --wfs-docked-width: var(--wfs-panel-width);
 }
 
 /* Browser fullscreen belongs to YouTube: it sets display:none on #columns, the
@@ -1527,17 +1755,14 @@ html.wfs-windowed.wfs-side-panel #comments #header {
    ------------------------------------------------------------------------- */
 html.wfs-windowed:has(#chat:not([collapsed])) {
   /* The same width as the comment panel, so the two docks are interchangeable
-     and the video's width does not jump between them. */
-  --wfs-chat-width: clamp(320px, 26vw, 440px);
-  /* What the video gives up in total. Chat alone unless the comment panel is
-     docked too, in which case the next rule adds it. Every rule that narrows the
-     video reads this one property, so the two docks cannot disagree about where
-     the video's right edge is. */
-  --wfs-docked-width: var(--wfs-chat-width);
-}
+     and the video's width does not jump between them.
 
-html.wfs-windowed.wfs-side-panel:has(#chat:not([collapsed])) {
-  --wfs-docked-width: calc(var(--wfs-panel-width) + var(--wfs-chat-width));
+     --wfs-docked-width is not set here. It is a composed sum of the per-dock
+     variables (see the root rule), so setting --wfs-chat-width is all that is
+     needed — the total updates automatically. The both-docked rule that used
+     to set --wfs-docked-width to the sum of chat + panel is gone: the root
+     calc() handles every combination without a combinatorial table. */
+  --wfs-chat-width: clamp(320px, 26vw, 440px);
 }
 
 /* Browser fullscreen belongs to YouTube, including its own chat drawer. The mode
@@ -1816,8 +2041,186 @@ html.wfs-windowed:is(:fullscreen, :has(:fullscreen)) .wfs-dock-grip {
 }
 
 /* The masthead needs no rule of its own here. It reads --wfs-docked-width, which
-   the tokens at the top of this section already widened to cover chat, so the bar
+   the tokens at the top of this section already cover every dock, so the bar
    stops short of whichever docks are up. */
+
+/* -------------------------------------------------------------------------
+   Transcript dock.
+
+   YouTube’s transcript is an engagement panel that lives inside #secondary.
+   The mode hides #secondary, so the panel is invisible today. Docking it
+   follows the same approach as live chat: un-hide #secondary as a bare host
+   while the transcript panel is visible, and fix the panel into its own
+   column.
+
+   The transcript is the INBOARD dock — it sits closest to the video, with
+   chat outboard and the comment panel in between. Its right offset is the
+   sum of the two outboard docks: var(--wfs-chat-width) + var(--wfs-panel-width).
+
+   Like chat, the whole section is keyed off the site’s own state (the
+   \`visibility\` attribute YouTube puts on the engagement panel element), so
+   there is no class of ours, no JS, and nothing for exit() to restore.
+   On a video with no transcript the element is absent, nothing matches, and
+   this section costs nothing.
+   ------------------------------------------------------------------------- */
+html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) {
+  /* The same width as the other docks, so swapping between them does not
+     change the video’s width.
+
+     --wfs-docked-width is computed automatically by the root calc() sum,
+     so setting this one variable is all that is needed. */
+  --wfs-transcript-width: clamp(320px, 26vw, 440px);
+}
+
+/* Browser fullscreen: same treatment as chat and the comment panel. */
+html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]):is(:fullscreen, :has(:fullscreen)) {
+  --wfs-transcript-width: 0px;
+}
+
+/* Cover mode: the player is already fixed, so the right inset clears all docks.
+   --wfs-docked-width already includes the transcript’s width via the root sum. */
+html.wfs-windowed:not(.wfs-scrollable):has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) #movie_player,
+html.wfs-windowed:not(.wfs-scrollable):has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) .html5-video-player {
+  left: 0 !important;
+  right: var(--wfs-docked-width) !important;
+  width: auto !important;
+  max-width: none !important;
+}
+
+/* Scrollable mode: same pattern as chat — narrow #primary by the total docked
+   width so the player, metadata, and comments all share the same edge. */
+html.wfs-windowed.wfs-scrollable:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ytd-watch-flexy #columns {
+  display: block !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+html.wfs-windowed.wfs-scrollable:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ytd-watch-flexy #primary {
+  display: block !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  padding: 0 !important;
+  margin: 0 var(--wfs-docked-width) 0 0 !important;
+  overflow: visible !important;
+}
+
+html.wfs-windowed.wfs-scrollable:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ytd-watch-flexy #primary-inner,
+html.wfs-windowed.wfs-scrollable:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ytd-watch-flexy #player {
+  display: block !important;
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+/* Same reason as chat: the player must fill #primary’s narrowed box. */
+html.wfs-windowed.wfs-scrollable:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) #movie_player,
+html.wfs-windowed.wfs-scrollable:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) .html5-video-player {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+/* The comment panel moves inboard when the transcript is also docked.
+   The panel’s right offset is the sum of all docks outboard of it. Chat is
+   outboard of the panel, and the transcript is inboard, so the panel’s right
+   offset does not change — it is still just chat’s width. The rule that sets
+   --wfs-panel-right already handles that.
+
+   The transcript’s own right offset is the sum of all docks outboard of it,
+   which is chat + panel. */
+
+/* #secondary must be visible for the transcript panel to render, same as chat.
+   This duplicates the chat un-hiding on purpose: the two conditions are
+   independent (transcript can be open without chat, and vice versa), so each
+   needs its own rule. The cascade keeps the more specific selectors from
+   fighting because the property values are identical. */
+html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) #secondary,
+html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) #secondary-inner {
+  display: block !important;
+  visibility: visible !important;
+  position: static !important;
+  flex: none !important;
+  width: auto !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  height: auto !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  overflow: visible !important;
+}
+
+/* Hide the suggestions rail while the transcript is docked — same as chat. */
+html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) #related,
+html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ytd-watch-next-secondary-results-renderer {
+  display: none !important;
+}
+
+/* The dock itself. Fixed to the right edge, offset by the sum of the outboard
+   docks (chat + panel). */
+html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"] {
+  display: block !important;
+  box-sizing: border-box !important;
+  position: fixed !important;
+  top: 0 !important;
+  right: calc(var(--wfs-chat-width) + var(--wfs-panel-width)) !important;
+  bottom: 0 !important;
+  left: auto !important;
+  width: var(--wfs-transcript-width) !important;
+  min-width: 0 !important;
+  max-width: var(--wfs-transcript-width) !important;
+  height: auto !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  overflow: hidden !important;
+  z-index: var(--wfs-z-panel) !important;
+  background: var(--wfs-surface) !important;
+  box-shadow: -1px 0 0 0 var(--wfs-edge) !important;
+}
+
+/* The transcript panel’s inner content container — let it fill the dock. */
+html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"] #content {
+  width: 100% !important;
+  min-width: 0 !important;
+  max-width: none !important;
+  height: 100% !important;
+  min-height: 0 !important;
+  max-height: none !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+/* Neutralise containing blocks in the transcript’s ancestor chain, same
+   treatment as chat. */
+html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ytd-app,
+html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) #content,
+html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) #page-manager,
+html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ytd-watch-flexy,
+html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ytd-watch-flexy #columns,
+html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ytd-watch-flexy #secondary,
+html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ytd-watch-flexy #secondary-inner {
+  transform: none !important;
+  filter: none !important;
+  perspective: none !important;
+  contain: none !important;
+  content-visibility: visible !important;
+}
+
+/* Transcript grip sits on its inboard edge — the sum of all outboard docks
+   plus the transcript’s own width, minus half the grip width. */
+html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) .wfs-dock-grip[data-wfs-dock="transcript"] {
+  display: block !important;
+  right: calc(var(--wfs-chat-width) + var(--wfs-panel-width) + var(--wfs-transcript-width) - 5px) !important;
+}
 
 /* -------------------------------------------------------------------------
    Page-level overlay hosts.
@@ -1853,6 +2256,18 @@ html.wfs-windowed snackbar-container {
    it starts closing. */
 html.wfs-windowed tp-yt-app-drawer#guide[opened] {
   z-index: var(--wfs-z-overlay) !important;
+}
+
+/* Browser fullscreen resets the letterbox bars to black so custom or ambient
+   colours never shine through native fullscreen playback. */
+html.wfs-windowed:is(:fullscreen, :has(:fullscreen)) {
+  --wfs-letterbox-color: #000 !important;
+}
+
+/* Cursor auto-hide in windowed fullscreen. */
+html.wfs-windowed.wfs-cursor-hidden,
+html.wfs-windowed.wfs-cursor-hidden * {
+  cursor: none !important;
 }
 `;
 
@@ -1958,6 +2373,17 @@ const youtubeAdapter: SiteAdapter = {
     return id ? `youtube-${id}` : null;
   },
 
+  supportedDocks: YT_DOCK_ORDER,
+
+  isDockActive(doc, dock) {
+    const spec = YT_DOCKS[dock];
+    // A dock this site does not have is never active. The comment panel is not
+    // described by a query here on purpose — that one is our own mode state, and §9
+    // answers it from the class it sets itself.
+    if (!spec?.activeQuery) return false;
+    return doc.querySelector(spec.activeQuery) !== null;
+  },
+
   getDockWidthCss(widths) {
     // Written into a stylesheet of our own rather than inline on <html>, and that
     // is not a style preference — it is the fullscreen handoff.
@@ -1973,14 +2399,15 @@ const youtubeAdapter: SiteAdapter = {
     // These selectors are one class short of the fullscreen ones, so the sheet
     // still loses to them and wins against the `clamp()` defaults it overrides —
     // which it does on source order, being appended after the main sheet.
+    //
+    // One rule per dock, emitted from the same table the stylesheet's own tokens
+    // are named in. It used to be a hand-written `if` per dock, which is the shape
+    // that does not survive a third one.
     const rules: string[] = [];
-    if (widths.panelPx > 0) {
-      rules.push(`html.wfs-windowed.wfs-side-panel { --wfs-panel-width: ${widths.panelPx}px; }`);
-    }
-    if (widths.chatPx > 0) {
-      rules.push(
-        `html.wfs-windowed:has(#chat:not([collapsed])) { --wfs-chat-width: ${widths.chatPx}px; }`,
-      );
+    for (const dock of DOCK_IDS) {
+      const spec = YT_DOCKS[dock];
+      if (!spec || widths[dock] <= 0) continue;
+      rules.push(`${spec.widthSelector} { ${spec.widthVar}: ${widths[dock]}px; }`);
     }
     return rules.join("\n");
   },
@@ -1997,7 +2424,9 @@ const youtubeAdapter: SiteAdapter = {
   },
 
   measureDockWidth(doc, dock) {
-    const el = dock === "panel" ? doc.querySelector(YT.sideContent) : doc.querySelector(YT.liveChat);
+    const spec = YT_DOCKS[dock];
+    if (!spec) return null;
+    const el = doc.querySelector(spec.element);
     if (!el) return null;
     const width = el.getBoundingClientRect().width;
     // 0 means the element exists but is not laid out — chat before it expands, or
@@ -2144,22 +2573,44 @@ const youtubeAdapter: SiteAdapter = {
     if (typeof MutationObserver === "undefined") return () => {};
 
     /** Chat's dock state now: which frame, and whether the site is showing it. */
-    const readDockState = (): { chat: Element | null; docked: boolean } => {
+    const readChatState = (): { chat: Element | null; docked: boolean } => {
       const chat = doc.querySelector(YT.liveChat);
       return { chat, docked: chat !== null && !chat.hasAttribute(YT.chatCollapsedAttr) };
     };
 
-    let last = readDockState();
+    /** Transcript's dock state: which panel, and whether it is expanded. */
+    const readTranscriptState = (): { panel: Element | null; expanded: boolean } => {
+      const panel = doc.querySelector(YT.transcriptPanel);
+      return {
+        panel,
+        expanded: panel?.getAttribute(YT.transcriptVisibilityAttr) === YT.transcriptExpandedValue,
+      };
+    };
+
+    let lastChat = readChatState();
+    let lastTranscript = readTranscriptState();
+
     const observer = new MutationObserver(() => {
-      const current = readDockState();
-      if (current.chat === last.chat && current.docked === last.docked) return;
-      last = current;
-      onChange();
+      let changed = false;
+
+      const currentChat = readChatState();
+      if (currentChat.chat !== lastChat.chat || currentChat.docked !== lastChat.docked) {
+        lastChat = currentChat;
+        changed = true;
+      }
+
+      const currentTranscript = readTranscriptState();
+      if (currentTranscript.panel !== lastTranscript.panel || currentTranscript.expanded !== lastTranscript.expanded) {
+        lastTranscript = currentTranscript;
+        changed = true;
+      }
+
+      if (changed) onChange();
     });
     observer.observe(doc.documentElement ?? doc, {
       subtree: true,
       attributes: true,
-      attributeFilter: [YT.chatCollapsedAttr],
+      attributeFilter: [YT.chatCollapsedAttr, YT.transcriptVisibilityAttr],
     });
 
     return () => observer.disconnect();
@@ -2267,7 +2718,7 @@ export async function getSitePrefs(
  * that knew nothing about `scrollable` — reads back as valid with that field at
  * its default, rather than being discarded as corrupt.
  */
-function normalizeSitePrefs(stored: unknown): SitePrefs | null {
+export function normalizeSitePrefs(stored: unknown): SitePrefs | null {
   if (typeof stored !== "object" || stored === null) return null;
   const raw = stored as Record<string, unknown>;
   // autoApply has existed since the first release; its absence means this is not
@@ -2280,14 +2731,34 @@ function normalizeSitePrefs(stored: unknown): SitePrefs | null {
     // narrower than the stylesheet would. There is no ceiling here on purpose: a
     // record from a wider monitor is a real choice, and the drag's own live clamp
     // brings it inside this window the moment the reader touches the grip. 0 stays 0,
-    // meaning "use the stylesheet's own responsive width".
-    panelWidth: normalizeDockWidth(raw.panelWidth),
-    chatWidth: normalizeDockWidth(raw.chatWidth),
+    // meaning "use the stylesheet's own responsive width". The whole record goes in
+    // because a pre-2.0.0 store kept the widths as two sibling fields.
+    dockWidths: normalizeDockWidths(raw),
     channels: normalizeChannelRules(raw.channels),
     captureToClipboard:
       typeof raw.captureToClipboard === "boolean"
         ? raw.captureToClipboard
         : DEFAULT_SITE_PREFS.captureToClipboard,
+    letterboxColor:
+      typeof raw.letterboxColor === "string"
+        ? raw.letterboxColor.trim()
+        : DEFAULT_SITE_PREFS.letterboxColor,
+    ambientGlow:
+      typeof raw.ambientGlow === "boolean"
+        ? raw.ambientGlow
+        : DEFAULT_SITE_PREFS.ambientGlow,
+    captureFilenameTemplate:
+      typeof raw.captureFilenameTemplate === "string"
+        ? raw.captureFilenameTemplate.trim()
+        : DEFAULT_SITE_PREFS.captureFilenameTemplate,
+    captureBurnTimestamp:
+      typeof raw.captureBurnTimestamp === "boolean"
+        ? raw.captureBurnTimestamp
+        : DEFAULT_SITE_PREFS.captureBurnTimestamp,
+    cursorAutoHide:
+      typeof raw.cursorAutoHide === "boolean"
+        ? raw.cursorAutoHide
+        : DEFAULT_SITE_PREFS.cursorAutoHide,
   };
 }
 
@@ -2348,6 +2819,31 @@ export function normalizeDockWidth(stored: unknown): number {
 }
 
 /**
+ * Coerce a stored width record, reading a pre-2.0.0 record as well.
+ *
+ * Takes the whole stored preferences object rather than just its `dockWidths`
+ * field, and that is the entire migration: through 1.4.0 the widths were two
+ * sibling fields called `panelWidth` and `chatWidth`, so when `dockWidths` is
+ * absent those two are read instead. A reader who dragged their comment column
+ * wide before this version keeps that width, and nothing has to run once and be
+ * remembered as having run.
+ *
+ * Every dock is filled in, so no consumer has to treat a missing dock as anything.
+ * A dock that has never been dragged reads back 0, which is the same as a fresh
+ * install and means "use the stylesheet's own responsive width".
+ */
+export function normalizeDockWidths(stored: Record<string, unknown>): DockWidths {
+  const raw =
+    typeof stored.dockWidths === "object" && stored.dockWidths !== null
+      ? (stored.dockWidths as Record<string, unknown>)
+      : // Pre-2.0.0: two sibling fields, one per dock, and no transcript dock at all.
+        { panel: stored.panelWidth, chat: stored.chatWidth };
+  const widths: Record<DockId, number> = { ...DEFAULT_DOCK_WIDTHS };
+  for (const dock of DOCK_IDS) widths[dock] = normalizeDockWidth(raw[dock]);
+  return widths;
+}
+
+/**
  * Coerce a stored channel-rule list: strings only, trimmed, de-duplicated, and
  * capped.
  *
@@ -2356,30 +2852,68 @@ export function normalizeDockWidth(stored: unknown): number {
  * Non-string entries are dropped individually rather than condemning the list,
  * for the same reason every other coercion here is per-field.
  */
-export function normalizeChannelRules(stored: unknown): readonly string[] {
+export function normalizeChannelRules(stored: unknown): readonly ChannelRule[] {
   if (!Array.isArray(stored)) return [];
-  const out: string[] = [];
+  const out: ChannelRule[] = [];
   for (const entry of stored) {
-    if (typeof entry !== "string") continue;
-    const id = entry.trim();
+    // A bare string is a pre-2.0.0 rule, when the list held identifiers and
+    // nothing else. It upgrades to a rule that asks for no layout of its own,
+    // which behaves exactly as it did before — that equivalence is what let the
+    // shape change without a migration step to write, run, and remember.
+    const raw: Record<string, unknown> =
+      typeof entry === "string" ? { id: entry } : ((entry ?? {}) as Record<string, unknown>);
+    if (typeof raw.id !== "string") continue;
+    const id = raw.id.trim();
     if (id === "" || id.length > MAX_CHANNEL_ID_LENGTH) continue;
-    if (out.includes(id)) continue;
-    out.push(id);
+    // First rule for a channel wins. A duplicate is not an error worth reporting:
+    // the settings UI refuses to add one, so a second can only come from a record
+    // written by hand or by a future version.
+    if (out.some((rule) => rule.id === id)) continue;
+    out.push({
+      id,
+      // Anything that is not a boolean means "no preference of its own", which is
+      // what an upgraded string rule and a damaged field both come back as.
+      scrollable: typeof raw.scrollable === "boolean" ? raw.scrollable : null,
+      panel: raw.panel === true,
+      dockWidths: normalizeDockWidths(raw),
+    });
     if (out.length >= MAX_CHANNEL_RULES) break;
   }
   return out;
 }
 
 /**
- * Whether the page's channel has a rule asking for the mode.
+ * A rule for this channel that asks for no layout of its own.
+ *
+ * What the settings UI adds when the reader names a channel, and what a pre-2.0.0
+ * string rule upgrades to. Both have to mean the same thing, so both come through
+ * here rather than each writing the defaults out.
+ */
+export function newChannelRule(id: string): ChannelRule {
+  return { id, scrollable: null, panel: false, dockWidths: DEFAULT_DOCK_WIDTHS };
+}
+
+/**
+ * The rule for this channel, or null when there is none.
  *
  * Pure, and deliberately does not read the Pro state: the gate belongs to the one
  * caller in §9, so this stays a question about the rules alone and stays testable
  * without an entitlement record.
  */
+export function findChannelRule(prefs: SitePrefs, channel: ChannelRef | null): ChannelRule | null {
+  if (!channel || channel.id === "") return null;
+  return prefs.channels.find((rule) => rule.id === channel.id) ?? null;
+}
+
+/**
+ * Whether the page's channel has a rule asking for the mode.
+ *
+ * Kept alongside {@link findChannelRule} rather than replaced by it: this is the
+ * question `autoApplyWanted` asks, and a boolean caller should not have to know
+ * that a rule is an object now.
+ */
 export function channelRuleMatches(prefs: SitePrefs, channel: ChannelRef | null): boolean {
-  if (!channel || channel.id === "") return false;
-  return prefs.channels.includes(channel.id);
+  return findChannelRule(prefs, channel) !== null;
 }
 
 /**
@@ -2399,6 +2933,33 @@ export async function setSitePrefs(
     const { prefs } = await getSitePrefs(siteId);
     await area.set({ [siteKey(siteId)]: { ...prefs, ...patch } });
     return { ok: true };
+  } catch (err) {
+    return { ok: false, error: describeError(err) };
+  }
+}
+
+/**
+ * Export a site's preferences as a JSON file download.
+ */
+export async function exportSettings(siteId: string, doc: Document): Promise<void> {
+  const { prefs } = await getSitePrefs(siteId);
+  const json = JSON.stringify(prefs, null, 2);
+  const blob = new Blob([json], { type: "application/json" });
+  downloadBlob(doc, blob, `windowed-fullscreen-${siteId}-settings.json`);
+}
+
+/**
+ * Import a site's preferences from raw JSON text, validating with normalizeSitePrefs.
+ */
+export async function importSettings(
+  siteId: string,
+  jsonText: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const parsed = JSON.parse(jsonText);
+    const normalized = normalizeSitePrefs(parsed);
+    if (!normalized) return { ok: false, error: "Invalid settings format" };
+    return await setSitePrefs(siteId, normalized);
   } catch (err) {
     return { ok: false, error: describeError(err) };
   }
@@ -3102,6 +3663,28 @@ function writeDockWidthCss(doc: Document, css: string): void {
 /** Drop the dock-width sheet, used on teardown so a navigation leaves nothing. */
 function removeDockWidthCss(doc: Document): void {
   doc.getElementById(DOCK_WIDTH_STYLE_ID)?.remove();
+}
+
+export const LETTERBOX_STYLE_ID = "wfs-letterbox-style";
+
+/**
+ * Write a custom or ambient letterbox bar colour into its own `<style>` element.
+ */
+export function writeLetterboxCss(doc: Document, color: string): void {
+  let style = doc.getElementById(LETTERBOX_STYLE_ID);
+  if (!style && (color === "" || color === "#000000" || color === "#000")) return;
+  if (!style) {
+    style = doc.createElement("style");
+    style.id = LETTERBOX_STYLE_ID;
+    (doc.head ?? doc.documentElement).appendChild(style);
+  }
+  const css = `html.wfs-windowed { --wfs-letterbox-color: ${color} !important; }\nhtml.wfs-windowed #movie_player, html.wfs-windowed .html5-video-player, html.wfs-windowed #player-theater-container, html.wfs-windowed #player-container, html.wfs-windowed ytd-player { background: var(--wfs-letterbox-color) !important; }`;
+  if (style.textContent !== css) style.textContent = css;
+}
+
+/** Drop the letterbox style sheet on exit or teardown. */
+export function removeLetterboxCss(doc: Document): void {
+  doc.getElementById(LETTERBOX_STYLE_ID)?.remove();
 }
 
 // ===========================================================================
@@ -3931,23 +4514,25 @@ const PANEL_CLOSE_CLASS = "wfs-panel-close";
 /** Accessible name for the frame-capture control. */
 const CAPTURE_BUTTON_LABEL = "Save this frame";
 
+/** Accessible name for copying link at current timestamp. */
+const COPY_LINK_BUTTON_LABEL = "Copy link at current time";
+
+/** Accessible name for the transcript panel toggle. */
+const TRANSCRIPT_BUTTON_LABEL = "Transcript";
+
 /** Accessible name for a dock's drag grip, with the dock named. */
 const DOCK_GRIP_LABELS = {
   panel: "Drag to resize the comments column",
   chat: "Drag to resize the chat column",
-} as const;
+  transcript: "Drag to resize the transcript column",
+} as const satisfies Record<DockId, string>;
 
 /**
  * The controls we inject, in on-screen order starting immediately to the right
  * of the site's own fullscreen button. The value doubles as the marker
  * attribute's value, which is how a re-render is de-duplicated per control.
- *
- * Capture is first, so it lands between the site's fullscreen button and ours.
- * The two the reader uses constantly keep the positions they have had since
- * 1.2.0 — moving them to make room for a new control would mean everyone
- * re-learning where the button they press every video is.
  */
-const BUTTON_ROLES = ["capture", "mode", "panel"] as const;
+const BUTTON_ROLES = ["capture", "copylink", "transcript", "mode", "panel"] as const;
 
 type ButtonRole = (typeof BUTTON_ROLES)[number];
 
@@ -4115,6 +4700,92 @@ function buildCaptureIcon(doc: Document): Element {
   return svg;
 }
 
+/** A link chain with small clock timestamp indicator. */
+function buildCopyLinkIcon(doc: Document): Element {
+  const svg = createIconSvg(doc);
+  appendShape(doc, svg, "path", {
+    d: "M14 14l-2.5 2.5a3.5 3.5 0 0 0 5 5l2.5-2.5m-1-5l2.5-2.5a3.5 3.5 0 0 0-5-5l-2.5 2.5m-1 7l6-6",
+    fill: "none",
+    stroke: "#ffffff",
+    "stroke-width": "2",
+    "stroke-linecap": "round",
+  });
+  appendShape(doc, svg, "circle", {
+    cx: "25",
+    cy: "24",
+    r: "4.5",
+    fill: "#111111",
+    stroke: "#ffffff",
+    "stroke-width": "1.5",
+  });
+  appendShape(doc, svg, "path", {
+    d: "M25 21.5v2.5h2",
+    fill: "none",
+    stroke: "#ffffff",
+    "stroke-width": "1.2",
+    "stroke-linecap": "round",
+  });
+  return svg;
+}
+
+/** A document with timestamp dots and text lines representing a transcript. */
+function buildTranscriptIcon(doc: Document): Element {
+  const svg = createIconSvg(doc);
+  appendShape(doc, svg, "rect", {
+    x: "8",
+    y: "7",
+    width: "20",
+    height: "22",
+    rx: "2.5",
+    fill: "none",
+    stroke: "#ffffff",
+    "stroke-width": "2",
+  });
+  appendShape(doc, svg, "circle", {
+    cx: "12",
+    cy: "13",
+    r: "1.2",
+    fill: "#ffffff",
+  });
+  appendShape(doc, svg, "rect", {
+    x: "15.5",
+    y: "12",
+    width: "9",
+    height: "2",
+    rx: "1",
+    fill: "#ffffff",
+  });
+  appendShape(doc, svg, "circle", {
+    cx: "12",
+    cy: "18",
+    r: "1.2",
+    fill: "#ffffff",
+  });
+  appendShape(doc, svg, "rect", {
+    x: "15.5",
+    y: "17",
+    width: "9",
+    height: "2",
+    rx: "1",
+    fill: "#ffffff",
+  });
+  appendShape(doc, svg, "circle", {
+    cx: "12",
+    cy: "23",
+    r: "1.2",
+    fill: "#ffffff",
+  });
+  appendShape(doc, svg, "rect", {
+    x: "15.5",
+    y: "22",
+    width: "6",
+    height: "2",
+    rx: "1",
+    fill: "#ffffff",
+  });
+  return svg;
+}
+
 /**
  * A plain X for the panel's close button.
  *
@@ -4161,8 +4832,9 @@ function buildPanelCloseButton(doc: Document, onActivate: () => void): HTMLEleme
   return button;
 }
 
-/** Which dock a grip moves. */
-export type DockId = "panel" | "chat";
+// `DockId` used to be declared here, beside the grip that moves a dock. It now
+// lives in §1: the adapter interface, `SitePrefs`, and the stylesheet tokens all
+// speak in terms of it, and all three come before this section.
 
 /** How far one arrow-key press moves a dock's edge, in CSS px. */
 const DOCK_KEY_STEP_PX = 16;
@@ -4868,7 +5540,10 @@ const CAPTURE_SAMPLE_GRID = 3;
  * again, and the alternative is a bounded loop that saves a *different* frame from
  * the one they were looking at.
  */
-export async function captureVideoFrame(video: HTMLVideoElement): Promise<CaptureResult> {
+export async function captureVideoFrame(
+  video: HTMLVideoElement,
+  options?: { burnTimestamp?: boolean },
+): Promise<CaptureResult> {
   const width = video.videoWidth;
   const height = video.videoHeight;
   // Metadata has not arrived, so there is no frame yet — distinct from a failure,
@@ -4910,6 +5585,41 @@ export async function captureVideoFrame(video: HTMLVideoElement): Promise<Captur
     if (!lit) return { outcome: "blank" };
   } catch {
     return { outcome: "blank" };
+  }
+
+  // Burn video playback timestamp into the bottom-right corner when requested.
+  if (options?.burnTimestamp && Number.isFinite(video.currentTime) && video.currentTime >= 0) {
+    const totalSec = Math.floor(video.currentTime);
+    const hrs = Math.floor(totalSec / 3600);
+    const mins = Math.floor((totalSec % 3600) / 60);
+    const secs = totalSec % 60;
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const timeText = hrs > 0 ? `${hrs}:${pad(mins)}:${pad(secs)}` : `${mins}:${pad(secs)}`;
+
+    const fontSize = Math.max(16, Math.round(height * 0.035));
+    ctx.font = `600 ${fontSize}px sans-serif`;
+    const textMetrics = ctx.measureText(timeText);
+    const paddingX = Math.round(fontSize * 0.5);
+    const paddingY = Math.round(fontSize * 0.3);
+    const boxWidth = textMetrics.width + paddingX * 2;
+    const boxHeight = fontSize + paddingY * 2;
+    const margin = Math.round(height * 0.03);
+
+    const x = width - boxWidth - margin;
+    const y = height - boxHeight - margin;
+
+    ctx.fillStyle = "rgba(0, 0, 0, 0.65)";
+    ctx.beginPath();
+    if (typeof ctx.roundRect === "function") {
+      ctx.roundRect(x, y, boxWidth, boxHeight, 6);
+    } else {
+      ctx.rect(x, y, boxWidth, boxHeight);
+    }
+    ctx.fill();
+
+    ctx.fillStyle = "#ffffff";
+    ctx.textBaseline = "top";
+    ctx.fillText(timeText, x + paddingX, y + paddingY);
   }
 
   const blob = await new Promise<Blob | null>((resolve) => {
@@ -4961,25 +5671,121 @@ async function copyBlobToClipboard(blob: Blob): Promise<boolean> {
   }
 }
 
+/** Format seconds (e.g. 125) into a human readable timestamp (e.g. 02:05 or 01:02:05). */
+export function formatPlaybackTimestamp(seconds: number): string {
+  const s = Math.floor(Math.max(seconds, 0));
+  const m = Math.floor(s / 60);
+  const remS = s % 60;
+  const h = Math.floor(m / 60);
+  const remM = m % 60;
+  const pad = (n: number): string => String(n).padStart(2, "0");
+  if (h > 0) return `${h}:${pad(remM)}:${pad(remS)}`;
+  return `${pad(remM)}:${pad(remS)}`;
+}
+
+/**
+ * Copy the current page URL with the playback timestamp (e.g. `&t=120s`) to the clipboard.
+ */
+export async function copyLinkAtCurrentTime(
+  doc: Document,
+  video: HTMLVideoElement | null,
+): Promise<boolean> {
+  try {
+    const href =
+      doc.defaultView?.location?.href ??
+      (typeof window !== "undefined" ? window.location?.href : "");
+    if (!href) return false;
+    const url = new URL(href);
+    if (video && Number.isFinite(video.currentTime) && video.currentTime > 0) {
+      url.searchParams.set("t", `${Math.floor(video.currentTime)}s`);
+    }
+    const text = url.toString();
+    try {
+      if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(text);
+        return true;
+      }
+    } catch {
+      // Fallback to execCommand below.
+    }
+    if (doc.createElement && doc.body) {
+      const textarea = doc.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      textarea.style.pointerEvents = "none";
+      doc.body.appendChild(textarea);
+      textarea.select();
+      const ok = doc.execCommand?.("copy") ?? false;
+      textarea.remove();
+      if (ok) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Build the filename for a captured frame: the site's own name for what is
  * playing, then the wall-clock time, then `.png`.
  *
- * The timestamp is what keeps a second capture of the same video from overwriting
- * the first, and it is local time rather than an ISO instant because the file is
- * for a person looking at their downloads folder. Colons are not legal in a
- * filename on Windows, hence the dashes.
+ * Supports custom templates like `{title}-{date}-{time}.png`.
  */
-export function captureFilename(stem: string | null, now: Date): string {
+export function captureFilename(
+  stem: string | null,
+  now: Date,
+  template?: string,
+  extra?: { videoTitle?: string; channelName?: string; playbackTimestamp?: string },
+): string {
   const pad = (n: number): string => String(n).padStart(2, "0");
-  const stamp =
-    `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
-    `-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  const year = String(now.getFullYear());
+  const month = pad(now.getMonth() + 1);
+  const day = pad(now.getDate());
+  const hours = pad(now.getHours());
+  const minutes = pad(now.getMinutes());
+  const seconds = pad(now.getSeconds());
+
+  const dateStr = `${year}-${month}-${day}`;
+  const timeStr = `${hours}${minutes}${seconds}`;
+  const stamp = `${dateStr}-${timeStr}`;
+
   // Anything a filesystem might object to becomes a dash, and a run of them
   // collapses, so a site that hands back a title rather than an id still produces
   // a sane name.
   const safe = (stem ?? "frame").replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
-  return `windowed-fullscreen-${safe === "" ? "frame" : safe}-${stamp}.png`;
+  const cleanStem = safe === "" ? "frame" : safe;
+
+  const rawTitle = extra?.videoTitle
+    ? extra.videoTitle.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "")
+    : cleanStem;
+  const cleanTitle = rawTitle === "" ? cleanStem : rawTitle;
+
+  const rawChannel = extra?.channelName
+    ? extra.channelName.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "")
+    : "";
+  const cleanChannel = rawChannel.replace(/^-+|-+$/g, "");
+
+  const cleanTimestamp = extra?.playbackTimestamp
+    ? extra.playbackTimestamp.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "")
+    : stamp;
+
+  if (template && template.trim().length > 0) {
+    let result = template
+      .replace(/\{title\}/gi, cleanTitle)
+      .replace(/\{channel\}/gi, cleanChannel)
+      .replace(/\{timestamp\}/gi, cleanTimestamp)
+      .replace(/\{stem\}/gi, cleanStem)
+      .replace(/\{date\}/gi, dateStr)
+      .replace(/\{time\}/gi, timeStr)
+      .replace(/\{site\}/gi, "windowed-fullscreen");
+    result = result.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+    if (result.length > 0) {
+      return result.endsWith(".png") ? result : `${result}.png`;
+    }
+  }
+
+  return `windowed-fullscreen-${cleanStem}-${stamp}.png`;
 }
 
 /**
@@ -5107,6 +5913,122 @@ export function selectExitDestination(
   }
 }
 
+/** How often ambient glow samples the playing video, in ms. */
+const GLOW_SAMPLE_INTERVAL_MS = 250;
+
+/** Size (px) of the offscreen canvas used to sample ambient edge colours. */
+const GLOW_SAMPLE_SIZE = 16;
+
+/** How long before the mouse cursor hides in windowed fullscreen when idle, in ms. */
+const CURSOR_AUTOHIDE_MS = 3000;
+
+interface GlowSampler {
+  start(): void;
+  stop(): void;
+  dispose(): void;
+}
+
+function createGlowSampler(
+  doc: Document,
+  getVideo: () => HTMLVideoElement | null,
+  isModeActive: () => boolean,
+  onColor: (rgbColor: string) => void,
+): GlowSampler {
+  let timer: number | null = null;
+  let canvas: HTMLCanvasElement | null = null;
+  let ctx: CanvasRenderingContext2D | null = null;
+
+  const getContext = (): CanvasRenderingContext2D | null => {
+    if (ctx) return ctx;
+    try {
+      canvas = doc.createElement("canvas");
+      canvas.width = GLOW_SAMPLE_SIZE;
+      canvas.height = GLOW_SAMPLE_SIZE;
+      ctx = canvas.getContext("2d", { willReadFrequently: true });
+      return ctx;
+    } catch {
+      return null;
+    }
+  };
+
+  const sample = (): void => {
+    if (!isModeActive()) return;
+    if (doc.visibilityState === "hidden" || doc.fullscreenElement !== null) return;
+
+    const video = getVideo();
+    if (!video || video.ended || video.readyState < 2) return;
+
+    const context = getContext();
+    if (!context) return;
+
+    try {
+      context.drawImage(video, 0, 0, GLOW_SAMPLE_SIZE, GLOW_SAMPLE_SIZE);
+      const imgData = context.getImageData(0, 0, GLOW_SAMPLE_SIZE, GLOW_SAMPLE_SIZE);
+      const data = imgData.data;
+
+      let rSum = 0;
+      let gSum = 0;
+      let bSum = 0;
+      let count = 0;
+
+      for (let y = 0; y < GLOW_SAMPLE_SIZE; y++) {
+        for (let x = 0; x < GLOW_SAMPLE_SIZE; x++) {
+          const isEdge =
+            x === 0 || x === GLOW_SAMPLE_SIZE - 1 || y === 0 || y === GLOW_SAMPLE_SIZE - 1;
+          if (!isEdge) continue;
+
+          const idx = (y * GLOW_SAMPLE_SIZE + x) * 4;
+          const r = data[idx] ?? 0;
+          const g = data[idx + 1] ?? 0;
+          const b = data[idx + 2] ?? 0;
+          const a = data[idx + 3] ?? 0;
+
+          if (a > 0) {
+            rSum += r;
+            gSum += g;
+            bSum += b;
+            count++;
+          }
+        }
+      }
+
+      if (count > 0) {
+        const avgR = Math.round(rSum / count);
+        const avgG = Math.round(gSum / count);
+        const avgB = Math.round(bSum / count);
+        onColor(`rgb(${avgR}, ${avgG}, ${avgB})`);
+      }
+    } catch {
+      // Cross-origin tainted canvas or detached video
+    }
+  };
+
+  const start = (): void => {
+    const win = doc.defaultView ?? globalThis;
+    if (timer === null) {
+      timer = win.setInterval(sample, GLOW_SAMPLE_INTERVAL_MS) as unknown as number;
+    }
+    // Sample immediately so ambient glow takes effect without waiting for interval
+    sample();
+  };
+
+  const stop = (): void => {
+    if (timer !== null) {
+      const win = doc.defaultView ?? globalThis;
+      win.clearInterval(timer);
+      timer = null;
+    }
+  };
+
+  const dispose = (): void => {
+    stop();
+    canvas = null;
+    ctx = null;
+  };
+
+  return { start, stop, dispose };
+}
+
 /** A live content-script session for one supported site. */
 interface Session {
   readonly siteId: string;
@@ -5137,8 +6059,11 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
    */
   let pro: ProState = { ...DEFAULT_PRO_STATE };
 
-  const controller = new WindowedFullscreenController(doc, () => modeFor(prefs));
-  const resolve = (): SiteDescriptor | null => resolveDescriptor(adapter, doc, modeFor(prefs));
+  let activeChannelMode: WindowedMode | null = null;
+  const currentMode = (): WindowedMode => activeChannelMode ?? modeFor(prefs);
+
+  const controller = new WindowedFullscreenController(doc, currentMode);
+  const resolve = (): SiteDescriptor | null => resolveDescriptor(adapter, doc, currentMode());
 
   // Auto-apply enters the mode once, as soon as both the preference has resolved
   // and the player exists. Which happens first is unpredictable, so this is
@@ -5193,6 +6118,70 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
     enteredAtMs = Date.now();
   };
 
+  const glowSampler = createGlowSampler(
+    doc,
+    () => adapter.findVideo?.(doc) ?? null,
+    () => controller.isActive,
+    (glowColor) => {
+      writeLetterboxCss(doc, glowColor);
+    },
+  );
+
+  const updateLetterboxAndGlow = (): void => {
+    if (!controller.isActive) {
+      glowSampler.stop();
+      removeLetterboxCss(doc);
+      return;
+    }
+    if (isPro(pro) && prefs.ambientGlow) {
+      glowSampler.start();
+    } else {
+      glowSampler.stop();
+      if (isPro(pro) && prefs.letterboxColor) {
+        writeLetterboxCss(doc, prefs.letterboxColor);
+      } else {
+        removeLetterboxCss(doc);
+      }
+    }
+  };
+
+  let cursorTimer: number | null = null;
+
+  const clearCursorTimer = (): void => {
+    if (cursorTimer !== null) {
+      timers().clearTimeout(cursorTimer);
+      cursorTimer = null;
+    }
+  };
+
+  const showCursor = (): void => {
+    doc.documentElement.classList.remove("wfs-cursor-hidden");
+  };
+
+  const hideCursor = (): void => {
+    if (
+      controller.isActive &&
+      prefs.cursorAutoHide !== false &&
+      !doc.documentElement.classList.contains("wfs-cursor-hidden")
+    ) {
+      doc.documentElement.classList.add("wfs-cursor-hidden");
+    }
+  };
+
+  const resetCursorTimer = (): void => {
+    showCursor();
+    clearCursorTimer();
+    if (controller.isActive && prefs.cursorAutoHide !== false) {
+      cursorTimer = timers().setTimeout(hideCursor, CURSOR_AUTOHIDE_MS) as unknown as number;
+    }
+  };
+
+  const onPointerActivity = (): void => {
+    resetCursorTimer();
+  };
+
+  doc.addEventListener("pointermove", onPointerActivity, { passive: true });
+
   /**
    * Enter the mode and start the clock on success.
    *
@@ -5203,6 +6192,8 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
   const enterMode = (descriptor: SiteDescriptor): boolean => {
     if (!controller.enter(descriptor)) return false;
     noteSessionStart();
+    updateLetterboxAndGlow();
+    resetCursorTimer();
     return true;
   };
 
@@ -5222,6 +6213,12 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
    * (R9.10, R11.9).
    */
   const noteSessionEnd = (): void => {
+    activeChannelMode = null;
+    adoptStoredWidths(prefs);
+    glowSampler.stop();
+    removeLetterboxCss(doc);
+    showCursor();
+    clearCursorTimer();
     if (enteredAtMs === 0) return;
     const durationMs = Date.now() - enteredAtMs;
     enteredAtMs = 0;
@@ -5249,6 +6246,14 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
   controller.setModeEndListener(noteSessionEnd);
 
   /**
+   * Look up the matched channel rule for the current page if the reader is entitled.
+   */
+  const getAutoApplyRule = (): ChannelRule | null => {
+    if (!isPro(pro)) return null;
+    return findChannelRule(prefs, adapter.readChannel?.(doc) ?? null);
+  };
+
+  /**
    * Whether auto-apply should fire on this page, from the per-site switch or a
    * per-channel rule.
    *
@@ -5259,8 +6264,7 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
    */
   const autoApplyWanted = (): boolean => {
     if (autoApplyEnabled) return true;
-    if (!isPro(pro)) return false;
-    return channelRuleMatches(prefs, adapter.readChannel?.(doc) ?? null);
+    return getAutoApplyRule() !== null;
   };
 
   /**
@@ -5343,6 +6347,7 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
       scheduleChannelRuleRetry();
       return;
     }
+    const rule = getAutoApplyRule();
     // Decided, so nothing is waiting on the page any more.
     clearChannelRuleWatch();
     // The reader has just left fullscreen for the plain player. Both refusals
@@ -5350,11 +6355,32 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
     if (autoApplySuppressed || Date.now() < normalPlayerUntilMs) return;
     // Never arrive on top of browser fullscreen; see the fullscreen handoff below.
     if (doc.fullscreenElement) return;
+
+    if (rule && rule.scrollable !== null) {
+      activeChannelMode = rule.scrollable ? "scrollable" : "cover";
+    } else {
+      activeChannelMode = null;
+    }
+
     const descriptor = resolve();
     // Not ready yet; the next button change re-triggers this.
     if (!descriptor) return;
+
+    if (rule) {
+      for (const dock of DOCK_IDS) {
+        if (rule.dockWidths[dock] > 0) {
+          liveWidths[dock] = rule.dockWidths[dock];
+        }
+      }
+      applyDockWidths();
+    }
+
     autoApplied = true;
-    enterMode(descriptor);
+    if (enterMode(descriptor)) {
+      if (rule?.panel) {
+        controller.setPanelOpen(true);
+      }
+    }
   };
 
   /**
@@ -5363,7 +6389,7 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
    * between the two modes.
    */
   const reapplyMode = (): void => {
-    if (!controller.isActive || controller.mode === modeFor(prefs)) return;
+    if (!controller.isActive || controller.mode === currentMode()) return;
     // Exit closes the panel, so carry the reader's choice across the swap.
     const panelWasOpen = controller.isPanelOpen;
     // One visit counts once (R9.1). Swapping cover for scrollable is not a new
@@ -5846,7 +6872,11 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
     const wasActive = controller.isActive;
     controller.toggle(resolve);
     if (controller.isActive === wasActive) return;
-    if (controller.isActive) noteSessionStart();
+    if (controller.isActive) {
+      noteSessionStart();
+      updateLetterboxAndGlow();
+      resetCursorTimer();
+    }
   };
 
   /**
@@ -5877,6 +6907,7 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
     // any other tab. `applyDockWidths` skips the write when the text is unchanged,
     // so the common case costs a string comparison.
     adoptStoredWidths(next);
+    updateLetterboxAndGlow();
     reapplyMode();
   });
 
@@ -5929,7 +6960,16 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
    * follows the pointer rather than the round trip. `prefs` is the durable copy and
    * the preference watch reconciles the two.
    */
-  const liveWidths = { panelPx: 0, chatPx: 0 };
+  const liveWidths: Record<DockId, number> = { ...DEFAULT_DOCK_WIDTHS };
+
+  /**
+   * The docks this site has, outboard to inboard, or none when it has no resizable
+   * dock at all.
+   *
+   * Asked once per session. The order is what makes the running total in
+   * `applyDockWidths` correct, so it is the adapter's order and never re-sorted here.
+   */
+  const docks: readonly DockId[] = adapter.supportedDocks ?? [];
 
   /**
    * The narrowest a drag may make either dock right now: the width the stylesheet
@@ -5954,8 +6994,10 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
    * nobody can undo. So the reader's number is kept as stored, and only what is
    * PAINTED is clamped. Widen the window again and the full width comes back.
    *
-   * Chat is resolved first because it holds the outer edge, and the panel is then
-   * measured against what chat actually took rather than what it asked for.
+   * Resolved outboard to inboard, each dock measured against the width the docks
+   * outside it actually took rather than what they asked for. That running total is
+   * why {@link DOCK_IDS} is ordered and why this loop must not re-sort it: chat holds
+   * the window edge, so its width is settled before the panel inside it is fitted.
    */
   const applyDockWidths = (): void => {
     if (!adapter.getDockWidthCss) return;
@@ -5971,9 +7013,16 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
       px > 0 && viewportPx > 0
         ? clampDockWidth({ proposedPx: px, otherDockPx, viewportPx, floorPx })
         : Math.max(px, 0);
-    const chatPx = fit(liveWidths.chatPx, 0);
-    const panelPx = fit(liveWidths.panelPx, isDockVisible("chat") ? chatPx : 0);
-    writeDockWidthCss(doc, adapter.getDockWidthCss({ panelPx, chatPx }));
+    const fitted: Record<DockId, number> = { ...DEFAULT_DOCK_WIDTHS };
+    // What the docks already resolved are holding. Only the ones actually on screen
+    // count: a width stored from a previous session must not eat into the space
+    // available to a dock when the dock that owns it is shut.
+    let takenPx = 0;
+    for (const dock of docks) {
+      fitted[dock] = fit(liveWidths[dock], takenPx);
+      if (isDockVisible(dock)) takenPx += fitted[dock];
+    }
+    writeDockWidthCss(doc, adapter.getDockWidthCss(fitted));
   };
 
   /**
@@ -5994,19 +7043,24 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
 
   /** The width a drag on this dock should start from. */
   const currentDockWidth = (dock: DockId): number => {
-    const stored = dock === "panel" ? liveWidths.panelPx : liveWidths.chatPx;
+    const stored = liveWidths[dock];
     if (stored > 0) return stored;
     // Nothing stored, so the sheet's `clamp()` is in force and cannot be read back
     // as a number — measure what is on screen instead. See `measureDockWidth`.
     return Math.round(adapter.measureDockWidth?.(doc, dock) ?? 0) || DOCK_WIDTH_FALLBACK_PX;
   };
 
-  /** Whether a dock is currently taking viewport width (visible on screen). */
+  /**
+   * Whether a dock is currently taking viewport width.
+   *
+   * The comment panel is answered from our own class, because that dock's state is
+   * the mode's. Every other dock is the site's own element, so the adapter is asked —
+   * this used to query `#chat` right here, which put a YouTube selector in §9 and
+   * meant a second site could not have had a chat dock at all.
+   */
   const isDockVisible = (dock: DockId): boolean => {
     if (dock === "panel") return doc.documentElement.classList.contains(PANEL_CLASS);
-    // Chat is visible when #chat exists and is not collapsed.
-    const chat = doc.querySelector("#chat");
-    return chat !== null && !chat.hasAttribute("collapsed");
+    return adapter.isDockActive?.(doc, dock) ?? false;
   };
 
   /**
@@ -6017,14 +7071,12 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
    * value is what the drag just wrote, so adopting it changes nothing.
    */
   const adoptStoredWidths = (source: SitePrefs): void => {
-    liveWidths.panelPx = source.panelWidth;
-    liveWidths.chatPx = source.chatWidth;
+    for (const dock of DOCK_IDS) liveWidths[dock] = source.dockWidths[dock];
     applyDockWidths();
   };
 
   const setDockWidth = (dock: DockId, px: number): void => {
-    if (dock === "panel") liveWidths.panelPx = px;
-    else liveWidths.chatPx = px;
+    liveWidths[dock] = px;
     applyDockWidths();
   };
 
@@ -6033,7 +7085,10 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
     // One re-measure for one width change, at the end, exactly as the comment
     // block above requires.
     controller.refreshGeometry();
-    const patch: Partial<SitePrefs> = dock === "panel" ? { panelWidth: px } : { chatWidth: px };
+    // The whole record is sent, not just the dock that moved. `setSitePrefs` merges
+    // per field, and `dockWidths` is one field: patching it with a single dock would
+    // drop the other docks' widths on every drag.
+    const patch: Partial<SitePrefs> = { dockWidths: { ...liveWidths, [dock]: px } };
     void setSitePrefs(adapter.siteId, patch).then((result) => {
       if (result.ok) return;
       // The width the reader dragged to is still on screen and still correct for
@@ -6056,16 +7111,19 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
 
   const mountGrips = (): void => {
     if (grips.length > 0 || !dockResizeSupported || !isPro(pro)) return;
-    for (const dock of ["panel", "chat"] as const) {
+    for (const dock of docks) {
       const grip = buildDockGrip(doc, dock, {
         readWidth: () => currentDockWidth(dock),
         readOtherWidth: () => {
-          // Count the other dock only when it is currently taking viewport width.
-          // A stored width from a prior session must not eat into the available
-          // space when that dock is not on screen right now.
-          const other: DockId = dock === "panel" ? "chat" : "panel";
-          if (!isDockVisible(other)) return 0;
-          return currentDockWidth(other);
+          // Every dock but this one, and only while it is actually taking viewport
+          // width. A stored width from a prior session must not eat into the space
+          // available now if the dock that owns it is shut.
+          let takenPx = 0;
+          for (const other of docks) {
+            if (other === dock || !isDockVisible(other)) continue;
+            takenPx += currentDockWidth(other);
+          }
+          return takenPx;
         },
         readFloor: dockWidthFloor,
         onPreview: (px) => setDockWidth(dock, px),
@@ -6142,7 +7200,9 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
       return;
     }
     void (async () => {
-      const result = await captureVideoFrame(video);
+      const result = await captureVideoFrame(video, {
+        burnTimestamp: prefs.captureBurnTimestamp,
+      });
       if (result.outcome === "no-video") {
         say(HELP_COPY.pro.captureNoVideo);
         return;
@@ -6164,43 +7224,118 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
         say(HELP_COPY.pro.captureCopied);
         return;
       }
-      downloadBlob(doc, result.blob, captureFilename(adapter.readCaptureName?.(doc) ?? null, new Date()));
+      const playbackTime =
+        video && Number.isFinite(video.currentTime) && video.currentTime > 0
+          ? formatPlaybackTimestamp(video.currentTime).replace(/:/g, "-")
+          : undefined;
+      const videoTitle =
+        doc.querySelector("h1.ytd-watch-metadata yt-formatted-string, #title h1, h1.title")
+          ?.textContent?.trim() ||
+        doc.title.replace(/ - YouTube$/i, "").trim() ||
+        undefined;
+      const channelName =
+        doc.querySelector(YT.channelName)?.textContent?.trim() ||
+        adapter.readChannel?.(doc)?.label ||
+        undefined;
+
+      downloadBlob(
+        doc,
+        result.blob,
+        captureFilename(
+          adapter.readCaptureName?.(doc) ?? null,
+          new Date(),
+          prefs.captureFilenameTemplate,
+          { videoTitle, channelName, playbackTimestamp: playbackTime },
+        ),
+      );
       say(HELP_COPY.pro.captureSaved);
     })();
   };
 
-  /** The capture button element, tracked so a lock badge can be toggled with Pro. */
-  let captureButton: Element | null = null;
+  const copyLink = (): void => {
+    const video = adapter.findVideo?.(doc) ?? null;
+    void copyLinkAtCurrentTime(doc, video).then((copied) => {
+      if (copied) {
+        const timeStr =
+          video && Number.isFinite(video.currentTime) && video.currentTime > 0
+            ? formatPlaybackTimestamp(video.currentTime)
+            : null;
+        say(timeStr ? `Link copied at ${timeStr}` : "Link copied to clipboard.");
+      } else {
+        say("Could not copy link.");
+      }
+    });
+  };
 
-  /** Class for the lock badge overlay on the capture button. */
+  const toggleTranscript = (): void => {
+    if (!isPro(pro)) {
+      offerPro("other");
+      return;
+    }
+    const panel = doc.querySelector(YT.transcriptPanel);
+    const isExpanded =
+      panel?.getAttribute(YT.transcriptVisibilityAttr) === YT.transcriptExpandedValue;
+
+    if (isExpanded && panel) {
+      const closeBtn = panel.querySelector<HTMLButtonElement>(
+        '#visibility-button, button[aria-label*="Close" i], #close-button button',
+      );
+      if (closeBtn) {
+        closeBtn.click();
+      } else {
+        panel.setAttribute(YT.transcriptVisibilityAttr, "ENGAGEMENT_PANEL_VISIBILITY_HIDDEN");
+      }
+      return;
+    }
+
+    if (panel) {
+      panel.setAttribute(YT.transcriptVisibilityAttr, YT.transcriptExpandedValue);
+    }
+    const showTranscriptBtn = doc.querySelector<HTMLButtonElement>(
+      'ytd-video-description-transcript-section-renderer button, button[aria-label*="Show transcript" i], button[aria-label*="Transcript" i]',
+    );
+    if (showTranscriptBtn) {
+      showTranscriptBtn.click();
+    }
+  };
+
+  /** Tracked button elements for lock badge updates. */
+  let captureButton: Element | null = null;
+  let transcriptButton: Element | null = null;
+
+  /** Class for the lock badge overlay on paid buttons. */
   const CAPTURE_LOCK_CLASS = "wfs-capture-lock";
 
-  /** Add or remove the lock badge on the capture button based on entitlement. */
-  const updateCaptureLockBadge = (): void => {
-    if (!captureButton) return;
-    const existing = captureButton.querySelector(`.${CAPTURE_LOCK_CLASS}`);
-    if (isPro(pro)) {
-      // Entitled: remove the badge if present.
-      if (existing) existing.remove();
-    } else {
-      // Not entitled: add the badge if not already there.
-      if (!existing) {
-        const badge = doc.createElement("span");
-        badge.className = CAPTURE_LOCK_CLASS;
-        badge.textContent = "\uD83D\uDD12";
-        badge.style.cssText = [
-          "position:absolute",
-          "bottom:4px",
-          "right:4px",
-          "font-size:9px",
-          "line-height:1",
-          "pointer-events:none",
-        ].join(";");
-        // The button needs relative positioning for the badge to anchor correctly.
-        (captureButton as HTMLElement).style.position = "relative";
-        captureButton.appendChild(badge);
+  /** Add or remove the lock badge on paid buttons based on entitlement. */
+  const updateProLockBadges = (): void => {
+    const update = (btn: Element | null) => {
+      if (!btn) return;
+      const existing = btn.querySelector(`.${CAPTURE_LOCK_CLASS}`);
+      if (isPro(pro)) {
+        // Entitled: remove the badge if present.
+        if (existing) existing.remove();
+      } else {
+        // Not entitled: add the badge if not already there.
+        if (!existing) {
+          const badge = doc.createElement("span");
+          badge.className = CAPTURE_LOCK_CLASS;
+          badge.textContent = "\uD83D\uDD12";
+          badge.style.cssText = [
+            "position:absolute",
+            "bottom:4px",
+            "right:4px",
+            "font-size:9px",
+            "line-height:1",
+            "pointer-events:none",
+          ].join(";");
+          // The button needs relative positioning for the badge to anchor correctly.
+          (btn as HTMLElement).style.position = "relative";
+          btn.appendChild(badge);
+        }
       }
-    }
+    };
+    update(captureButton);
+    update(transcriptButton);
   };
 
   const injector = new ButtonInjector({
@@ -6208,15 +7343,24 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
     document: doc,
     buttons: [
       {
-        // First in the list, so it lands between the site's own fullscreen button
-        // and ours — see BUTTON_ROLES for why the other two do not move.
         role: "capture",
         label: CAPTURE_BUTTON_LABEL,
         buildIcon: buildCaptureIcon,
         onActivate: captureFrame,
-        // A site the extension cannot capture from never offers the control. Note
-        // this is about the SITE, not about entitlement: a free reader sees the
-        // button and gets the prompt, which is the whole point of it.
+        isAvailable: () => typeof adapter.findVideo === "function",
+      },
+      {
+        role: "copylink",
+        label: COPY_LINK_BUTTON_LABEL,
+        buildIcon: buildCopyLinkIcon,
+        onActivate: copyLink,
+        isAvailable: () => typeof adapter.findVideo === "function",
+      },
+      {
+        role: "transcript",
+        label: TRANSCRIPT_BUTTON_LABEL,
+        buildIcon: buildTranscriptIcon,
+        onActivate: toggleTranscript,
         isAvailable: () => typeof adapter.findVideo === "function",
       },
       {
@@ -6240,15 +7384,21 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
         controller.setPanelButton(button);
         return;
       }
-      // Track the capture button so a lock badge can be added/removed with Pro.
       if (role === "capture") {
         captureButton = button;
-        updateCaptureLockBadge();
+        updateProLockBadges();
         return;
       }
-      controller.setButton(button);
-      // The button appearing is a good proxy for the player having loaded.
-      maybeAutoApply();
+      if (role === "transcript") {
+        transcriptButton = button;
+        updateProLockBadges();
+        return;
+      }
+      if (role === "mode") {
+        controller.setButton(button);
+        maybeAutoApply();
+        return;
+      }
     },
     isModeActive: () => controller.isActive,
   });
@@ -6266,7 +7416,8 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
     pro = next;
     if (isPro(pro)) mountGrips();
     else unmountGrips();
-    updateCaptureLockBadge();
+    updateProLockBadges();
+    updateLetterboxAndGlow();
     // A key accepted in the options tab gets its own window to find the channel:
     // until this moment `channelRuleUndecided` answered "no rule to wait for", so
     // no attempts have been spent and there may be nothing scheduled to spend them.
@@ -6302,6 +7453,9 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
   const disposeVideoChange = adapter.onVideoChange(doc, () => {
     autoApplySuppressed = false;
     autoApplied = false;
+    activeChannelMode = null;
+    adoptStoredWidths(prefs);
+    updateLetterboxAndGlow();
     // A new video is a new question, so the channel window starts again rather
     // than inheriting the attempts the previous one spent.
     resetChannelRuleWatch();
@@ -6327,6 +7481,7 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
     prefs = stored;
     autoApplyEnabled = stored.autoApply;
     adoptStoredWidths(stored);
+    updateLetterboxAndGlow();
     prefResolved = true;
     maybeAutoApply();
   });
@@ -6348,6 +7503,21 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
           // and a press that does nothing at all reads as a broken key.
           captureFrame();
           return { ok: true, active: controller.isActive };
+        case "COPY_LINK": {
+          const video = adapter.findVideo?.(doc) ?? null;
+          void copyLinkAtCurrentTime(doc, video).then((copied) => {
+            if (copied) {
+              const timeStr =
+                video && Number.isFinite(video.currentTime) && video.currentTime > 0
+                  ? formatPlaybackTimestamp(video.currentTime)
+                  : null;
+              say(timeStr ? `Link copied at ${timeStr}` : "Link copied to clipboard.");
+            } else {
+              say("Could not copy link.");
+            }
+          });
+          return { ok: true, active: controller.isActive };
+        }
         case "GET_STATUS":
           // The channel rides along so the popup can offer "always on this channel"
           // without a second round trip. Null on a page that has not rendered the
@@ -6363,6 +7533,11 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
       }
     },
     stop() {
+      doc.removeEventListener("pointermove", onPointerActivity);
+      clearCursorTimer();
+      showCursor();
+      glowSampler.dispose();
+      removeLetterboxCss(doc);
       disposePrefWatch();
       disposeProWatch();
       disposeVideoChange();
@@ -6823,9 +7998,6 @@ export function startServiceWorker(): void {
 /** Where the browser lets the user rebind the keyboard shortcut. */
 const SHORTCUTS_URL = "chrome://extensions/shortcuts";
 
-/** External donation page. */
-const DONATION_URL = "https://ko-fi.com/rohittiger";
-
 /** Hosted privacy policy, linked for trust. */
 const PRIVACY_POLICY_URL = "https://rohittiger.vercel.app/product/windowedfullscreen/privacy";
 
@@ -6864,7 +8036,7 @@ export const REVIEW_URL =
  * whereas a page we own can be repointed the same afternoon. That reasoning is
  * still true and is the cost accepted here: **changing provider, product, or price
  * link now needs a release.** It was traded away because the button exists to sell
- * a $5 impulse purchase, and a landing page in front of the checkout is a step
+ * a $10 impulse purchase, and a landing page in front of the checkout is a step
  * where readers leave. The indirection can be reinstated the moment there is a
  * page worth the hop — it is one string.
  *
@@ -7142,7 +8314,7 @@ export const HELP_COPY = {
     /** The name, used as a heading in the settings and in the prompt when not entitled. */
     name: "Get Pro",
     /** The price, stated once. One purchase, no renewal, no account. */
-    price: "$5 once",
+    price: "$10 once",
 
     /** The prompt's heading when the capture control is what was pressed. */
     captureTitle: "Saving frames is part of Pro",
@@ -7153,9 +8325,9 @@ export const HELP_COPY = {
      * rather than a feature matrix: the reader is standing in front of a video
      * they were watching, not shopping.
      */
-    body: "Save any frame as an image, drag the columns to any width, and switch it on for chosen channels.",
+    body: "Save frames, resize docks, transcript dock, ambient glow, custom colours, and channel profiles.",
     /** The primary action. Names the price so the button holds no surprise. */
-    buy: "Get Pro — $5 once",
+    buy: "Get Pro — $10 once",
     /** For a reader who already bought it on another machine. */
     haveKey: "I have a key",
     /** Closes the prompt and changes nothing. */
@@ -7169,12 +8341,7 @@ export const HELP_COPY = {
      * sold. The in-page prompt gets `body` above — one sentence, because the reader
      * is standing in front of a video. This is the other case: they opened the
      * settings and clicked through to a tab called Pro, so they are shopping, and
-     * the honest thing is to lay the three items out and name the price.
-     *
-     * Each feature is a name and one line. Not a comparison table, and no free
-     * column: nothing that was free has moved, so a table would have one row per
-     * paid feature and a column of ticks saying so, which is a lot of furniture to
-     * say "three things".
+     * the honest thing is to lay the nine items out and name the price.
      */
     pitchLead: "Unlock the full viewing experience. One payment, yours forever.",
     features: [
@@ -7184,11 +8351,35 @@ export const HELP_COPY = {
       },
       {
         name: "Resize columns",
-        detail: "Drag comments and chat to your perfect width.",
+        detail: "Drag comments, chat, and transcript to your perfect width.",
       },
       {
         name: "Auto per channel",
         detail: "Auto-enter windowed mode on your favourite channels.",
+      },
+      {
+        name: "Channel profiles",
+        detail: "Remember mode, panel state, and dock widths per channel.",
+      },
+      {
+        name: "Transcript dock",
+        detail: "Dock the searchable transcript column beside the video.",
+      },
+      {
+        name: "Ambient glow",
+        detail: "Softly illuminates letterbox bars with matching ambient colors.",
+      },
+      {
+        name: "Custom bar colour",
+        detail: "Choose any background colour for the letterbox bars.",
+      },
+      {
+        name: "Filename templates",
+        detail: "Customise how saved frame screenshots are named.",
+      },
+      {
+        name: "Burn timestamp",
+        detail: "Add video playback timestamp directly onto captured frames.",
       },
     ],
     /** Heads the same list once the reader owns it. */
@@ -8181,25 +9372,16 @@ type BooleanPrefField = {
   [K in keyof SitePrefs]: SitePrefs[K] extends boolean ? K : never;
 }[keyof SitePrefs];
 
+type ToggleCategory = "playback" | "appearance" | "capture";
+
 const SITE_TOGGLES: ReadonlyArray<{
   field: BooleanPrefField;
+  category: ToggleCategory;
   /** Marker attribute, so the control is findable without relying on order. */
   marker: string;
   /** Visible text beside the checkbox. */
   text: (siteLabel: string) => string;
-  /**
-   * Accessible name, for a control whose visible text does not stand alone out of
-   * context. Omit it when the visible text already does, and the `<label>` supplies
-   * the name.
-   *
-   * Whatever this returns MUST contain the visible text verbatim. WCAG 2.5.3
-   * (Label in Name) requires the accessible name to include the visible label, so
-   * that someone saying "scrollable mode" to a voice-control tool actually hits
-   * this control. Both entries here previously replaced the visible text with a
-   * paraphrase instead of extending it: "Scrollable mode" announced as "Scrollable
-   * windowed fullscreen on YouTube", which shares no full phrase with what is on
-   * screen.
-   */
+  /** Accessible name override */
   aria?: (siteLabel: string) => string;
   /** Optional explanation rendered beneath. */
   hint?: string;
@@ -8208,39 +9390,68 @@ const SITE_TOGGLES: ReadonlyArray<{
 }> = [
   {
     field: "autoApply",
+    category: "playback",
     marker: "data-wfs-autoapply",
-    // Already names the action and the site, so the visible label is the
-    // accessible name. No `aria` override.
     text: (siteLabel) => `Automatically enter windowed fullscreen on ${siteLabel}`,
   },
   {
     field: "scrollable",
+    category: "playback",
     marker: "data-wfs-scrollable",
     text: () => "Scrollable mode",
-    // Extends the visible "Scrollable mode" rather than replacing it, so the
-    // announced name still opens with the words on screen.
     aria: (siteLabel) => `Scrollable mode — windowed fullscreen on ${siteLabel}`,
-    hint:
-      "The video still fills the screen when you enter, but the page keeps scrolling — " +
-      "scroll down for the description and comments, scroll back up for the video. " +
-      "Leave this off to lock the page to the video alone.",
+  },
+  {
+    field: "cursorAutoHide",
+    category: "playback",
+    marker: "data-wfs-cursor-autohide",
+    text: () => "Hide mouse cursor when idle",
+    aria: (siteLabel) => `Hide mouse cursor when idle — on ${siteLabel}`,
+  },
+  {
+    field: "ambientGlow",
+    category: "appearance",
+    marker: "data-wfs-ambient-glow",
+    text: () => "Ambient Glow",
+    aria: (siteLabel) => `Ambient Glow — on ${siteLabel}`,
+    proGated: true,
   },
   {
     field: "captureToClipboard",
+    category: "capture",
     marker: "data-wfs-capture-clipboard",
     text: () => "Copy saved frames instead of downloading them",
     aria: (siteLabel) => `Copy saved frames instead of downloading them — on ${siteLabel}`,
     proGated: true,
-    // Not gated, and not hidden without a licence. It changes what a Pro feature
-    // does rather than being one, so hiding it would mean a reader who buys Pro has
-    // to come back and find a setting that appeared behind them; and left visible
-    // it costs a free reader one line that does nothing yet, which is honest —
-    // saving frames is named as part of Pro two sections down.
-    hint:
-      "Saving frames is part of Pro. With this on, the frame goes to your clipboard " +
-      "ready to paste. If your browser refuses, it is downloaded instead.",
+  },
+  {
+    field: "captureBurnTimestamp",
+    category: "capture",
+    marker: "data-wfs-capture-burn-timestamp",
+    text: () => "Burn timestamp into saved frames",
+    aria: (siteLabel) => `Burn timestamp into saved frames — on ${siteLabel}`,
+    proGated: true,
   },
 ];
+
+/** Curated solid color presets for custom letterbox styling matching theme. */
+const LETTERBOX_SWATCHES = [
+  { name: "Pink", value: "#ff6b9d", color: "#ff6b9d" },
+  { name: "Purple", value: "#9b5de5", color: "#9b5de5" },
+  { name: "Peach", value: "#ff9f68", color: "#ff9f68" },
+  { name: "Cyan", value: "#00d2d3", color: "#00d2d3" },
+  { name: "Pure Black", value: "#000000", color: "#000000" },
+] as const;
+
+/** Curated gradient / mix themes for ambient letterbox styling. */
+const LETTERBOX_THEMES = [
+  { name: "LAAGGUE", value: "linear-gradient(135deg, #38006b 0%, #1a0033 100%)" },
+  { name: "GRASLET", value: "linear-gradient(135deg, #005f73 0%, #0a9396 100%)" },
+  { name: "TWILIGHT", value: "linear-gradient(135deg, #4361ee 0%, #3a0ca3 100%)" },
+  { name: "EMBER", value: "linear-gradient(135deg, #d00000 0%, #ff9e00 100%)" },
+  { name: "CYBER", value: "linear-gradient(135deg, #f72585 0%, #7209b7 100%)" },
+  { name: "ABYSS", value: "linear-gradient(135deg, #0a192f 0%, #020c1b 100%)" },
+] as const;
 
 /**
  * The Pro panel: what the tier is, whether it is on, and — folded away — the one
@@ -8287,8 +9498,18 @@ export function renderProSection(
 ): () => void {
   const copy = HELP_COPY.pro;
 
-  /** Emoji badges for the three features, matching HELP_COPY.pro.features order. */
-  const FEATURE_ICONS = ["\uD83D\uDDBC\uFE0F", "\u2194\uFE0F", "\uD83C\uDFAF"] as const;
+  /** Emoji badges for the nine features, matching HELP_COPY.pro.features order. */
+  const FEATURE_ICONS = [
+    "\uD83D\uDDBC\uFE0F",
+    "\u2194\uFE0F",
+    "\uD83C\uDFAF",
+    "\u2699\uFE0F",
+    "\uD83D\uDCDD",
+    "\u2728",
+    "\uD83C\uDFA8",
+    "\uD83D\uDCC4",
+    "\u23F1\uFE0F",
+  ] as const;
 
   /** The last record painted, so `Remove` writes from what the reader can see. */
   let current: ProState = { ...DEFAULT_PRO_STATE };
@@ -8852,10 +10073,10 @@ export function renderChannelRules(
   },
 ): () => void {
   let entitled = false;
-  let channels: readonly string[] = [];
+  let channels: readonly ChannelRule[] = [];
 
   /** Write the list whole, then repaint from what was stored. */
-  const store = async (next: readonly string[], saved: string): Promise<void> => {
+  const store = async (next: readonly ChannelRule[], saved: string): Promise<void> => {
     const result = await setSitePrefs(ctx.siteId, { channels: next });
     if (!result.ok) {
       ctx.showError(`Could not save the channel list: ${result.error}.`);
@@ -8870,89 +10091,80 @@ export function renderChannelRules(
     host.replaceChildren();
     if (!entitled) return;
 
-    const heading = doc.createElement("h3");
-    heading.textContent = "Always on these channels";
-    host.appendChild(heading);
+    if (channels.length > 0) {
+      const list = doc.createElement("ul");
+      list.className = "wfs-channel-list";
+      list.setAttribute("data-wfs-channel-list", "");
+      for (const rule of channels) {
+        const id = rule.id;
+        const item = doc.createElement("li");
+        item.className = "wfs-channel-item";
+        item.setAttribute("data-wfs-channel-item", "");
 
-    const hint = doc.createElement("p");
-    hint.setAttribute("data-wfs-channel-hint", "");
-    hint.textContent =
-      "Windowed fullscreen switches on by itself for these channels, even with the " +
-      "setting above off.";
-    host.appendChild(hint);
+        const name = doc.createElement("span");
+        name.className = "wfs-channel-name";
+        name.textContent = id;
+        item.appendChild(name);
 
-    const list = doc.createElement("ul");
-    list.setAttribute("data-wfs-channel-list", "");
-    for (const id of channels) {
-      const item = doc.createElement("li");
-      item.setAttribute("data-wfs-channel-item", "");
-
-      const name = doc.createElement("span");
-      name.textContent = id;
-      item.appendChild(name);
-
-      const remove = doc.createElement("button");
-      remove.type = "button";
-      remove.setAttribute("data-wfs-channel-remove", "");
-      // Names the channel, not just the action: a column of buttons all announcing
-      // "Remove" gives a screen-reader user no way to tell which one they are on.
-      remove.setAttribute("aria-label", `Remove ${id}`);
-      remove.textContent = "Remove";
-      remove.addEventListener("click", () => {
-        void store(
-          channels.filter((entry) => entry !== id),
-          `Removed ${id}.`,
-        );
-      });
-      item.appendChild(remove);
-      list.appendChild(item);
+        const remove = doc.createElement("button");
+        remove.type = "button";
+        remove.className = "wfs-channel-remove-btn";
+        remove.setAttribute("data-wfs-channel-remove", "");
+        remove.setAttribute("aria-label", `Remove ${id}`);
+        remove.textContent = "Remove";
+        remove.addEventListener("click", () => {
+          void store(
+            channels.filter((entry) => entry.id !== id),
+            `Removed ${id}.`,
+          );
+        });
+        item.appendChild(remove);
+        list.appendChild(item);
+      }
+      host.appendChild(list);
     }
-    host.appendChild(list);
 
-    const field = doc.createElement("label");
-    field.setAttribute("data-wfs-channel-field", "");
-    const fieldText = doc.createElement("span");
-    fieldText.textContent = "Channel";
-    field.appendChild(fieldText);
+    const addRow = doc.createElement("div");
+    addRow.className = "wfs-channel-add-row";
+    addRow.setAttribute("data-wfs-channel-field", "");
 
     const input = doc.createElement("input");
     input.type = "text";
+    input.className = "wfs-channel-input";
     input.setAttribute("data-wfs-channel-input", "");
     input.placeholder = "@channel";
     input.maxLength = MAX_CHANNEL_ID_LENGTH;
     input.autocomplete = "off";
     input.spellcheck = false;
-    field.appendChild(input);
-    host.appendChild(field);
+    addRow.appendChild(input);
 
     const add = doc.createElement("button");
     add.type = "button";
+    add.className = "wfs-channel-add-btn";
     add.setAttribute("data-wfs-channel-add", "");
     add.textContent = "Add";
 
     const submit = (): void => {
       const id = input.value.trim();
       if (id === "") return;
-      if (channels.includes(id)) {
+      if (channels.some((entry) => entry.id === id)) {
         ctx.showSaved(`${id} is already on the list.`);
         return;
       }
       if (channels.length >= MAX_CHANNEL_RULES) {
-        // Refused out loud, and nothing trimmed. Dropping the oldest rule to make
-        // room would make a setting the reader deliberately added stop working with
-        // nothing said about it.
         ctx.showError(`The list is full at ${MAX_CHANNEL_RULES} channels. Remove one first.`);
         return;
       }
       input.value = "";
-      void store([...channels, id], `Added ${id}.`);
+      void store([...channels, newChannelRule(id)], `Added ${id}.`);
     };
 
     add.addEventListener("click", submit);
     input.addEventListener("keydown", (event) => {
       if ((event as KeyboardEvent).key === "Enter") submit();
     });
-    host.appendChild(add);
+    addRow.appendChild(add);
+    host.appendChild(addRow);
   }
 
   const load = (): void => {
@@ -9073,14 +10285,31 @@ export function renderSettings(
   error.setAttribute("role", "alert");
   error.setAttribute("aria-live", "assertive");
 
+  let statusTimeout: ReturnType<typeof setTimeout> | null = null;
   const showSaved = (message: string): void => {
+    if (statusTimeout !== null) {
+      clearTimeout(statusTimeout);
+      statusTimeout = null;
+    }
     status.textContent = message;
     error.textContent = "";
+    statusTimeout = setTimeout(() => {
+      status.textContent = "";
+      statusTimeout = null;
+    }, 2200);
   };
   const showError = (message: string): void => {
+    if (statusTimeout !== null) {
+      clearTimeout(statusTimeout);
+      statusTimeout = null;
+    }
     error.textContent = message;
     // A fresh error supersedes a stale confirmation.
     status.textContent = "";
+    statusTimeout = setTimeout(() => {
+      error.textContent = "";
+      statusTimeout = null;
+    }, 3800);
   };
 
   /**
@@ -9320,6 +10549,87 @@ export function renderSettings(
     const section = addSection("data-wfs-site-section", label);
     section.setAttribute("data-site-id", siteId);
 
+    const collageGrid = doc.createElement("div");
+    collageGrid.className = "wfs-collage-grid";
+    collageGrid.setAttribute("data-wfs-collage-grid", "");
+    section.appendChild(collageGrid);
+
+    // Helper to create clean cards within the collage grid
+    const createCard = (
+      cardKey: string,
+      title: string,
+      subtitle: string,
+      badgeText: string,
+      badgeType: "free" | "pro" | "mix",
+    ): HTMLElement => {
+      const card = doc.createElement("div");
+      card.className = "wfs-card";
+      card.setAttribute("data-wfs-card", cardKey);
+
+      const header = doc.createElement("div");
+      header.className = "wfs-card__header";
+
+      const headerText = doc.createElement("div");
+      headerText.className = "wfs-card__header-text";
+
+      const heading = doc.createElement("h3");
+      heading.className = "wfs-card__title";
+      heading.textContent = title;
+      headerText.appendChild(heading);
+
+      if (subtitle) {
+        const desc = doc.createElement("p");
+        desc.className = "wfs-card__subtitle";
+        desc.textContent = subtitle;
+        headerText.appendChild(desc);
+      }
+      header.appendChild(headerText);
+
+      const badge = doc.createElement("span");
+      badge.className = `wfs-card__badge is-${badgeType}`;
+      badge.textContent = badgeText;
+      header.appendChild(badge);
+
+      card.appendChild(header);
+      collageGrid.appendChild(card);
+      return card;
+    };
+
+    const playbackCard = createCard(
+      "playback",
+      "Viewing Modes & Playback",
+      "",
+      "Free",
+      "free",
+    );
+
+    const appearanceCard = createCard(
+      "appearance",
+      "\uD83C\uDFA8 Letterbox Themes",
+      "",
+      "PRO \u26A1",
+      "pro",
+    );
+
+    const captureCard = createCard(
+      "capture",
+      "Media & Frame Capture",
+      "",
+      "Pro \u26A1",
+      "pro",
+    );
+
+    const channelsCard = createCard(
+      "channels",
+      "Auto-Fullscreen Channels",
+      "",
+      "Pro \u26A1",
+      "pro",
+    );
+
+    let ambientGlowCheckboxRef: HTMLInputElement | null = null;
+
+    // Render toggles into their designated cards
     for (const toggle of SITE_TOGGLES) {
       const text = toggle.text(label);
       const stateKey = `${siteId}:${toggle.field}`;
@@ -9328,20 +10638,45 @@ export function renderSettings(
       checkbox.type = "checkbox";
       checkbox.setAttribute(toggle.marker, "");
       checkbox.setAttribute("data-site-id", siteId);
-      // Only when the visible text needs extending. Left off, the wrapping
-      // `<label>` names the control, which is both correct and what WCAG 2.5.3
-      // wants — see the note on `aria` in SITE_TOGGLES.
       const ariaName = toggle.aria?.(label);
       if (ariaName) checkbox.setAttribute("aria-label", ariaName);
+
+      if (toggle.field === "ambientGlow") {
+        ambientGlowCheckboxRef = checkbox;
+      }
 
       checkbox.addEventListener("change", () => {
         void (async () => {
           const next = checkbox.checked;
-          // Only this field is written, so the site's other settings survive.
+          if (toggle.field === "ambientGlow") {
+            if (next) {
+              colorInput.value = "";
+              previewBox.style.background = "#000000";
+              updateActiveSwatch("");
+              const result = await setSitePrefs(siteId, { ambientGlow: true, letterboxColor: "" });
+              if (!result.ok) {
+                checkbox.checked = persisted.get(stateKey) ?? DEFAULT_SITE_PREFS[toggle.field];
+                showError(`Could not save "${text}" for "${label}": not saved (${result.error}).`);
+                return;
+              }
+              persisted.set(stateKey, true);
+              showSaved(`Saved "${text}" for "${label}".`);
+              return;
+            } else {
+              const result = await setSitePrefs(siteId, { ambientGlow: false });
+              if (!result.ok) {
+                checkbox.checked = persisted.get(stateKey) ?? DEFAULT_SITE_PREFS[toggle.field];
+                showError(`Could not save "${text}" for "${label}": not saved (${result.error}).`);
+                return;
+              }
+              persisted.set(stateKey, false);
+              showSaved(`Saved "${text}" for "${label}".`);
+              return;
+            }
+          }
           const patch: Partial<SitePrefs> = { [toggle.field]: next };
           const result = await setSitePrefs(siteId, patch);
           if (!result.ok) {
-            // Nothing was written, so put the control back where it was.
             checkbox.checked = persisted.get(stateKey) ?? DEFAULT_SITE_PREFS[toggle.field];
             showError(`Could not save "${text}" for "${label}": not saved (${result.error}).`);
             return;
@@ -9351,37 +10686,56 @@ export function renderSettings(
         })();
       });
 
-      const wrapper = doc.createElement("label");
-      wrapper.appendChild(checkbox);
-      wrapper.appendChild(doc.createTextNode(` ${text}`));
-      // A lock icon for Pro-gated settings, so the reader knows at a glance.
+      const row = doc.createElement("label");
+      row.className = "wfs-setting-row";
+
+      const info = doc.createElement("div");
+      info.className = "wfs-setting-info";
+
+      const titleSpan = doc.createElement("span");
+      titleSpan.className = "wfs-setting-title";
+      titleSpan.textContent = text;
+      info.appendChild(titleSpan);
+
       if (toggle.proGated) {
         const lock = doc.createElement("span");
         lock.setAttribute("data-wfs-pro-lock", "");
+        lock.className = "wfs-pro-lock";
         lock.textContent = " \uD83D\uDD12";
         lock.title = "Pro feature";
-        wrapper.appendChild(lock);
-        // Register for entitlement-driven disable/mute, badge included.
-        proGatedControls.push({ checkbox, wrapper, lock });
+        titleSpan.appendChild(lock);
+        proGatedControls.push({ checkbox, wrapper: row, lock });
       }
-      section.appendChild(wrapper);
 
       if (toggle.hint) {
         const hint = doc.createElement("p");
-        // Pointed at by the checkbox rather than left as a loose sibling. The
-        // paragraph explains what the setting does, and a screen-reader user who
-        // tabs straight to the control never reaches a sibling paragraph in
-        // reading order, so without the association the explanation was invisible
-        // to exactly the reader most likely to need it.
-        //
-        // The id has to be unique across the page: both surfaces render one
-        // section per site, so it is scoped by site and field.
         const hintId = `wfs-hint-${siteId}-${String(toggle.field)}`;
         hint.id = hintId;
+        hint.className = "wfs-setting-desc";
         hint.textContent = toggle.hint;
         checkbox.setAttribute("aria-describedby", hintId);
-        section.appendChild(hint);
+        info.appendChild(hint);
       }
+
+      const switchWrapper = doc.createElement("div");
+      switchWrapper.className = "wfs-switch";
+      switchWrapper.appendChild(checkbox);
+
+      const slider = doc.createElement("span");
+      slider.className = "wfs-slider";
+      switchWrapper.appendChild(slider);
+
+      row.appendChild(info);
+      row.appendChild(switchWrapper);
+
+      const targetCard =
+        toggle.category === "playback"
+          ? playbackCard
+          : toggle.category === "appearance"
+            ? appearanceCard
+            : captureCard;
+
+      targetCard.appendChild(row);
 
       void getSitePrefs(siteId).then(({ prefs, loadFailed }) => {
         const value = prefs[toggle.field];
@@ -9391,13 +10745,270 @@ export function renderSettings(
       });
     }
 
-    // The per-channel rules, inside the site they belong to rather than in the Pro
-    // section: the rules are per site, and a reader looking for "when does this
-    // switch itself on" is already reading this section to find the switch above.
-    // Its own host, because it repaints from an entitlement change.
+    // --- Letterbox Palette & Themes in appearanceCard ---
+    const letterboxSection = doc.createElement("div");
+    letterboxSection.className = "wfs-letterbox-section";
+    letterboxSection.setAttribute("data-wfs-letterbox-section", "");
+
+    const customHeader = doc.createElement("div");
+    customHeader.className = "wfs-swatch-group-label";
+    customHeader.textContent = "CUSTOM COLORS & GRADIENTS";
+    letterboxSection.appendChild(customHeader);
+
+    // Presets Grid Container
+    const presetsContainer = doc.createElement("div");
+    presetsContainer.className = "wfs-presets-container";
+
+    const allSwatchButtons: Array<{ btn: HTMLButtonElement; val: string }> = [];
+
+    const previewBox = doc.createElement("div");
+    previewBox.className = "wfs-color-preview-box";
+
+    const updateActiveSwatch = (currentVal: string): void => {
+      const norm = currentVal.trim().toLowerCase();
+      previewBox.style.background = currentVal || "#000000";
+      for (const { btn, val } of allSwatchButtons) {
+        const isMatch = val.toLowerCase() === norm;
+        btn.classList.toggle("is-selected", isMatch);
+        btn.setAttribute("aria-pressed", isMatch ? "true" : "false");
+      }
+    };
+
+    // Custom Color Controls Row (Bottom Bar)
+    const customRow = doc.createElement("div");
+    customRow.className = "wfs-color-custom-row";
+
+    const colorInput = doc.createElement("input");
+    colorInput.type = "text";
+    colorInput.className = "wfs-color-hex-input";
+    colorInput.setAttribute("data-wfs-letterbox-input", "");
+    colorInput.placeholder = "linear-gradient(...) or #000000";
+    colorInput.maxLength = 120;
+    colorInput.autocomplete = "off";
+    colorInput.spellcheck = false;
+
+    const resetColorBtn = doc.createElement("button");
+    resetColorBtn.type = "button";
+    resetColorBtn.className = "wfs-color-reset-btn";
+    resetColorBtn.textContent = "RESET TO BLACK";
+
+    const applyChosenColor = (val: string, name?: string): void => {
+      if (ambientGlowCheckboxRef) ambientGlowCheckboxRef.checked = false;
+      persisted.set(`${siteId}:ambientGlow`, false);
+      colorInput.value = val;
+      updateActiveSwatch(val);
+      void (async () => {
+        const result = await setSitePrefs(siteId, {
+          letterboxColor: val,
+          ambientGlow: false,
+        });
+        if (result.ok) {
+          showSaved(name ? `Saved letterbox theme: ${name}.` : "Saved letterbox theme.");
+        } else {
+          showError(`Could not save letterbox theme: ${result.error}.`);
+        }
+      })();
+    };
+
+    // Row 1: 5 solid swatches (Pink, Purple, Peach, Cyan, Black) + LAAGGUE + GRASLET
+    const presetRow1 = doc.createElement("div");
+    presetRow1.className = "wfs-preset-row wfs-preset-row--1";
+
+    for (const swatch of LETTERBOX_SWATCHES) {
+      const btn = doc.createElement("button");
+      btn.type = "button";
+      btn.className = "wfs-color-swatch";
+      btn.title = swatch.name;
+      btn.setAttribute("aria-label", swatch.name);
+      btn.style.backgroundColor = swatch.color;
+      btn.addEventListener("click", () => applyChosenColor(swatch.value, swatch.name));
+      allSwatchButtons.push({ btn, val: swatch.value });
+      presetRow1.appendChild(btn);
+    }
+
+    const row1Themes = LETTERBOX_THEMES.slice(0, 2);
+    for (const theme of row1Themes) {
+      const btn = doc.createElement("button");
+      btn.type = "button";
+      btn.className = "wfs-theme-swatch";
+      btn.title = theme.name;
+      btn.setAttribute("aria-label", theme.name);
+      btn.style.background = theme.value;
+      const span = doc.createElement("span");
+      span.textContent = theme.name;
+      btn.appendChild(span);
+      btn.addEventListener("click", () => applyChosenColor(theme.value, theme.name));
+      allSwatchButtons.push({ btn, val: theme.value });
+      presetRow1.appendChild(btn);
+    }
+    presetsContainer.appendChild(presetRow1);
+
+    // Row 2: TWILIGHT, EMBER, CYBER, ABYSS
+    const presetRow2 = doc.createElement("div");
+    presetRow2.className = "wfs-preset-row wfs-preset-row--2";
+
+    const row2Themes = LETTERBOX_THEMES.slice(2);
+    for (const theme of row2Themes) {
+      const btn = doc.createElement("button");
+      btn.type = "button";
+      btn.className = "wfs-theme-swatch";
+      btn.title = theme.name;
+      btn.setAttribute("aria-label", theme.name);
+      btn.style.background = theme.value;
+      const span = doc.createElement("span");
+      span.textContent = theme.name;
+      btn.appendChild(span);
+      btn.addEventListener("click", () => applyChosenColor(theme.value, theme.name));
+      allSwatchButtons.push({ btn, val: theme.value });
+      presetRow2.appendChild(btn);
+    }
+    presetsContainer.appendChild(presetRow2);
+    letterboxSection.appendChild(presetsContainer);
+
+    colorInput.addEventListener("change", () => {
+      applyChosenColor(colorInput.value.trim());
+    });
+
+    resetColorBtn.title = "Reset letterbox color to default black";
+    resetColorBtn.addEventListener("click", () => {
+      if (ambientGlowCheckboxRef) ambientGlowCheckboxRef.checked = false;
+      persisted.set(`${siteId}:ambientGlow`, false);
+      void (async () => {
+        const result = await setSitePrefs(siteId, {
+          letterboxColor: "",
+          ambientGlow: false,
+        });
+        if (!result.ok) {
+          showError(`Could not reset letterbox color: ${result.error}.`);
+          return;
+        }
+        colorInput.value = "";
+        previewBox.style.background = "#000000";
+        updateActiveSwatch("");
+        showSaved("Reset letterbox color to black.");
+      })();
+    });
+
+    customRow.appendChild(previewBox);
+    customRow.appendChild(colorInput);
+    customRow.appendChild(resetColorBtn);
+    letterboxSection.appendChild(customRow);
+
+    appearanceCard.appendChild(letterboxSection);
+
+    const letterboxLock = doc.createElement("span");
+    letterboxLock.setAttribute("data-wfs-pro-lock", "");
+    letterboxLock.textContent = " \uD83D\uDD12";
+    letterboxLock.title = "Pro feature";
+
+    proGatedControls.push({
+      checkbox: colorInput as unknown as HTMLInputElement,
+      wrapper: letterboxSection as unknown as HTMLLabelElement,
+      lock: letterboxLock,
+    });
+
+    // --- Capture Card: Screenshot Filename Format (Pro) ---
+    const templateGroup = doc.createElement("div");
+    templateGroup.className = "wfs-template-group";
+    templateGroup.setAttribute("data-wfs-template-label", "");
+
+    const templateHeader = doc.createElement("div");
+    templateHeader.className = "wfs-template-header";
+
+    const templateText = doc.createElement("span");
+    templateText.className = "wfs-template-title";
+    templateText.textContent = "Screenshot Filename Format";
+    templateHeader.appendChild(templateText);
+
+    const templateLock = doc.createElement("span");
+    templateLock.setAttribute("data-wfs-pro-lock", "");
+    templateLock.className = "wfs-pro-lock";
+    templateLock.textContent = " \uD83D\uDD12";
+    templateLock.title = "Pro feature";
+    templateHeader.appendChild(templateLock);
+    templateGroup.appendChild(templateHeader);
+
+    const templateInput = doc.createElement("input");
+    templateInput.type = "text";
+    templateInput.className = "wfs-template-input";
+    templateInput.setAttribute("data-wfs-template-input", "");
+    templateInput.placeholder = "{title}-{timestamp}";
+    templateInput.maxLength = 80;
+    templateInput.autocomplete = "off";
+    templateInput.spellcheck = false;
+
+    templateInput.addEventListener("change", () => {
+      void (async () => {
+        const val = templateInput.value.trim();
+        const result = await setSitePrefs(siteId, { captureFilenameTemplate: val });
+        if (!result.ok) {
+          showError(`Could not save filename format: ${result.error}.`);
+          return;
+        }
+        showSaved("Saved filename format.");
+      })();
+    });
+    templateGroup.appendChild(templateInput);
+
+    const tagsRow = doc.createElement("div");
+    tagsRow.className = "wfs-template-tags";
+    const tagList = ["{title}", "{timestamp}", "{channel}"];
+    for (const tag of tagList) {
+      const badge = doc.createElement("button");
+      badge.type = "button";
+      badge.className = "wfs-tag-badge";
+      badge.textContent = tag;
+      badge.title = `Add ${tag} to filename format`;
+      badge.addEventListener("click", () => {
+        templateInput.value = (templateInput.value ? `${templateInput.value}-` : "") + tag;
+        templateInput.dispatchEvent(new Event("change"));
+      });
+      tagsRow.appendChild(badge);
+    }
+    templateGroup.appendChild(tagsRow);
+    captureCard.appendChild(templateGroup);
+
+    proGatedControls.push({
+      checkbox: templateInput as unknown as HTMLInputElement,
+      wrapper: templateGroup as unknown as HTMLLabelElement,
+      lock: templateLock,
+    });
+
+    void getSitePrefs(siteId).then(({ prefs }) => {
+      if (prefs.ambientGlow) {
+        if (ambientGlowCheckboxRef) ambientGlowCheckboxRef.checked = true;
+        colorInput.value = "";
+        previewBox.style.background = "#000000";
+        updateActiveSwatch("");
+      } else {
+        if (ambientGlowCheckboxRef) ambientGlowCheckboxRef.checked = false;
+        colorInput.value = prefs.letterboxColor;
+        previewBox.style.background = prefs.letterboxColor || "#000000";
+        updateActiveSwatch(prefs.letterboxColor);
+      }
+      templateInput.value = prefs.captureFilenameTemplate;
+    });
+
+    disposers.push(
+      watchSitePrefs(siteId, (prefs) => {
+        if (prefs.ambientGlow) {
+          if (ambientGlowCheckboxRef) ambientGlowCheckboxRef.checked = true;
+          colorInput.value = "";
+          previewBox.style.background = "#000000";
+          updateActiveSwatch("");
+        } else {
+          if (ambientGlowCheckboxRef) ambientGlowCheckboxRef.checked = false;
+          colorInput.value = prefs.letterboxColor;
+          previewBox.style.background = prefs.letterboxColor || "#000000";
+          updateActiveSwatch(prefs.letterboxColor);
+        }
+      }),
+    );
+
+    // --- Channel Rules in channelsCard ---
     const channelHost = doc.createElement("div");
     channelHost.setAttribute("data-wfs-channel-section", "");
-    section.appendChild(channelHost);
+    channelsCard.appendChild(channelHost);
     try {
       disposers.push(
         renderChannelRules(doc, channelHost, { siteId, siteLabel: label, showError, showSaved }),
@@ -9434,21 +11045,6 @@ export function renderSettings(
       showError("Pro row failed to render.");
     }
   }
-
-  // --- Donation -----------------------------------------------------------
-  // Last in the panel, under the settings and under Pro. It used to sit above the
-  // per-site controls, which put a request for money in front of the preferences
-  // the reader opened the page to change.
-  const donationSection = addSection("data-wfs-donation-section", "Buy me a coffee");
-  const donationLink = doc.createElement("a");
-  donationLink.href = DONATION_URL;
-  donationLink.rel = "noopener noreferrer";
-  donationLink.textContent = "\u2615 Enjoying this? Help keep it alive";
-  donationLink.addEventListener("click", (event) => {
-    event.preventDefault();
-    void openInTab(DONATION_URL, "donation page");
-  });
-  donationSection.appendChild(donationLink);
 
   root.appendChild(status);
   root.appendChild(error);
@@ -9552,32 +11148,62 @@ function derivePopupStatus(url: string | undefined, response: ExtResponse | unde
  * those need different advice.
  */
 function toggleLabel(status: PopupStatus): string {
-  if (!status.siteSupported) return "Not available on this site";
+  if (!status.siteSupported) return "Open YouTube";
   if (!status.pageSupported) return "Open a video to use it";
   if (!status.reachable) return "Reload the page to control it here";
   return status.modeActive ? "Exit windowed fullscreen" : "Enter windowed fullscreen";
 }
 
 /** Render the popup's status block and toggle, replacing any prior content. */
-function renderPopup(doc: Document, root: HTMLElement, status: PopupStatus, onToggle: () => void): void {
+function renderPopup(
+  doc: Document,
+  root: HTMLElement,
+  status: PopupStatus,
+  onToggle: () => void,
+): void {
   root.replaceChildren();
 
-  // Header row: title on the left, "Get Pro" button on the right.
+  // Header row: brand info on the left, "Get Pro" button on the right.
   const headerRow = doc.createElement("div");
   headerRow.className = "wfs-popup__header";
+
+  const brandGroup = doc.createElement("div");
+  brandGroup.className = "wfs-popup__brand";
+
+  const titleRow = doc.createElement("div");
+  titleRow.className = "wfs-popup__title-row";
 
   const heading = doc.createElement("h1");
   heading.className = "wfs-popup__title";
   heading.textContent = "Windowed Fullscreen";
-  headerRow.appendChild(heading);
+  titleRow.appendChild(heading);
 
-  // The Pro button is placed by startPopup after renderPopup returns, because
-  // it needs the view-switching callback that only startPopup owns. A slot is
-  // left for it.
+  const verBadge = doc.createElement("span");
+  verBadge.className = "wfs-popup__version";
+  verBadge.textContent = "v2.0";
+  titleRow.appendChild(verBadge);
+
+  brandGroup.appendChild(titleRow);
+
+  const statusSub = doc.createElement("div");
+  statusSub.className =
+    "wfs-popup__status-sub " + (status.siteSupported ? "is-connected" : "is-standby");
+  statusSub.innerHTML = status.siteSupported
+    ? `<span class="wfs-pulse-dot"></span> YouTube Connected`
+    : `<span class="wfs-idle-dot"></span> Standby`;
+  brandGroup.appendChild(statusSub);
+
+  headerRow.appendChild(brandGroup);
+
+  const headerActions = doc.createElement("div");
+  headerActions.className = "wfs-popup__header-actions";
+
+  // The Pro button slot
   const proSlot = doc.createElement("span");
   proSlot.setAttribute("data-wfs-pro-header-slot", "");
-  headerRow.appendChild(proSlot);
+  headerActions.appendChild(proSlot);
 
+  headerRow.appendChild(headerActions);
   root.appendChild(headerRow);
 
   const list = doc.createElement("dl");
@@ -9590,14 +11216,24 @@ function renderPopup(doc: Document, root: HTMLElement, status: PopupStatus, onTo
   list.append(term, detail);
   root.appendChild(list);
 
+  // Master Hero Toggle Button (Open YouTube if unsupported site, or toggle windowed fullscreen)
   const toggle = doc.createElement("button");
   toggle.type = "button";
   toggle.className = "wfs-popup__toggle";
   toggle.textContent = toggleLabel(status);
-  const enabled = status.pageSupported && status.reachable;
-  toggle.disabled = !enabled;
-  toggle.classList.toggle(BUTTON_ACTIVE_CLASS, status.modeActive);
-  if (enabled) toggle.addEventListener("click", onToggle);
+
+  if (!status.siteSupported) {
+    toggle.disabled = false;
+    toggle.classList.add("is-open-youtube");
+    toggle.addEventListener("click", () => {
+      chrome.tabs.create({ url: "https://www.youtube.com" });
+    });
+  } else {
+    const enabled = status.pageSupported && status.reachable;
+    toggle.disabled = !enabled;
+    toggle.classList.toggle(BUTTON_ACTIVE_CLASS, status.modeActive);
+    if (enabled) toggle.addEventListener("click", onToggle);
+  }
   root.appendChild(toggle);
 }
 
@@ -9671,22 +11307,38 @@ export function startPopup(): void {
   };
 
   const paint = (): void => {
-    renderPopup(document, root, derivePopupStatus(url, response), () => {
-      void (async () => {
-        const toggled = await askContentScript(tabId, { type: "TOGGLE" });
-        if (toggled) {
-          response = toggled;
-          paint();
-        }
-      })();
-    });
+    renderPopup(
+      document,
+      root,
+      derivePopupStatus(url, response),
+      () => {
+        void (async () => {
+          const toggled = await askContentScript(tabId, { type: "TOGGLE" });
+          if (toggled) {
+            response = toggled;
+            paint();
+          }
+        })();
+      },
+    );
+
     // Fill the "Get Pro" header slot that renderPopup leaves empty.
     const slot = root.querySelector("[data-wfs-pro-header-slot]");
     if (slot) {
+      slot.replaceChildren();
       const proBtn = document.createElement("button");
       proBtn.type = "button";
       proBtn.setAttribute("data-wfs-pro-header-btn", "");
-      proBtn.textContent = "\u26A1 Pro";
+      void getProState().then(({ state }) => {
+        const entitled = isPro(state);
+        proBtn.classList.toggle("is-pro", entitled);
+        proBtn.textContent = entitled ? "Pro" : "\u26A1 Get Pro";
+      });
+      watchProState((state) => {
+        const entitled = isPro(state);
+        proBtn.classList.toggle("is-pro", entitled);
+        proBtn.textContent = entitled ? "Pro" : "\u26A1 Get Pro";
+      });
       proBtn.addEventListener("click", () => showProView());
       slot.appendChild(proBtn);
     }
@@ -10400,18 +12052,32 @@ export function refusalMessage(
 /**
  * The provider's API host.
  *
- * To work against test-mode keys, change `live` to `test` here — and change it
- * back. One string rather than a mode flag with a lookup table, deliberately: a
- * table would put both hosts in every bundle, and then the packaging guard that
- * refuses to ship a test build would have nothing to look for.
+ * **Test mode is the correct state during development, and this is where it is
+ * spelled.** Working against live keys means buying the product to test it, which
+ * is a real charge with real processor fees and a refund to file afterwards. So the
+ * flip to `live` is a release step, not a development one: it belongs in the same
+ * commit that bumps the version and cuts the zip, together with
+ * {@link PRO_PURCHASE_URL}.
  *
- * **A test host must never ship.** `scripts/package.mjs` refuses to write a release
- * zip while it appears in the bundle, and `tests/entitlement.test.ts` fails the
- * suite outright, so the guard does not depend on anyone remembering this comment.
- * It is the one mistake in the licence path with no symptom on the developer's own
- * machine: a test build validates test keys perfectly and rejects every real one,
- * so the first person to find out is a reader who paid and was told their key was
- * not accepted.
+ * One string rather than a mode flag with a lookup table, deliberately: a table
+ * would put both hosts in every bundle, and then the packaging guard that refuses
+ * to ship a test build would have nothing to look for.
+ *
+ * **A test host must never ship.** `scripts/package.mjs` searches the emitted
+ * bundle and refuses to write a release zip while either test host appears in it.
+ * That guard reads what the build actually produced rather than what the source
+ * says, so it cannot be stale and it cannot be talked out of — it is the only thing
+ * standing between a test-mode build and the store, and it is enough on its own.
+ * This is the one mistake in the licence path with no symptom on the developer's own
+ * machine: a test build validates test keys perfectly and rejects every real one, so
+ * the first person to find out is a reader who paid and was told their key was not
+ * accepted.
+ *
+ * What the unit suite checks is the *other* half of that: that this constant and the
+ * checkout link are in the **same** mode. A mixed pair is the quietest form of the
+ * bug and nothing else catches it — a live API host with a test checkout link sends
+ * the reader to a page that takes a test card, charges nothing, and issues a key the
+ * live host will never recognise, with no error anywhere.
  */
 const DODO_API_BASE = "https://test.dodopayments.com";
 

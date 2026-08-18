@@ -64,7 +64,7 @@ async function main() {
   // Not a comment asking someone to remember, because this is the one mistake in
   // the licence path with no visible symptom on the developer's own machine: a
   // test-mode build validates test-mode keys perfectly, and rejects every real one
-  // — so the first person to find out is a reader who paid $5 and was told their
+  // — so the first person to find out is a reader who paid $10 and was told their
   // key was not accepted.
   //
   // The bundle is searched rather than the source, so it holds whatever the build

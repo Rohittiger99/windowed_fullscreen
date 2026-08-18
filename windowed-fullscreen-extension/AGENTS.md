@@ -162,14 +162,15 @@ never asked to leave. Do not reintroduce it. `tests/prompts.test.ts` pins the
 lookup and `verify:live` pins all four exit triggers plus the resume.
 
 **7 (Pro). Nothing that was free may move behind the paywall.** The comment panel,
-both modes, the live-chat dock, the suggestions rail, and per-site auto-apply had
-all been public for two versions before the tier existed. That is what makes the
-tier free of grandfathering code, and there must never be any: the moment one
-existing feature is gated, every install needs a "was this person here before?"
-answer, and getting that wrong takes a feature off somebody who has been using it
-for a year. Exactly three things are gated — dock resizing, per-channel rules, and
-frame capture. Live chat docking is free on purpose, and keyboard shortcuts are not
-a paid category.
+both modes, the live-chat dock, the suggestions rail, per-site auto-apply, and copy link
+at timestamp have all been free since initial releases. That is what makes the tier free
+of grandfathering code, and there must never be any. The Pro tier ($10 one-time lifetime)
+unlocks 9 dedicated features: (1) dock resizing for comment/chat/transcript docks,
+(2) interactive transcript docking column, (3) channel profiles & layout automation,
+(4) original resolution frame capture, (5) custom filename templates, (6) burned
+timestamp watermarks, (7) real-time ambient glow letterbox illumination, (8) custom
+letterbox swatches & gradient themes, and (9) idle cursor auto-hide. Live chat docking
+is free on purpose, and keyboard shortcuts are not a paid category.
 
 **8 (Pro). Entitlement fails open on re-validation and never on activation.** The
 line is **4xx versus everything else**. A 4xx means the provider read the request
@@ -281,19 +282,40 @@ protected is worse than being vague.
 **Never ship a build pointed at the provider's test host.** It is the one mistake in
 the licence path with no symptom on your own machine: a test build validates
 test-mode keys perfectly and rejects every real one, so the first person to find out
-is somebody who paid $5 and was told their key was not accepted. `DODO_API_BASE` in
+is somebody who paid $10 and was told their key was not accepted. `DODO_API_BASE` in
 §14 is a single string for exactly this reason — a mode flag with a lookup table
 would put both hosts in every bundle and leave the guards nothing to look for.
-`tests/entitlement.test.ts` asserts the live host and `scripts/package.mjs` refuses
-to write a release zip containing the test one.
 
 **There are two of those constants, and they flip together.** `PRO_PURCHASE_URL` is
 the provider's checkout link, so a test-mode build has a second way to go wrong and
 it is the quieter one: a test checkout accepts a test card, charges nothing, and
-issues a key no live validate call will recognise. Nothing errors anywhere. Both the
-test suite and the package guard check each constant separately, because
-`test.checkout.dodopayments.com` does not contain `test.dodopayments.com` — a single
-substring check for the API host lets the checkout link straight through.
+issues a key no live validate call will recognise. Nothing errors anywhere.
+`test.checkout.dodopayments.com` does not contain `test.dodopayments.com`, so a single
+substring check for the API host lets the checkout link straight through — the package
+guard looks for both needles separately.
+
+**Test mode is the correct state while developing, and the flip to live is a release
+step.** You cannot work against live licence keys without buying the product to test
+it, which is a real charge and a refund to file. So the two constants stay in test mode
+for the whole development phase, and move to live in the same commit that bumps the
+version and cuts the zip.
+
+That is why the guards are split the way they are, and the split was not always right:
+
+- `scripts/package.mjs` is what stops a test build reaching the store. It searches the
+  emitted bundle, so it reads what the build actually produced rather than what the
+  source says, and the zip it writes is the only thing that can be uploaded. This guard
+  is absolute and must never be made conditional.
+- `tests/entitlement.test.ts` asserts only that the two constants are in the **same**
+  mode. It used to assert both were live, which made `npm test` red on every commit that
+  was not a release. A permanently red check is one nobody reads, and it covered nothing
+  the package guard does not. What it covers now is the one thing no other guard sees:
+  a mixed pair.
+- The `Package` step in `.github/workflows/ci.yml` runs on `v*` tags only, for the same
+  reason. Per commit it would have made CI red for the entire development phase.
+
+The release sequence, therefore: flip both constants → bump `manifest.json` and
+`package.json` → `npm run check` → `npm run verify:live` → `npm run package` → tag `v<version>`.
 
 **The activation response contains the buyer's name and email.** `activateLicence`
 reads `id` out of it and drops the rest, at the point of receipt, so there is no
@@ -694,6 +716,18 @@ handle it in `normalizeSitePrefs` — check the new field independently so value
 written by an older version still read as valid instead of being discarded as
 corrupt. `setSitePrefs` takes a patch and merges, because the settings UI has one
 control per field and a whole-object write would reset the others.
+
+**Add or edit dock columns.** The extension manages three dock columns: `panel`
+(comments & metadata), `chat` (live chat), and `transcript` (interactive transcripts).
+Their widths are stored in `SitePrefs.dockWidths` and clamped dynamically against
+the window width.
+
+**Letterbox styling and Ambient Glow.** Letterbox bars use `--wfs-letterbox-color`.
+Custom solid swatches (`LETTERBOX_SWATCHES`) and gradient mix themes
+(`LETTERBOX_THEMES`) set this property directly. When `ambientGlow` is enabled, a
+lightweight 16x16 canvas sampler runs every 250ms extracting dominant colors from
+the video and smoothly overrides `--wfs-letterbox-color`. Selecting any custom
+palette or theme explicitly disables `ambientGlow` to avoid visual conflicts.
 
 **Change the active-mode layout.** It is all in `YT_ACTIVE_MODE_CSS` (§3),
 scoped under `html.wfs-windowed`. `!important` is required throughout: YouTube

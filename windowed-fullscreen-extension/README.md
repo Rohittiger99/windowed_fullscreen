@@ -18,31 +18,37 @@ A Manifest V3 Chromium extension that adds a **windowed-fullscreen** mode next t
 
 ### Free and Pro
 
-Everything above is free and always has been. The comment panel, both modes, the live-chat dock, the suggestions rail, and per-site auto-apply all shipped in 1.2.0 — the first public release — so **nothing that was free has moved behind the paywall**, and nothing ever will. Every Pro feature is new work added in 1.4.0.
+Everything in the free tier is permanently free. The comment panel, both modes, the live-chat dock, the suggestions rail, and per-site auto-apply all shipped in the initial releases — so **nothing that was free has moved behind the paywall**, and nothing ever will.
 
-| | Free | Pro — $5 once |
+| | Free | Pro — $10 once (Lifetime) |
 | --- | --- | --- |
 | Windowed mode, both cover and scrollable | Yes | — |
 | Docking the comment panel | Yes | — |
-| Docking live chat | Yes | — |
+| Docking live chat on livestreams | Yes | — |
 | Suggestions rail in scrollable mode | Yes | — |
 | Masthead reveal, `Escape` layering, fullscreen handoff | Yes | — |
 | Auto-apply for a whole site | Yes | — |
-| Shortcuts for the windowed and comment buttons | Yes | — |
-| **Dragging either dock as wide as you like** | No | Yes |
-| **Auto-apply for chosen channels** | No | Yes |
-| **Saving the current frame as an image** | No | Yes |
-| A shortcut for the capture button | No | Yes, because capture itself is |
+| Copy video link with current timestamp | Yes | — |
+| Shortcuts for windowed and comment buttons | Yes | — |
+| **Dragging any docked column as wide as you like** | No | Yes |
+| **Docking interactive video transcripts** | No | Yes |
+| **Auto-apply profiles for chosen channels** | No | Yes |
+| **Saving the current frame at source video resolution** | No | Yes |
+| **Custom filename templates ({title}, {date}, etc.)** | No | Yes |
+| **Burn timestamp overlay watermark** | No | Yes |
+| **Ambient glow letterbox illumination** | No | Yes |
+| **Custom letterbox palettes & gradient themes** | No | Yes |
+| **Idle cursor auto-hide** | No | Yes |
 
 One purchase, no renewal, no account, and no login: a licence key is the only credential. Enter it on the options page's **Pro** tab, under **Already bought Pro?** — it is a once-per-device job, so it is folded away rather than sitting open under the price. It covers a limited number of devices — **Remove key** hands that device's slot back so you can use it somewhere else. The key is re-checked roughly once a fortnight, and **the check fails open**: if it cannot complete, nothing changes and you keep every feature.
 
-**Dragging a dock** puts a grip on the dock's inboard edge. Drag it, or focus it and use the arrow keys (`Shift` for a bigger step). Comments and live chat both resize, and either can take almost the whole window — down to a sliver of video, if that is how you want to read chat. The same grip drags it back. Widening is all it does: the drag stops at the default width on the way in, so it never makes a dock narrower than it is without a licence. With both columns docked they share one budget, so the two together always leave both grips reachable.
+**Dragging a dock** puts a grip on each dock's inboard edge. Drag it, or focus it and use the arrow keys (`Shift` for a bigger step). Comments, live chat, and transcripts all resize independently.
 
-**Saving a frame** writes a PNG at the video's own resolution, named for the video and the time. There is a per-site setting to copy it to the clipboard instead. Protected videos — rentals and films — cannot be captured: the browser hands back a blank frame, and the extension says so rather than saving a black rectangle.
+**Saving a frame** writes an uncompressed PNG at the video's own resolution, named with your custom filename template or copied to clipboard.
 
-**Per-channel rules** switch the mode on for chosen channels even with the site-wide setting off. Open the popup on a video and the channel is filled in for you; the rules themselves live under the site's own section on the options page's **Settings** tab, capped at 50 per site. They are matched on the channel's handle, not its display name, so a rename does not quietly break a rule.
+**Per-channel rules** switch the mode on for chosen channels and can configure layout/docks automatically.
 
-The capture button is shown to everyone. Pressing it without a licence opens a prompt that names the price; it does not silently do nothing. The drag grips and the rules list are simply absent without one.
+**Ambient glow & letterbox themes** softly illuminate letterbox bars with real-time video color sampling, or select from 8 cinema swatches and 6 gradient mix themes.
 
 ### The two modes
 
