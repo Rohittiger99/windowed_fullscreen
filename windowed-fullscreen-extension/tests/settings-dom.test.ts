@@ -53,16 +53,24 @@ function fakeChrome(initial: Store = {}): Store {
  * Render the settings tree into a fresh stub document and hand back the document,
  * the tree, and the backing store, so a test can ask what was persisted.
  *
- * The `options` surface, because it is the one with the tab strip: the regions
- * these tests are about sit outside both panels, and building the shape that has
- * panels is the only way to prove they stayed outside them.
+ * There is one shape to build. `renderSettings` used to take a `surface` of
+ * `"options"` or `"popup"`, and this helper asked for `"options"` because that was
+ * the shape with the tab strip — the regions these tests are about sit outside both
+ * panels, and only the shape with panels could prove they stayed outside them. The
+ * options page is gone and so is the flag, which makes that concern moot: the four
+ * regions are unconditional direct children of the root now, and the assertions
+ * below pin exactly that.
+ *
+ * `showProView` is a no-op. These tests are about where the message regions sit, not
+ * about the Pro view, and a real callback would only give the stub document a
+ * navigation to model.
  */
 function render(): { doc: StubDocument; root: StubElement; store: Store } {
   const store = fakeChrome();
   const doc = createStubDocument();
   const root = doc.createElement("div");
   renderSettings(doc as unknown as Document, root as unknown as Element, {
-    surface: "options",
+    showProView: () => {},
   });
   return { doc, root, store };
 }

@@ -13,7 +13,7 @@ node marketing/render.mjs 04     # re-render only sources matching "04"
 | File | Dashboard slot | Notes |
 | --- | --- | --- |
 | `01-hero-1280x800.png` | Screenshot 1 | Lead with this one. |
-| `02-button-1280x800.png` | Screenshot 2 | The two injected buttons, magnified. |
+| `02-button-1280x800.png` | Screenshot 2 | The injected player-bar controls, magnified. There are five as of 2.0.0 — check `BUTTON_ROLES` in the source, not the last render. |
 | `03-panel-1280x800.png` | Screenshot 3 | The docked side panel. |
 | `04-modes-1280x800.png` | Screenshot 4 | Cover vs scrollable, plus the masthead reveal. |
 | `05-controls-1280x800.png` | Screenshot 5 | Popup, shortcut, privacy. |
@@ -310,13 +310,18 @@ pixels, which is what makes the crops checkable rather than guessed.
 | `side-panel.png` | Cover mode with the panel docked: `#below` beside the player, the control bar clear of it, the windowed button carrying its blue active underline. | `03` |
 | `scrollable.png` | Scrollable mode, scrolled down past the player to the title, description and comments. | `04` |
 | `masthead.png` | The masthead revealed by cursor proximity — search bar, hamburger, notifications. | `04` |
-| `popup.png` | The toolbar popup (391x740): status card, toggle, shortcut link, donation link, and both per-site checkboxes. Cut off mid-sentence in the trailing hint, so `05` crops above it. | `05` |
+| `popup.png` | The toolbar popup (391x740): status card, toggle, shortcut link, donation link, and the per-site checkboxes. Cut off mid-sentence in the trailing hint, so `05` crops above it. | `05` |
 | `normal.png` | An untouched watch page — default player, related-videos rail. | none |
 
 `normal.png` is the odd one out: it is the "before" state, kept because it is the
 clearest way to show how much of the window YouTube's default layout leaves
 empty, but it does not currently earn one of the five slots. Every other feature
 in the release needs one more than a before/after does.
+
+**These captures are pre-2.0.0 and the set needs reshooting.** The raw files predate the
+transcript dock, the copy-link and transcript controls, the drag grips, the letterbox
+styling, and the popup's Pro view. `popup.png` in particular shows a popup with neither the
+Pro row nor the four settings cards. See the outstanding list in `../LISTING.md`.
 
 ### Recapturing
 

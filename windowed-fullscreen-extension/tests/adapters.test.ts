@@ -182,48 +182,16 @@ function stubChapterBar(): {
   return { doc, player, chapterText, elsewhere };
 }
 
-test("the chapter control is recognised from a click on the text inside it", () => {
+test("chapters no longer exit windowed mode because they dock in sidebar", () => {
   const adapter = resolveAdapter("https://www.youtube.com/watch?v=abc")!;
-  const { doc, chapterText, elsewhere } = stubChapterBar();
+  const { doc } = stubChapterBar();
 
   const controls = adapter.findPageDependentControls?.(doc.doc) ?? [];
-  assert.ok(controls.length > 0, "no page-dependent controls resolved");
-
-  // The hit test §9 performs, against the node a real event would carry.
-  assert.ok(
-    controls.some((el) => el.contains(chapterText as unknown as Node)),
-    "a click on the chapter name was not attributed to the chapter control",
-  );
-
-  // And it must not claim unrelated controls, or an ordinary play/pause press
-  // would drop the reader out of windowed mode.
-  assert.ok(
-    !controls.some((el) => el.contains(elsewhere as unknown as Node)),
-    "an unrelated player-bar control was treated as page-dependent",
-  );
-});
-
-test("every page-dependent control lives inside the player", () => {
-  // The invariant recorded on `YT.pageDependentControls`. An entry outside the
-  // player subtree would match clicks the mode has nothing to do with — the whole
-  // page, in the worst case — and exit windowed mode for no reason.
-  const adapter = resolveAdapter("https://www.youtube.com/watch?v=abc")!;
-  const { doc, player } = stubChapterBar();
-
-  const controls = adapter.findPageDependentControls?.(doc.doc) ?? [];
-  const playerAsElement = player as unknown as Element;
-  for (const control of controls) {
-    assert.notEqual(control, playerAsElement, "the player itself is not a control");
-    assert.ok(
-      player.contains(control as unknown as StubElement),
-      "a page-dependent control is not a descendant of the player",
-    );
-  }
+  assert.deepEqual(controls, [], "chapters should not be marked as page-dependent controls");
 });
 
 test("a page with no chapters resolves no page-dependent controls", () => {
-  // An unchaptered video has no chapter container at all. Resolving nothing is the
-  // correct answer, and it must not throw — this runs on every click.
+  // Resolving nothing is the correct answer, and it must not throw — this runs on every click.
   const adapter = resolveAdapter("https://www.youtube.com/watch?v=abc")!;
   const doc = createStubDocument();
   const player = doc.createElement("div");

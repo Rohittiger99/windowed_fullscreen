@@ -23,7 +23,6 @@ import {
   normalizeChannelRules,
   normalizeDockWidth,
   normalizeSitePrefs,
-  importSettings,
   copyLinkAtCurrentTime,
   extractTranscriptText,
   copyTranscriptWithTimestamps,
@@ -397,14 +396,6 @@ test("normalizeSitePrefs coerces 2.0.0 preferences safely", () => {
   assert.equal(normalized.captureFilenameTemplate, "");
   assert.equal(normalized.captureBurnTimestamp, false);
   assert.equal(normalized.cursorAutoHide, true);
-});
-
-test("importSettings validates json format", async () => {
-  const badJson = await importSettings("youtube", "{ invalid json }");
-  assert.equal(badJson.ok, false);
-
-  const nonPrefJson = await importSettings("youtube", JSON.stringify({ other: "data" }));
-  assert.equal(nonPrefJson.ok, false);
 });
 
 test("copyLinkAtCurrentTime handles missing video gracefully", async () => {

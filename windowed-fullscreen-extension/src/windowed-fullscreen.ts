@@ -8,9 +8,12 @@
  *
  *   content script    -> startContentScript()
  *   service worker    -> startServiceWorker()
- *   options page      -> startOptionsPage()
  *   toolbar popup     -> startPopup()
  *   welcome page      -> startWelcomePage()
+ *
+ * Four surfaces, not five. There was an options page until 2.0.0; `manifest.json`
+ * now points `options_ui` at `popup/index.html`, so both the toolbar button and the
+ * browser's own Options item land on the popup.
  *
  * There are no top-level side effects, which is what makes that tree-shaking
  * safe: the popup bundle contains no content-script code, and vice versa.
@@ -29,7 +32,7 @@
  * These are load-bearing. Each one is here because breaking it produced a real
  * bug; `AGENTS.md` records the symptom alongside each.
  *
- *  1. No top-level side effects. The five `start*` entry points listed above are
+ *  1. No top-level side effects. The four `start*` entry points listed above are
  *     the only way anything runs, which is what makes per-surface tree-shaking
  *     safe.
  *  2. Site selectors and site CSS live only in §3. Nothing in §5–§12 may name a
@@ -62,7 +65,7 @@
  *   §8  Button injector
  *   §9  Content script
  *   §10 Service worker
- *   §11 Settings UI (shared by options page and popup)
+ *   §11 Settings UI (the popup's preferences tree)
  *   §12 Popup
  *   §13 Welcome page (post-install)
  *   §14 Entitlement (Pro tier)
@@ -486,21 +489,20 @@ export interface ChannelRef {
   readonly label: string;
 }
 
-/**
- * A request from the page to the service worker.
- *
- * Separate from {@link ExtMessage}, which travels the other way, and deliberately
- * an enumerated intent rather than a URL: a content script asking the worker to
- * open an arbitrary address would make the worker a redirector for whatever could
- * reach it. The worker owns both destinations.
- *
- * `licence` is the settings page opened on its Pro panel, which is where the key
- * field lives. It used to be `options`, meaning the settings page with no
- * destination inside it; that stopped being enough once activation moved behind a
- * panel, because a reader who pressed `I have a key` would have landed on the
- * settings panel with no key field in sight.
- */
-export type WorkerMessage = { type: "OPEN_PAGE"; page: "pro" | "licence" };
+// There is no page-to-worker message type, and the worker has no `onMessage`
+// listener. Messages travel one way only: a surface sends an {@link ExtMessage} to
+// a tab's content script, and the content script answers.
+//
+// There used to be an `OPEN_PAGE` request the other way. The in-page Pro prompt's
+// `Already bought Pro?` button asked the worker to open the settings page on its
+// licence field, because a content script cannot open an extension URL itself.
+// The prompt now takes the key inline instead — see `showProPrompt` in §13, which
+// carries its own field, its own `activateLicence` call and its own refusal
+// messages — so there was nothing left to ask for. Removing the listener also
+// removed the worker's ability to open a tab on behalf of a page, which is worth
+// keeping removed: an enumerated intent was safe, but the next person to add a
+// destination to it is one refactor away from a worker that opens whatever a page
+// hands it.
 
 /** Messages exchanged between the surfaces. */
 export type ExtMessage =
@@ -641,11 +643,10 @@ const DIAGNOSTIC = {
   /** The captured frame came back blank, which is what protected playback
    * produces. Nothing is saved rather than saving a black rectangle. */
   captureBlank: "capture-blank",
-  /** The worker could not open the purchase or settings page the in-page prompt
-   * asked for. Its own code rather than borrowing `toggleUnreachable`: the reader
-   * pressed a button and got nothing, and a shared code makes that indis-
-   * tinguishable from a shortcut that missed the page. */
-  proPageOpenFailed: "pro-page-open-failed",
+  /** A transcript press reserved the dock column and the site never opened the
+   * panel, so the column was taken back. Bounded like every other contest with the
+   * site: the alternative is an empty column left on screen for the session. */
+  transcriptOpenAbandoned: "transcript-open-abandoned",
 } as const;
 
 type DiagnosticCode = (typeof DIAGNOSTIC)[keyof typeof DIAGNOSTIC];
@@ -707,18 +708,11 @@ const YT = {
    *
    * Hiding `#secondary` is not negotiable — it holds the related-videos rail,
    * which steals the width the player wants — so the fix is the other direction:
-   * §9 stands the mode down before YouTube handles the click, and the panel opens
-   * on the ordinary page exactly as it would have. See `onPointerCapture`.
-   *
-   * Both the container and the button inside it are listed so a YouTube markup
-   * change that moves the click target between them still matches. Matching is by
-   * `contains`, so listing an ancestor covers its descendants.
-   *
-   * Every entry MUST live inside the player subtree. An entry outside it would
-   * match on clicks the mode has nothing to do with and drop the reader out of
-   * windowed mode for no reason.
+   * Player-bar controls that need windowed mode out of the way entirely.
+   * Chapters and transcripts are now docked directly in the sidebar dock,
+   * so they no longer exit windowed mode.
    */
-  pageDependentControls: [".ytp-chapter-container", ".ytp-chapter-title"],
+  pageDependentControls: [],
   /**
    * The below-video block the side panel docks: title, channel row with
    * subscribe and likes, description, and comments all live inside `#below`.
@@ -780,8 +774,31 @@ const YT = {
    * the dock would appear the moment the page has a transcript button, before
    * anyone pressed it.
    */
+  /*
+   * Five branches, not eleven. There were six exact `[target-id="…"]` values in front
+   * of these, and every one of them was already matched by a substring branch that is
+   * still here:
+   *
+   *   engagement-panel-searchable-transcript             -> *="transcript"
+   *   engagement-panel-transcript                        -> *="transcript"
+   *   PAmodern_transcript_view                           -> *="transcript"
+   *   engagement-panel-structured-description            -> *="structured-description"
+   *   engagement-panel-macro-markers-description-chapters-> *="macro-markers"
+   *   engagement-panel-macro-markers-auto-chapters       -> *="macro-markers"
+   *
+   * So removing them cannot change what matches. It is worth doing because this string
+   * is interpolated into roughly forty rules of `YT_ACTIVE_MODE_CSS`, several of them
+   * inside a `:has()`, and a substring attribute match is one of the few selector
+   * forms Chrome cannot answer from an index. Do not "restore" the explicit values for
+   * documentation: a redundant branch here is paid on every style recalculation. If a
+   * NEW panel id is needed, check first whether an existing substring already covers
+   * it, and add a substring rather than an exact value if it does not.
+   */
   transcriptPanel:
-    'ytd-engagement-panel-section-list-renderer:is([target-id="engagement-panel-searchable-transcript"], [target-id="engagement-panel-macro-markers-description-chapters"], [target-id="engagement-panel-macro-markers-auto-chapters"], [target-id="PAmodern_transcript_view"], [target-id="engagement-panel-transcript"], [target-id*="transcript"], [target-id*="macro-markers"], [target-id*="chapters"], :has(ytd-transcript-search-panel-renderer, ytd-transcript-renderer, ytd-macro-markers-list-renderer, ytd-macro-markers-panel-renderer))',
+    'ytd-engagement-panel-section-list-renderer:is([target-id*="transcript"], [target-id*="structured-description"], [target-id*="macro-markers"], [target-id*="chapters"], [is-sync-scroll-panel])',
+  /** Matches any open/expanded transcript or structured description engagement panel. */
+  transcriptActivePanel:
+    'ytd-engagement-panel-section-list-renderer:is([target-id*="transcript"], [target-id*="structured-description"], [target-id*="macro-markers"], [target-id*="chapters"], [is-sync-scroll-panel])[visibility="ENGAGEMENT_PANEL_VISIBILITY_EXPANDED"]',
   /** The attribute YouTube sets when the panel is expanded/visible. */
   transcriptVisibilityAttr: "visibility",
   /** The value that means the panel is open. */
@@ -790,6 +807,33 @@ const YT = {
 
 /** Hosts treated as YouTube. */
 const YT_HOSTS = new Set(["www.youtube.com", "youtube.com", "m.youtube.com"]);
+
+/**
+ * "The transcript column is claimed": either the site has the panel expanded, or a
+ * press is in flight and the column has been reserved ahead of it.
+ *
+ * Every transcript rule that is about the COLUMN — the width token, the narrowing of
+ * `#primary`, un-hiding the host — is written against this rather than against the
+ * expanded panel alone. That is what makes the dock arrive in the same frame as the
+ * press instead of one or more frames later. See `TRANSCRIPT_PENDING_CLASS` (§6) for
+ * why the panel needed this and live chat did not.
+ *
+ * Rules that are about the PANEL ITSELF deliberately still key off
+ * {@link YT.transcriptActivePanel}: while a press is in flight there is no expanded
+ * panel to style, and forcing `display` onto every engagement panel that merely
+ * exists would reveal the ones the site is keeping hidden.
+ *
+ * Specificity is unchanged by the `:is()`. `:is()` takes the highest specificity of
+ * its arguments, and `:has(…[visibility="…"])` already outweighs a bare class, so
+ * every rule written against this still loses to the fullscreen stand-down rules and
+ * still beats the `clamp()` defaults — the balance `getDockWidthCss` depends on.
+ *
+ * The class name is written out here rather than interpolated from
+ * {@link TRANSCRIPT_PENDING_CLASS}, which is declared in §6, below this. A `const`
+ * is not hoisted, so reading it from a template literal evaluated at module load
+ * would throw. §3 already spells `wfs-windowed` and `wfs-scrollable` the same way.
+ */
+const YT_TRANSCRIPT_DOCKED = `html.wfs-windowed:is(.wfs-transcript-pending, :has(${YT.transcriptActivePanel}))`;
 
 /* The three numbers in `clamp(320px, 26vw, 440px)`, the default width of BOTH docks
    in the stylesheet below. Named here because `getDefaultDockWidth` has to work the
@@ -854,11 +898,13 @@ const YT_DOCKS: Partial<
   },
   transcript: {
     widthVar: "--wfs-transcript-width",
-    widthSelector:
-      `html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"])`,
+    // The reserved column has to be the reader's chosen width from the first frame.
+    // Written against the expanded panel alone, a stored width only landed once the
+    // site had finished opening, so the column visibly jumped from the `clamp()`
+    // default to the chosen number.
+    widthSelector: YT_TRANSCRIPT_DOCKED,
     element: YT.transcriptPanel,
-    activeQuery:
-      `${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]`,
+    activeQuery: YT.transcriptActivePanel,
   },
 };
 
@@ -905,6 +951,9 @@ const YT_ACTIVE_MODE_CSS = `
    host is lifted to --wfs-z-overlay at the end of this stylesheet.
    ------------------------------------------------------------------------- */
 html.wfs-windowed {
+  scroll-behavior: auto !important;
+  overscroll-behavior: none !important;
+
   /* Light theme (YouTube's default when <html> carries no \`dark\`). */
   --wfs-surface: #ffffff;
   --wfs-edge: rgba(0, 0, 0, 0.14);
@@ -966,6 +1015,13 @@ html[dark].wfs-windowed {
 }
 
 /* --- Cover mode: the player is pinned to the viewport, above all chrome. --- */
+html.wfs-windowed:not(.wfs-scrollable),
+html.wfs-windowed:not(.wfs-scrollable) body {
+  overflow: hidden !important;
+  height: 100vh !important;
+  max-height: 100vh !important;
+}
+
 html.wfs-windowed:not(.wfs-scrollable) #movie_player,
 html.wfs-windowed:not(.wfs-scrollable) .html5-video-player {
   position: fixed !important;
@@ -994,6 +1050,8 @@ html.wfs-windowed .html5-video-container {
 
 html.wfs-windowed video.html5-main-video,
 html.wfs-windowed video.video-stream {
+  position: relative !important;
+  z-index: 1 !important;
   width: 100% !important;
   height: 100% !important;
   left: 0 !important;
@@ -1230,6 +1288,8 @@ html.wfs-windowed #masthead-container #masthead {
    risks it showing through. Scrollable mode keeps all of it — that is the
    entire feature. The side panel is the third case: it puts this same content
    beside the video, so when it is open cover mode must stop hiding it. */
+html.wfs-windowed:not(.wfs-scrollable):not(.wfs-side-panel) ytd-watch-flexy #below,
+html.wfs-windowed:not(.wfs-scrollable):not(.wfs-side-panel) #below,
 html.wfs-windowed:not(.wfs-scrollable):not(.wfs-side-panel) ytd-watch-metadata,
 html.wfs-windowed:not(.wfs-scrollable):not(.wfs-side-panel) #above-the-fold,
 html.wfs-windowed:not(.wfs-scrollable):not(.wfs-side-panel) #comments {
@@ -2048,40 +2108,43 @@ html.wfs-windowed:is(:fullscreen, :has(:fullscreen)) .wfs-dock-grip {
 /* -------------------------------------------------------------------------
    Transcript dock.
 
-   YouTube’s transcript is an engagement panel that lives inside #secondary.
-   The mode hides #secondary, so the panel is invisible today. Docking it
-   follows the same approach as live chat: un-hide #secondary as a bare host
-   while the transcript panel is visible, and fix the panel into its own
-   column.
+   YouTube’s transcript is an engagement panel that lives inside #secondary or #panels.
+   The mode un-hides these host containers while the transcript panel is open,
+   and fixes the panel into its own dedicated side column.
 
    The transcript is the INBOARD dock — it sits closest to the video, with
    chat outboard and the comment panel in between. Its right offset is the
    sum of the two outboard docks: var(--wfs-chat-width) + var(--wfs-panel-width).
 
-   Like chat, the whole section is keyed off the site’s own state (the
-   \`visibility\` attribute YouTube puts on the engagement panel element), so
-   there is no class of ours, no JS, and nothing for exit() to restore.
-   On a video with no transcript the element is absent, nothing matches, and
-   this section costs nothing.
-   ------------------------------------------------------------------------- */
-html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) {
-  /* The same width as the other docks, so swapping between them does not
-     change the video’s width.
+   UNLIKE THE OTHER TWO DOCKS, this one is claimed before the site has agreed to it.
+   Chat and the comment panel are already mounted and merely hidden, so one attribute
+   flip both reveals the content and matches the dock rules. The transcript has to be
+   REQUESTED, and the site mounts it in a host that — in scrollable mode — is in flow
+   below the player. Keyed on the expanded panel alone, the reader saw three stages:
+   the page scrolled to the mounting panel, the panel painted under the video, then it
+   jumped into the column.
 
-     --wfs-docked-width is computed automatically by the root calc() sum,
-     so setting this one variable is all that is needed. */
+   So every COLUMN-level rule below is written against ${"YT_TRANSCRIPT_DOCKED"}, which
+   is "expanded, or a press is in flight". The rules about the PANEL ITSELF still key
+   off the expanded panel, because while a press is in flight there is no expanded
+   panel and forcing display onto every engagement panel that merely exists would
+   reveal the ones the site is keeping hidden. See TRANSCRIPT_PENDING_CLASS in §6.
+   ------------------------------------------------------------------------- */
+${YT_TRANSCRIPT_DOCKED} {
   --wfs-transcript-width: clamp(320px, 26vw, 440px);
 }
 
-/* Browser fullscreen: same treatment as chat and the comment panel. */
-html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]):is(:fullscreen, :has(:fullscreen)) {
+/* Browser fullscreen: same treatment as chat and the comment panel. A press still
+   in flight is abandoned here too, so the site never measures a player holding a
+   column for a panel that is about to belong to its own fullscreen UI. */
+${YT_TRANSCRIPT_DOCKED}:is(:fullscreen, :has(:fullscreen)) {
   --wfs-transcript-width: 0px;
 }
 
 /* Cover mode: the player is already fixed, so the right inset clears all docks.
    --wfs-docked-width already includes the transcript’s width via the root sum. */
-html.wfs-windowed:not(.wfs-scrollable):has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) #movie_player,
-html.wfs-windowed:not(.wfs-scrollable):has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) .html5-video-player {
+${YT_TRANSCRIPT_DOCKED}:not(.wfs-scrollable) #movie_player,
+${YT_TRANSCRIPT_DOCKED}:not(.wfs-scrollable) .html5-video-player {
   left: 0 !important;
   right: var(--wfs-docked-width) !important;
   width: auto !important;
@@ -2090,7 +2153,7 @@ html.wfs-windowed:not(.wfs-scrollable):has(${YT.transcriptPanel}[${YT.transcript
 
 /* Scrollable mode: same pattern as chat — narrow #primary by the total docked
    width so the player, metadata, and comments all share the same edge. */
-html.wfs-windowed.wfs-scrollable:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ytd-watch-flexy #columns {
+${YT_TRANSCRIPT_DOCKED}.wfs-scrollable ytd-watch-flexy #columns {
   display: block !important;
   width: 100% !important;
   min-width: 0 !important;
@@ -2099,7 +2162,7 @@ html.wfs-windowed.wfs-scrollable:has(${YT.transcriptPanel}[${YT.transcriptVisibi
   margin: 0 !important;
 }
 
-html.wfs-windowed.wfs-scrollable:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ytd-watch-flexy #primary {
+${YT_TRANSCRIPT_DOCKED}.wfs-scrollable ytd-watch-flexy #primary {
   display: block !important;
   width: auto !important;
   min-width: 0 !important;
@@ -2109,8 +2172,8 @@ html.wfs-windowed.wfs-scrollable:has(${YT.transcriptPanel}[${YT.transcriptVisibi
   overflow: visible !important;
 }
 
-html.wfs-windowed.wfs-scrollable:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ytd-watch-flexy #primary-inner,
-html.wfs-windowed.wfs-scrollable:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ytd-watch-flexy #player {
+${YT_TRANSCRIPT_DOCKED}.wfs-scrollable ytd-watch-flexy #primary-inner,
+${YT_TRANSCRIPT_DOCKED}.wfs-scrollable ytd-watch-flexy #player {
   display: block !important;
   width: 100% !important;
   min-width: 0 !important;
@@ -2120,28 +2183,34 @@ html.wfs-windowed.wfs-scrollable:has(${YT.transcriptPanel}[${YT.transcriptVisibi
 }
 
 /* Same reason as chat: the player must fill #primary’s narrowed box. */
-html.wfs-windowed.wfs-scrollable:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) #movie_player,
-html.wfs-windowed.wfs-scrollable:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) .html5-video-player {
+${YT_TRANSCRIPT_DOCKED}.wfs-scrollable #movie_player,
+${YT_TRANSCRIPT_DOCKED}.wfs-scrollable .html5-video-player {
   width: 100% !important;
   max-width: 100% !important;
 }
 
-/* The comment panel moves inboard when the transcript is also docked.
-   The panel’s right offset is the sum of all docks outboard of it. Chat is
-   outboard of the panel, and the transcript is inboard, so the panel’s right
-   offset does not change — it is still just chat’s width. The rule that sets
-   --wfs-panel-right already handles that.
+/* Clear all ancestor containing blocks that would trap position: fixed */
+${YT_TRANSCRIPT_DOCKED} #secondary,
+${YT_TRANSCRIPT_DOCKED} #secondary-inner,
+${YT_TRANSCRIPT_DOCKED} #panels,
+${YT_TRANSCRIPT_DOCKED} #panels-inner,
+${YT_TRANSCRIPT_DOCKED} ytd-watch-flexy #panels,
+${YT_TRANSCRIPT_DOCKED} #primary,
+${YT_TRANSCRIPT_DOCKED} #primary-inner,
+${YT_TRANSCRIPT_DOCKED} #below {
+  contain: none !important;
+  transform: none !important;
+  filter: none !important;
+  perspective: none !important;
+  will-change: auto !important;
+}
 
-   The transcript’s own right offset is the sum of all docks outboard of it,
-   which is chat + panel. */
-
-/* #secondary must be visible for the transcript panel to render, same as chat.
-   This duplicates the chat un-hiding on purpose: the two conditions are
-   independent (transcript can be open without chat, and vice versa), so each
-   needs its own rule. The cascade keeps the more specific selectors from
-   fighting because the property values are identical. */
-html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) #secondary,
-html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) #secondary-inner {
+/* Un-hide ALL possible parent host containers (#secondary, #panels, etc.) */
+${YT_TRANSCRIPT_DOCKED} #secondary,
+${YT_TRANSCRIPT_DOCKED} #secondary-inner,
+${YT_TRANSCRIPT_DOCKED} #panels,
+${YT_TRANSCRIPT_DOCKED} #panels-inner,
+${YT_TRANSCRIPT_DOCKED} ytd-watch-flexy #panels {
   display: block !important;
   visibility: visible !important;
   position: static !important;
@@ -2156,15 +2225,67 @@ html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT
   overflow: visible !important;
 }
 
-/* Hide the suggestions rail while the transcript is docked — same as chat. */
-html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) #related,
-html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ytd-watch-next-secondary-results-renderer {
+/* The panel host, taken out of flow for the few frames of a press in flight.
+
+   This is the rule that removes the reader-visible staging, and it works by denying
+   the site somewhere to put the panel IN FLOW rather than by moving the panel after
+   the fact. In \`scrollable\` mode #panels sits in the single-column flow under the
+   player, so a panel mounting there is painted below the video and — worse — is a
+   real scroll target, which is why pressing transcript used to scroll the page. Held
+   at the dock's own box from the moment of the press, the panel mounts off-flow,
+   there is nothing beneath the player to scroll to, and the column does not move
+   when the site finally sets its attribute.
+
+   Only while pending. Once the panel is expanded it carries the fixed box itself
+   (below), and the class comes off in a microtask after that attribute lands — so
+   the panel is already fixed before #panels goes back to \`static\` and nothing
+   visible moves. Deliberately NOT extended to the expanded state as well: that
+   would be a second element holding the same box for the whole session, for no gain.
+
+   \`position: fixed\` here does not trap the panel's own \`position: fixed\`. Only
+   transform, filter, contain and will-change create a containing block for a fixed
+   descendant, and the rule above clears all four. For the same reason \`overflow\`
+   here cannot clip the panel once it is fixed to the viewport.
+
+   #panels IS WRITTEN TWICE ON PURPOSE, and removing the repeat silently disables this
+   whole rule. The un-hide block directly above sets \`position: static\` on #panels and
+   both rules are \`!important\`, so specificity decides and nothing else does. That block
+   selects through \`:is(.wfs-transcript-pending, :has(…[visibility="…"]))\`, whose
+   \`:has()\` argument alone carries a tag and two attribute selectors — it scores
+   (1 id, 3 classes, 2 elements), and its \`ytd-watch-flexy #panels\` branch scores
+   (1, 3, 3). Written once, this rule scores (1, 2, 1) and LOSES, so #panels would stay
+   in flow and the staged open would come straight back. A second #panels takes the id
+   count to 2, and ids are compared before anything else, so it wins over both branches.
+   Preferred over splitting \`position\` out of the block above, which would mean a second
+   copy of that five-selector list. \`tests/transcript-dock.test.ts\` computes both
+   specificities and fails if this stops out-ranking them. */
+html.wfs-windowed.wfs-transcript-pending #panels#panels {
+  position: fixed !important;
+  top: 0 !important;
+  right: calc(var(--wfs-chat-width) + var(--wfs-panel-width)) !important;
+  bottom: 0 !important;
+  left: auto !important;
+  width: var(--wfs-transcript-width) !important;
+  max-width: var(--wfs-transcript-width) !important;
+  height: 100vh !important;
+  max-height: 100vh !important;
+  overflow: hidden !important;
+  z-index: var(--wfs-z-panel) !important;
+  background: var(--wfs-surface) !important;
+  box-shadow: -1px 0 0 0 var(--wfs-edge) !important;
+}
+
+/* Hide the suggestions rail and all other secondary children while the transcript is docked — same as chat. */
+${YT_TRANSCRIPT_DOCKED} #related,
+${YT_TRANSCRIPT_DOCKED} #secondary-inner > :not(#panels),
+${YT_TRANSCRIPT_DOCKED} #secondary > :not(#secondary-inner),
+${YT_TRANSCRIPT_DOCKED} ytd-watch-next-secondary-results-renderer {
   display: none !important;
 }
 
 /* The dock itself. Fixed to the right edge, offset by the sum of the outboard
    docks (chat + panel). */
-html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"] {
+html.wfs-windowed:has(${YT.transcriptActivePanel}) ${YT.transcriptActivePanel} {
   display: flex !important;
   flex-direction: column !important;
   box-sizing: border-box !important;
@@ -2177,26 +2298,27 @@ html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT
   min-width: 0 !important;
   max-width: var(--wfs-transcript-width) !important;
   height: 100vh !important;
-  min-height: 0 !important;
+  min-height: 100vh !important;
   max-height: 100vh !important;
   margin: 0 !important;
   padding: 0 !important;
   border: 0 !important;
   border-radius: 0 !important;
   overflow: hidden !important;
+  contain: none !important;
+  transform: none !important;
+  filter: none !important;
+  perspective: none !important;
+  will-change: auto !important;
   z-index: var(--wfs-z-panel) !important;
   background: var(--wfs-surface) !important;
   box-shadow: -1px 0 0 0 var(--wfs-edge) !important;
 }
 
 /* Ensure the panel header stays pinned at the top and its close button remains clickable. */
-html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"] #header,
-html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"] ytd-engagement-panel-title-header-renderer #header {
+html.wfs-windowed:has(${YT.transcriptActivePanel}) ${YT.transcriptPanel} #header,
+html.wfs-windowed:has(${YT.transcriptActivePanel}) ${YT.transcriptPanel} ytd-engagement-panel-title-header-renderer {
   flex: none !important;
-  display: flex !important;
-  flex-direction: row !important;
-  align-items: center !important;
-  justify-content: space-between !important;
   position: relative !important;
   width: 100% !important;
   min-width: 0 !important;
@@ -2205,18 +2327,40 @@ html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT
   box-sizing: border-box !important;
 }
 
-html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"] ytd-engagement-panel-title-header-renderer {
+html.wfs-windowed:has(${YT.transcriptActivePanel}) ${YT.transcriptPanel} #header,
+html.wfs-windowed:has(${YT.transcriptActivePanel}) ${YT.transcriptPanel} ytd-engagement-panel-title-header-renderer #header {
+  display: flex !important;
+  flex-direction: row !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+}
+
+/* Tabs container (Timeline / Transcript tabs) */
+html.wfs-windowed:has(${YT.transcriptActivePanel}) ${YT.transcriptPanel} tp-yt-paper-tabs,
+html.wfs-windowed:has(${YT.transcriptActivePanel}) ${YT.transcriptPanel} #tabs-container,
+html.wfs-windowed:has(${YT.transcriptActivePanel}) ${YT.transcriptPanel} yt-tab-group-shape,
+html.wfs-windowed:has(${YT.transcriptActivePanel}) ${YT.transcriptPanel} ytd-transcript-search-box-renderer,
+html.wfs-windowed:has(${YT.transcriptActivePanel}) ${YT.transcriptPanel} yt-search-input-view-model {
   flex: none !important;
-  display: block !important;
   position: relative !important;
   width: 100% !important;
-  min-width: 0 !important;
-  max-width: none !important;
   z-index: 2 !important;
 }
 
-/* The transcript panel’s inner content container — scrollable body filling remainder. */
-html.wfs-windowed:has(${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]) ${YT.transcriptPanel}[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"] #content {
+/* The transcript panel's inner content container — scrollable body filling remainder. */
+html.wfs-windowed:has(${YT.transcriptActivePanel}) ${YT.transcriptPanel} #content,
+html.wfs-windowed:has(${YT.transcriptActivePanel}) ${YT.transcriptPanel} #content-section,
+html.wfs-windowed:has(${YT.transcriptActivePanel}) ${YT.transcriptPanel} ytd-structured-description-content-renderer,
+html.wfs-windowed:has(${YT.transcriptActivePanel}) ${YT.transcriptPanel} ytd-transcript-search-panel-renderer,
+html.wfs-windowed:has(${YT.transcriptActivePanel}) ${YT.transcriptPanel} ytd-section-list-renderer,
+html.wfs-windowed:has(${YT.transcriptActivePanel}) ${YT.transcriptPanel} yt-section-list-renderer,
+html.wfs-windowed:has(${YT.transcriptActivePanel}) ${YT.transcriptPanel} ytd-item-section-renderer,
+html.wfs-windowed:has(${YT.transcriptActivePanel}) ${YT.transcriptPanel} yt-item-section-renderer,
+html.wfs-windowed:has(${YT.transcriptActivePanel}) ${YT.transcriptPanel} ytd-macro-markers-list-renderer,
+html.wfs-windowed:has(${YT.transcriptActivePanel}) ${YT.transcriptPanel} ytd-transcript-renderer,
+html.wfs-windowed:has(${YT.transcriptActivePanel}) ${YT.transcriptPanel} ytd-transcript-segment-list-renderer,
+html.wfs-windowed:has(${YT.transcriptActivePanel}) ${YT.transcriptPanel} transcript-segment-list-view-model,
+html.wfs-windowed:has(${YT.transcriptActivePanel}) ${YT.transcriptPanel} #segments-container {
   flex: 1 1 auto !important;
   display: block !important;
   position: relative !important;
@@ -2650,19 +2794,34 @@ const youtubeAdapter: SiteAdapter = {
       return { chat, docked: chat !== null && !chat.hasAttribute(YT.chatCollapsedAttr) };
     };
 
-    /** Transcript's dock state: which panel, and whether it is expanded. */
+    /**
+     * Transcript's dock state: which panel is expanded, if any.
+     *
+     * One query, and a tag-plus-attribute one at that, because this runs on every
+     * mutation the filter lets through and that is a great many. It used to fall
+     * through to `doc.querySelector(YT.transcriptPanel)` whenever nothing was
+     * expanded, which is nearly always — an eleven-branch `:is()` with three
+     * substring attribute matches, walked across the whole document, on every
+     * `collapsed` flip the site makes on a comment or description expander.
+     *
+     * That second query was also wrong, not merely slow. Reaching it proved no panel
+     * carried the expanded value, so the `expanded` it computed was always `false` and
+     * the only thing it contributed was the panel's IDENTITY. Feeding that into the
+     * dedupe meant an engagement panel being created or replaced while the transcript
+     * was SHUT counted as a dock change — and a dock change costs
+     * `refreshGeometry()`, which dispatches a synthetic `resize` at each of
+     * `REFLOW_NUDGE_DELAYS_MS`. Five whole-page relayouts, to report that a dock which
+     * was not on screen had been replaced by another one that also was not.
+     *
+     * Reporting `null` while nothing is expanded keeps every transition that can move
+     * the layout — shut to open, open to shut, and one expanded panel swapped for
+     * another — and drops only the ones that cannot.
+     */
     const readTranscriptState = (): { panel: Element | null; expanded: boolean } => {
       const expandedPanel = doc.querySelector(
         `ytd-engagement-panel-section-list-renderer[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]`,
       );
-      if (expandedPanel) {
-        return { panel: expandedPanel, expanded: true };
-      }
-      const panel = doc.querySelector(YT.transcriptPanel);
-      return {
-        panel,
-        expanded: panel?.getAttribute(YT.transcriptVisibilityAttr) === YT.transcriptExpandedValue,
-      };
+      return expandedPanel ? { panel: expandedPanel, expanded: true } : { panel: null, expanded: false };
     };
 
     let lastChat = readChatState();
@@ -3016,37 +3175,25 @@ export async function setSitePrefs(
   }
 }
 
-/**
- * Export a site's preferences as a JSON file download.
- */
-export async function exportSettings(siteId: string, doc: Document): Promise<void> {
-  const { prefs } = await getSitePrefs(siteId);
-  const json = JSON.stringify(prefs, null, 2);
-  const blob = new Blob([json], { type: "application/json" });
-  downloadBlob(doc, blob, `windowed-fullscreen-${siteId}-settings.json`);
-}
-
-/**
- * Import a site's preferences from raw JSON text, validating with normalizeSitePrefs.
- */
-export async function importSettings(
-  siteId: string,
-  jsonText: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  try {
-    const parsed = JSON.parse(jsonText);
-    const normalized = normalizeSitePrefs(parsed);
-    if (!normalized) return { ok: false, error: "Invalid settings format" };
-    return await setSitePrefs(siteId, normalized);
-  } catch (err) {
-    return { ok: false, error: describeError(err) };
-  }
-}
+// There is deliberately no settings export/import.
+//
+// A JSON backup of the preference record was built for 2.0.0 and taken out again
+// before release. Two reasons, and the second is the one that settles it. There are
+// ten fields, every one of them a checkbox or a width that takes seconds to set by
+// hand, so a backup saves nobody meaningful work. And an import is an untrusted
+// record arriving from a file picker: `normalizeSitePrefs` would be the only thing
+// between a hand-edited JSON file and stored state, which makes a coercion bug a
+// data-integrity bug rather than a display one. Neither cost buys anything a reader
+// asked for.
+//
+// If it ever comes back, it is not the answer to "why is there no
+// `chrome.storage.sync`" — that answer is that settings are not worth sending
+// through a browser account, and it stands on its own.
 
 /**
  * Call `onChange` whenever a site's preferences are written from another surface
- * (the popup or the options page), so a live page can follow along instead of
- * waiting for a reload. Returns a disposer.
+ * (the popup), so a live page can follow along instead of waiting for a reload.
+ * Returns a disposer.
  */
 function watchSitePrefs(siteId: string, onChange: (prefs: SitePrefs) => void): () => void {
   if (typeof chrome === "undefined" || !chrome.storage?.onChanged) return () => {};
@@ -3299,9 +3446,13 @@ export async function setRatingState(
 }
 
 /**
- * Call `onChange` whenever the rating record is written from another surface, so
- * the popup and the options page stay in step without a reload. Returns a
- * disposer, matching `watchSitePrefs`.
+ * Call `onChange` whenever the rating record is written from another surface, so a
+ * second view of it stays in step without a reload. Returns a disposer, matching
+ * `watchSitePrefs`.
+ *
+ * Still earns its keep with one settings surface: the popup's preferences tree and
+ * its Pro view are separate trees over the same record, and the rating footer is
+ * repainted from here rather than from whoever happened to write.
  */
 export function watchRatingState(onChange: (state: RatingState) => void): () => void {
   if (typeof chrome === "undefined" || !chrome.storage?.onChanged) return () => {};
@@ -3485,6 +3636,38 @@ const REVEAL_HIDE_ZONE_PX = 120;
 const PANEL_CLASS = "wfs-side-panel";
 
 /**
+ * Added to `<html>` for the few frames between pressing the transcript control and
+ * the site actually expanding the panel.
+ *
+ * It exists because the transcript is REQUESTED rather than merely revealed, which
+ * is the one thing that makes it unlike live chat. Chat is already mounted and only
+ * `collapsed`, so the attribute that shows it and the attribute the dock keys off
+ * are the same mutation and the dock arrives in the same frame. The transcript has
+ * to be asked for, and the site mounts it in its own host — which in `scrollable`
+ * mode is IN FLOW BELOW THE PLAYER, because that mode deliberately leaves the
+ * suggestions rail visible. So the reader saw three stages: the page scrolled to
+ * the newly mounted panel, the panel painted under the video, and only then did
+ * `:has([visibility="…EXPANDED"])` start matching and move it into the column.
+ *
+ * This class is set SYNCHRONOUSLY, before the site is asked, so the column is
+ * already reserved and the panel host is already out of flow when the panel mounts.
+ * A panel that never enters flow cannot be scrolled to and cannot be painted under
+ * the player, which removes all three stages rather than hiding them.
+ *
+ * Bounded, like every other contest with the site: `TRANSCRIPT_PENDING_TIMEOUT_MS`
+ * (§9) takes it off again if the request produced nothing, so a failed press cannot
+ * leave an empty column on screen.
+ *
+ * Dead end worth recording: the previous attempt at the scroll half of this was a
+ * patch on `Element.prototype.scrollIntoView`. It cannot work. A content script runs
+ * in an isolated world with its OWN `Element.prototype`, so the patch only ever saw
+ * our own calls and never the site's. The four `scrollTo(0, 0)` calls that were
+ * added on top of it were treating the symptom, and were themselves the visible
+ * scroll the reader was complaining about.
+ */
+const TRANSCRIPT_PENDING_CLASS = "wfs-transcript-pending";
+
+/**
  * Id of the second injected `<style>` element, which holds nothing but the
  * reader's chosen dock widths.
  *
@@ -3594,64 +3777,228 @@ html.wfs-dock-resizing * {
      at --wfs-z-overlay, and this is one above it: a prompt the reader cannot see
      is worse than a prompt over a menu. */
   z-index: 2147483643 !important;
-  background: rgba(0, 0, 0, 0.6) !important;
+  background: rgba(0, 0, 0, 0.78) !important;
+  backdrop-filter: blur(10px) !important;
+  -webkit-backdrop-filter: blur(10px) !important;
   /* The system stack, so the card matches the browser rather than the page. */
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif !important;
+  padding: 16px !important;
 }
 
 .wfs-pro-prompt__card {
   box-sizing: border-box !important;
-  width: min(380px, calc(100vw - 32px)) !important;
-  padding: 24px !important;
-  border-radius: 12px !important;
-  background: #ffffff !important;
-  color: #0f0f0f !important;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45) !important;
+  width: min(480px, calc(100vw - 32px)) !important;
+  padding: 24px 24px 20px !important;
+  border-radius: 18px !important;
+  background: #111116 !important;
+  color: #f4f4f5 !important;
+  border: 1px solid rgba(255, 255, 255, 0.14) !important;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.08) !important;
   text-align: left !important;
+  position: relative !important;
+  overflow: hidden !important;
+}
+
+.wfs-pro-prompt__card::before {
+  content: "" !important;
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  height: 3px !important;
+  background: linear-gradient(90deg, #6366f1, #a855f7, #ec4899) !important;
+}
+
+.wfs-pro-prompt__close {
+  position: absolute !important;
+  top: 14px !important;
+  right: 14px !important;
+  width: 28px !important;
+  height: 28px !important;
+  border-radius: 50% !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  color: #a1a1aa !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  cursor: pointer !important;
+  font-size: 13px !important;
+  line-height: 1 !important;
+  padding: 0 !important;
+  transition: all 120ms ease !important;
+}
+
+.wfs-pro-prompt__close:hover {
+  background: rgba(255, 255, 255, 0.18) !important;
+  color: #ffffff !important;
+  border-color: rgba(255, 255, 255, 0.25) !important;
+}
+
+.wfs-pro-prompt__badge {
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 5px !important;
+  font-size: 11px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase !important;
+  color: #c084fc !important;
+  background: rgba(168, 85, 247, 0.12) !important;
+  border: 1px solid rgba(168, 85, 247, 0.25) !important;
+  padding: 3px 8px !important;
+  border-radius: 9999px !important;
+  margin-bottom: 10px !important;
 }
 
 .wfs-pro-prompt__title {
-  margin: 0 0 8px !important;
+  margin: 0 0 6px !important;
   font-size: 18px !important;
-  font-weight: 600 !important;
+  font-weight: 700 !important;
   line-height: 1.3 !important;
+  color: #ffffff !important;
+  padding-right: 28px !important;
 }
 
 .wfs-pro-prompt__body {
-  margin: 0 0 20px !important;
-  font-size: 14px !important;
-  line-height: 1.5 !important;
-  color: #444444 !important;
+  margin: 0 0 14px !important;
+  font-size: 13px !important;
+  line-height: 1.45 !important;
+  color: #94a3b8 !important;
+}
+
+.wfs-pro-prompt__grid {
+  display: grid !important;
+  grid-template-columns: repeat(2, 1fr) !important;
+  gap: 8px !important;
+  margin: 0 0 14px !important;
+  padding: 10px !important;
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  border-radius: 12px !important;
+}
+
+.wfs-pro-prompt__grid-item {
+  display: flex !important;
+  align-items: flex-start !important;
+  gap: 6px !important;
+  font-size: 11.5px !important;
+  color: #e4e4e7 !important;
+  line-height: 1.35 !important;
+}
+
+.wfs-pro-prompt__grid-item span.icon {
+  font-size: 13px !important;
+  flex-shrink: 0 !important;
+  margin-top: 1px !important;
+}
+
+.wfs-pro-prompt__grid-item strong {
+  color: #ffffff !important;
+  font-weight: 600 !important;
+}
+
+.wfs-pro-prompt__trust {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex-wrap: wrap !important;
+  gap: 12px !important;
+  font-size: 11px !important;
+  color: #a1a1aa !important;
+  margin-bottom: 14px !important;
 }
 
 .wfs-pro-prompt__actions {
   display: flex !important;
-  flex-wrap: wrap !important;
+  flex-direction: column !important;
   gap: 8px !important;
 }
 
 .wfs-pro-prompt__action {
   box-sizing: border-box !important;
   padding: 9px 16px !important;
-  border: 1px solid rgba(0, 0, 0, 0.16) !important;
-  border-radius: 999px !important;
-  background: transparent !important;
-  color: inherit !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  border-radius: 9px !important;
+  background: rgba(255, 255, 255, 0.06) !important;
+  color: #f4f4f5 !important;
   font: inherit !important;
-  font-size: 14px !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
   cursor: pointer !important;
+  text-decoration: none !important;
+  text-align: center !important;
+  transition: all 120ms ease !important;
+  display: inline-flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.wfs-pro-prompt__action:hover {
+  background: rgba(255, 255, 255, 0.12) !important;
+  border-color: rgba(255, 255, 255, 0.28) !important;
+  color: #ffffff !important;
 }
 
 .wfs-pro-prompt__action.is-primary {
-  border-color: transparent !important;
-  background: #0f6cbd !important;
+  width: 100% !important;
+  padding: 11px 18px !important;
+  font-size: 14px !important;
+  border: none !important;
+  background: linear-gradient(135deg, #6366f1, #8b5cf6) !important;
   color: #ffffff !important;
-  font-weight: 600 !important;
+  font-weight: 700 !important;
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.4) !important;
+}
+
+.wfs-pro-prompt__action.is-primary:hover {
+  background: linear-gradient(135deg, #4f46e5, #7c3aed) !important;
+  box-shadow: 0 6px 20px rgba(99, 102, 241, 0.55) !important;
+  transform: translateY(-1px) !important;
 }
 
 .wfs-pro-prompt__action:focus-visible {
-  outline: 2px solid #0f6cbd !important;
+  outline: 2px solid #818cf8 !important;
   outline-offset: 2px !important;
+}
+
+.wfs-pro-prompt__link-more {
+  display: block !important;
+  text-align: center !important;
+  font-size: 11.5px !important;
+  color: #a5b4fc !important;
+  text-decoration: none !important;
+  padding: 3px 0 !important;
+  transition: color 120ms ease !important;
+}
+
+.wfs-pro-prompt__link-more:hover {
+  color: #c7d2fe !important;
+  text-decoration: underline !important;
+}
+
+.wfs-pro-prompt__foot-row {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  margin-top: 4px !important;
+  padding-top: 8px !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+.wfs-pro-prompt__foot-btn {
+  background: none !important;
+  border: none !important;
+  color: #71717a !important;
+  font-size: 11px !important;
+  cursor: pointer !important;
+  padding: 4px 6px !important;
+  text-decoration: none !important;
+  transition: color 120ms ease !important;
+}
+
+.wfs-pro-prompt__foot-btn:hover {
+  color: #d4d4d8 !important;
 }
 
 /* A brief message over the video: "Frame saved", or why it was not.
@@ -3680,6 +4027,21 @@ html.wfs-dock-resizing * {
   text-align: center !important;
   pointer-events: none !important;
 }
+
+/* Ambient glow canvas sitting directly behind the video in windowed fullscreen */
+.wfs-ambient-glow-canvas {
+  position: absolute !important;
+  inset: -12% !important;
+  width: 124% !important;
+  height: 124% !important;
+  object-fit: fill !important;
+  pointer-events: none !important;
+  z-index: 0 !important;
+  filter: blur(64px) saturate(115%) !important;
+  opacity: 1 !important;
+  transition: opacity 0.25s ease !important;
+  will-change: filter !important;
+}
 `;
 
 /**
@@ -3698,6 +4060,16 @@ function injectStyles(doc: Document, siteCss: string): void {
 
 /** Class on `<html>` for the duration of a dock drag. */
 const DOCK_RESIZING_CLASS = "wfs-dock-resizing";
+
+/**
+ * Class on `<html>` while the idle cursor is hidden.
+ *
+ * Named here beside the other classes the TypeScript applies, rather than written
+ * as a bare string at each of its three call sites. The rule is not style for its own
+ * sake: a class the JS adds and a selector the stylesheet matches are one fact in two
+ * files, and a typo in a `classList.remove` call is a cursor that never comes back.
+ */
+const CURSOR_HIDDEN_CLASS = "wfs-cursor-hidden";
 
 /**
  * A fallback dock width for the case where nothing is stored and the dock cannot
@@ -5180,6 +5552,8 @@ export class ButtonInjector {
   private readonly clickHandler: (e: Event) => void;
 
   private observer: MutationObserver | null = null;
+  /** The controls container the observer is currently registered against. */
+  private observedContainer: Element | null = null;
   private disposeVideoChange: (() => void) | null = null;
   private started = false;
 
@@ -5231,8 +5605,9 @@ export class ButtonInjector {
     this.reRenderRunning = false;
     this.reRenderAbandoned = false;
 
-    // Watch first, so controls appearing mid-detection are noticed.
-    this.startObserver();
+    // Watch first when there is already a bar to watch. When there is not, the
+    // detection loop below covers the wait and calls back through `ensureButtons`.
+    this.syncObserver(this.adapter.findControlsContainer(this.doc));
     this.disposeVideoChange = this.adapter.onVideoChange(this.doc, () => this.scheduleEnsure());
 
     // The first attempt runs synchronously so callers get an immediate result.
@@ -5251,6 +5626,7 @@ export class ButtonInjector {
 
     this.observer?.disconnect();
     this.observer = null;
+    this.observedContainer = null;
     this.disposeVideoChange?.();
     this.disposeVideoChange = null;
 
@@ -5272,6 +5648,12 @@ export class ButtonInjector {
     const native = this.adapter.findNativeFullscreenButton(this.doc);
     // No render target yet: leave the page exactly as it is.
     if (!container || !native) return "no-target";
+
+    // The one place that knows the current bar, so it is the place that re-points the
+    // observer. Cheap and idempotent: a bar that has not changed costs one identity
+    // comparison. This is what lets `syncObserver` refuse to watch anything until a
+    // bar exists, instead of falling back to the document.
+    this.syncObserver(container);
 
     // Sweep markers we do not recognise — a control left behind by an earlier
     // version of the extension, which used a different marker value.
@@ -5400,18 +5782,50 @@ export class ButtonInjector {
   }
 
   /**
-   * Watch the player subtree for mutations. Prefers the player root, then the
-   * controls container, then the document element, so controls mounting and
-   * unmounting are both caught.
+   * Watch for our controls being removed, or the control bar being re-rendered.
+   *
+   * SCOPE IS THE WHOLE POINT OF THIS FUNCTION, so it is worth being explicit about
+   * what it does not watch. It used to observe the player root with
+   * `{ childList: true, subtree: true }`, falling back to `documentElement`. That is
+   * the single most expensive thing the extension did, and it did it for the entire
+   * life of every watch page whether or not the mode was ever switched on. The player
+   * subtree is the busiest part of YouTube: caption cues mount and unmount as the
+   * video speaks, the progress bar rebuilds its segments, chapter markers and
+   * storyboard previews come and go. Every one of those allocated a MutationRecord
+   * and queued a microtask for us, to answer a question about four buttons that had
+   * not moved. §7's `startPlayerWatcher` carries a comment saying document-wide
+   * subtree observation is "a real source of jank on YouTube" and carefully avoids
+   * it; this was the same mistake one element lower down.
+   *
+   * There was a second, quieter bug in the same place. The callback funnels into
+   * `scheduleEnsure`, which clears and re-arms a {@link DEBOUNCE_MS} timer. Under a
+   * mutation stream that never pauses for 100 ms — which is what playback with
+   * captions on looks like — the timer was reset forever and `ensureButtons` never
+   * ran at all. Narrowing the scope fixes the correctness bug and the cost together,
+   * which is the usual shape of this kind of thing.
+   *
+   * What is actually needed is narrow. Our controls are direct children of the
+   * controls container, so `childList` on the container sees them being removed. The
+   * site can also replace the container wholesale, so its parent gets the same
+   * treatment. Neither node churns during playback. No `subtree` anywhere.
+   *
+   * The initial mount needs no observer: {@link runDetection} already polls
+   * {@link MAX_DETECTION_ATTEMPTS} times at {@link DETECTION_INTERVAL_MS}, which is
+   * what covers the window before a bar exists. So this returns quietly when there is
+   * nothing to watch yet, and `ensureButtons` calls it back with the container the
+   * moment there is one.
+   *
+   * Idempotent, and re-targets: passing a different container disconnects the old
+   * registration first, so a re-rendered bar does not leave us watching a detached
+   * node while its replacement drops our buttons unseen.
    */
-  private startObserver(): void {
-    if (this.observer || typeof MutationObserver === "undefined") return;
-    const root =
-      this.adapter.findPlayer(this.doc) ??
-      this.adapter.findControlsContainer(this.doc) ??
-      this.doc.documentElement;
-    if (!root) return;
+  private syncObserver(container: Element | null): void {
+    if (typeof MutationObserver === "undefined") return;
+    if (!container) return;
+    if (this.observedContainer === container && isConnected(container)) return;
 
+    this.observer?.disconnect();
+    this.observedContainer = container;
     this.observer = new MutationObserver(() => {
       // The site removed our button while the mode is off: hand off to the
       // bounded re-render loop rather than re-injecting immediately.
@@ -5421,7 +5835,9 @@ export class ButtonInjector {
       }
       this.scheduleEnsure();
     });
-    this.observer.observe(root, { childList: true, subtree: true });
+    this.observer.observe(container, { childList: true });
+    const parent = container.parentElement;
+    if (parent) this.observer.observe(parent, { childList: true });
   }
 
   /** Debounced `ensureButton`, so a burst of mutations costs one pass. */
@@ -5812,18 +6228,18 @@ export async function copyLinkAtCurrentTime(
 export function extractTranscriptText(doc: Document): string | null {
   const lines: string[] = [];
 
-  // Strategy 1: Direct segment elements anywhere in the document (ytd-transcript-segment-renderer)
+  // Strategy 1: Direct segment elements anywhere in the document (modern Lit view models and legacy renderers)
   const segments = doc.querySelectorAll?.(
-    "ytd-transcript-segment-renderer, ytd-transcript-search-panel-renderer ytd-transcript-segment-renderer, .ytd-transcript-segment-list-renderer ytd-transcript-segment-renderer, [class*='transcript-segment']",
+    "transcript-segment-view-model, ytd-transcript-segment-renderer, ytd-transcript-search-panel-renderer ytd-transcript-segment-renderer, .ytd-transcript-segment-list-renderer ytd-transcript-segment-renderer, [class*='transcript-segment']",
   );
 
   if (segments && segments.length > 0) {
     for (const segment of Array.from(segments)) {
       const timeEl = segment.querySelector?.(
-        ".segment-timestamp, [class*='timestamp'], [class*='time'], div.segment-timestamp, span.segment-timestamp, #time, #segment-timestamp",
+        ".segment-timestamp, [class*='timestamp'], [class*='time'], div.segment-timestamp, span.segment-timestamp, #time, #segment-timestamp, [class*='Timestamp']",
       );
       const textEl = segment.querySelector?.(
-        ".segment-text, [class*='text'], yt-formatted-string.segment-text, .yt-core-attributed-string, yt-formatted-string, #text",
+        ".segment-text, [class*='text'], yt-formatted-string.segment-text, .yt-core-attributed-string, yt-formatted-string, #text, [class*='Text']",
       );
 
       let timeStr = (timeEl?.textContent ?? "").trim();
@@ -5840,7 +6256,9 @@ export function extractTranscriptText(doc: Document): string | null {
         textStr = (segment.textContent ?? "").replace(timeStr, "").trim();
       }
 
-      textStr = textStr.replace(/\s+/g, " ");
+      // Strip redundant second counter if rendered (e.g. "0:000 seconds")
+      textStr = textStr.replace(/^\d+\s*seconds?\s*/i, "");
+      textStr = textStr.replace(/\s+/g, " ").trim();
       if (timeStr && textStr) {
         lines.push(`${timeStr} ${textStr}`);
       } else if (textStr) {
@@ -5850,14 +6268,14 @@ export function extractTranscriptText(doc: Document): string | null {
     if (lines.length > 0) return lines.join("\n");
   }
 
-  // Strategy 2: Chapter / Macro-markers items (ytd-macro-markers-list-item-renderer)
+  // Strategy 2: Chapter / Macro-markers items (timeline-chapter-view-model, ytd-macro-markers-list-item-renderer)
   const chapterItems = doc.querySelectorAll?.(
-    "ytd-macro-markers-list-item-renderer, ytd-macro-markers-panel-renderer ytd-macro-markers-list-item-renderer, [class*='macro-markers-list-item']",
+    "timeline-chapter-view-model, macro-markers-panel-item-view-model, timeline-item-view-model, ytd-macro-markers-list-item-renderer, ytd-macro-markers-panel-renderer ytd-macro-markers-list-item-renderer, [class*='macro-markers-list-item']",
   );
   if (chapterItems && chapterItems.length > 0) {
     for (const item of Array.from(chapterItems)) {
-      const timeEl = item.querySelector?.("#time, .time, [class*='time'], div#time");
-      const textEl = item.querySelector?.("#details #title, #title, .title, [class*='title']");
+      const timeEl = item.querySelector?.("#time, .time, [class*='time'], div#time, [class*='Timestamp']");
+      const textEl = item.querySelector?.("#details #title, #title, .title, [class*='title'], [class*='Title']");
       const timeStr = (timeEl?.textContent ?? "").trim();
       let textStr = (textEl?.textContent ?? "").trim();
       if (!textStr) {
@@ -6151,11 +6569,11 @@ export function selectExitDestination(
   }
 }
 
-/** How often ambient glow samples the playing video, in ms. */
-const GLOW_SAMPLE_INTERVAL_MS = 250;
+/** Size (px) of the offscreen canvas used to sample ambient edge colours / render glow. */
+const GLOW_CANVAS_WIDTH = 24;
+const GLOW_CANVAS_HEIGHT = 14;
 
-/** Size (px) of the offscreen canvas used to sample ambient edge colours. */
-const GLOW_SAMPLE_SIZE = 16;
+const AMBIENT_GLOW_CANVAS_ID = "wfs-ambient-glow-canvas";
 
 /** How long before the mouse cursor hides in windowed fullscreen when idle, in ms. */
 const CURSOR_AUTOHIDE_MS = 3000;
@@ -6170,98 +6588,200 @@ function createGlowSampler(
   doc: Document,
   getVideo: () => HTMLVideoElement | null,
   isModeActive: () => boolean,
-  onColor: (rgbColor: string) => void,
+  _onColor?: (rgbColor: string) => void,
 ): GlowSampler {
-  let timer: number | null = null;
+  let isRunning = false;
   let canvas: HTMLCanvasElement | null = null;
   let ctx: CanvasRenderingContext2D | null = null;
+  let callbackHandle: number | null = null;
+  let isRvfc = false;
+  let currentVideo: HTMLVideoElement | null = null;
+  let listeningVideo: HTMLVideoElement | null = null;
 
-  const getContext = (): CanvasRenderingContext2D | null => {
-    if (ctx) return ctx;
+  const cancelScheduledFrame = (): void => {
+    if (callbackHandle !== null) {
+      if (
+        isRvfc &&
+        currentVideo &&
+        "cancelVideoFrameCallback" in currentVideo &&
+        typeof (currentVideo as unknown as { cancelVideoFrameCallback: (id: number) => void })
+          .cancelVideoFrameCallback === "function"
+      ) {
+        try {
+          (currentVideo as unknown as { cancelVideoFrameCallback: (id: number) => void }).cancelVideoFrameCallback(
+            callbackHandle,
+          );
+        } catch {
+          // Ignored if video detached
+        }
+      } else {
+        const win = doc.defaultView ?? globalThis;
+        if (typeof win.cancelAnimationFrame === "function") {
+          win.cancelAnimationFrame(callbackHandle);
+        }
+      }
+      callbackHandle = null;
+    }
+  };
+
+  const scheduleNextFrame = (): void => {
+    if (!isRunning) return;
+    cancelScheduledFrame();
+
+    const video = getVideo();
+    currentVideo = video;
+
+    if (
+      video &&
+      "requestVideoFrameCallback" in video &&
+      typeof (video as unknown as { requestVideoFrameCallback: (cb: () => void) => number })
+        .requestVideoFrameCallback === "function"
+    ) {
+      isRvfc = true;
+      try {
+        callbackHandle = (video as unknown as { requestVideoFrameCallback: (cb: () => void) => number }).requestVideoFrameCallback(
+          renderFrame,
+        );
+        return;
+      } catch {
+        // Fall back to requestAnimationFrame if RVFC throws
+      }
+    }
+
+    isRvfc = false;
+    const win = doc.defaultView ?? globalThis;
+    if (typeof win.requestAnimationFrame === "function") {
+      callbackHandle = win.requestAnimationFrame(renderFrame);
+    }
+  };
+
+  const ensureCanvas = (video: HTMLVideoElement): HTMLCanvasElement | null => {
+    const parent = video.parentElement ?? doc.body;
+    if (canvas && canvas.isConnected && canvas.parentElement === parent) {
+      return canvas;
+    }
+
+    const existing = doc.getElementById(AMBIENT_GLOW_CANVAS_ID) as HTMLCanvasElement | null;
+    if (existing && existing.parentElement === parent) {
+      canvas = existing;
+      if (!ctx) {
+        try {
+          ctx = canvas.getContext("2d", { willReadFrequently: false });
+        } catch {
+          ctx = null;
+        }
+      }
+      return canvas;
+    }
+
+    if (existing) {
+      existing.remove();
+    }
+
     try {
       canvas = doc.createElement("canvas");
-      canvas.width = GLOW_SAMPLE_SIZE;
-      canvas.height = GLOW_SAMPLE_SIZE;
-      ctx = canvas.getContext("2d", { willReadFrequently: true });
-      return ctx;
+      canvas.id = AMBIENT_GLOW_CANVAS_ID;
+      canvas.className = "wfs-ambient-glow-canvas";
+      canvas.width = GLOW_CANVAS_WIDTH;
+      canvas.height = GLOW_CANVAS_HEIGHT;
+      canvas.setAttribute("aria-hidden", "true");
+
+      if (parent) {
+        parent.insertBefore(canvas, video);
+      }
+      ctx = canvas.getContext("2d", { willReadFrequently: false });
+      return canvas;
     } catch {
       return null;
     }
   };
 
-  const sample = (): void => {
-    if (!isModeActive()) return;
-    if (doc.visibilityState === "hidden" || doc.fullscreenElement !== null) return;
+  const renderFrame = (): void => {
+    callbackHandle = null;
+    if (!isRunning || !isModeActive()) {
+      stop();
+      return;
+    }
+
+    if (doc.visibilityState === "hidden" || doc.fullscreenElement !== null) {
+      scheduleNextFrame();
+      return;
+    }
 
     const video = getVideo();
-    if (!video || video.ended || video.readyState < 2) return;
+    if (!video || video.ended || video.readyState < 2) {
+      scheduleNextFrame();
+      return;
+    }
 
-    const context = getContext();
-    if (!context) return;
+    if (listeningVideo !== video) {
+      attachVideoListeners(video);
+    }
 
-    try {
-      context.drawImage(video, 0, 0, GLOW_SAMPLE_SIZE, GLOW_SAMPLE_SIZE);
-      const imgData = context.getImageData(0, 0, GLOW_SAMPLE_SIZE, GLOW_SAMPLE_SIZE);
-      const data = imgData.data;
-
-      let rSum = 0;
-      let gSum = 0;
-      let bSum = 0;
-      let count = 0;
-
-      for (let y = 0; y < GLOW_SAMPLE_SIZE; y++) {
-        for (let x = 0; x < GLOW_SAMPLE_SIZE; x++) {
-          const isEdge =
-            x === 0 || x === GLOW_SAMPLE_SIZE - 1 || y === 0 || y === GLOW_SAMPLE_SIZE - 1;
-          if (!isEdge) continue;
-
-          const idx = (y * GLOW_SAMPLE_SIZE + x) * 4;
-          const r = data[idx] ?? 0;
-          const g = data[idx + 1] ?? 0;
-          const b = data[idx + 2] ?? 0;
-          const a = data[idx + 3] ?? 0;
-
-          if (a > 0) {
-            rSum += r;
-            gSum += g;
-            bSum += b;
-            count++;
-          }
-        }
+    const c = ensureCanvas(video);
+    if (c && ctx) {
+      try {
+        ctx.drawImage(video, 0, 0, GLOW_CANVAS_WIDTH, GLOW_CANVAS_HEIGHT);
+      } catch {
+        // Cross-origin tainted canvas or detached video
       }
+    }
 
-      if (count > 0) {
-        const avgR = Math.round(rSum / count);
-        const avgG = Math.round(gSum / count);
-        const avgB = Math.round(bSum / count);
-        onColor(`rgb(${avgR}, ${avgG}, ${avgB})`);
-      }
-    } catch {
-      // Cross-origin tainted canvas or detached video
+    scheduleNextFrame();
+  };
+
+  const onVideoEvent = (): void => {
+    if (isRunning && callbackHandle === null) {
+      renderFrame();
+    }
+  };
+
+  const attachVideoListeners = (video: HTMLVideoElement): void => {
+    if (listeningVideo === video) return;
+    detachVideoListeners();
+    listeningVideo = video;
+    video.addEventListener("play", onVideoEvent);
+    video.addEventListener("playing", onVideoEvent);
+    video.addEventListener("seeked", onVideoEvent);
+    video.addEventListener("timeupdate", onVideoEvent);
+  };
+
+  const detachVideoListeners = (): void => {
+    if (listeningVideo) {
+      listeningVideo.removeEventListener("play", onVideoEvent);
+      listeningVideo.removeEventListener("playing", onVideoEvent);
+      listeningVideo.removeEventListener("seeked", onVideoEvent);
+      listeningVideo.removeEventListener("timeupdate", onVideoEvent);
+      listeningVideo = null;
     }
   };
 
   const start = (): void => {
-    const win = doc.defaultView ?? globalThis;
-    if (timer === null) {
-      timer = win.setInterval(sample, GLOW_SAMPLE_INTERVAL_MS) as unknown as number;
+    if (isRunning) return;
+    isRunning = true;
+    const video = getVideo();
+    if (video) {
+      attachVideoListeners(video);
+      ensureCanvas(video);
     }
-    // Sample immediately so ambient glow takes effect without waiting for interval
-    sample();
+    renderFrame();
   };
 
   const stop = (): void => {
-    if (timer !== null) {
-      const win = doc.defaultView ?? globalThis;
-      win.clearInterval(timer);
-      timer = null;
+    isRunning = false;
+    cancelScheduledFrame();
+    detachVideoListeners();
+    if (canvas) {
+      canvas.remove();
+      canvas = null;
+      ctx = null;
     }
+    const existing = doc.getElementById(AMBIENT_GLOW_CANVAS_ID);
+    existing?.remove();
   };
 
   const dispose = (): void => {
     stop();
-    canvas = null;
-    ctx = null;
   };
 
   return { start, stop, dispose };
@@ -6292,8 +6812,9 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
    * `isPro` is a pure predicate over this for the reason its own comment gives: the
    * controls that gate decide inside a click handler, where there is nothing to
    * await into. The record is loaded once below and followed with
-   * {@link watchProState}, so a key accepted in the options tab unlocks this page
-   * without a reload — the same shape as the preference watch.
+   * {@link watchProState}, so a key accepted in the popup — or in this page's own Pro
+   * prompt — unlocks this page without a reload, the same shape as the preference
+   * watch.
    */
   let pro: ProState = { ...DEFAULT_PRO_STATE };
 
@@ -6373,6 +6894,7 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
     }
     if (isPro(pro) && prefs.ambientGlow) {
       glowSampler.start();
+      removeLetterboxCss(doc);
     } else {
       glowSampler.stop();
       if (isPro(pro) && prefs.letterboxColor) {
@@ -6393,16 +6915,16 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
   };
 
   const showCursor = (): void => {
-    doc.documentElement.classList.remove("wfs-cursor-hidden");
+    doc.documentElement.classList.remove(CURSOR_HIDDEN_CLASS);
   };
 
   const hideCursor = (): void => {
     if (
       controller.isActive &&
       prefs.cursorAutoHide !== false &&
-      !doc.documentElement.classList.contains("wfs-cursor-hidden")
+      !doc.documentElement.classList.contains(CURSOR_HIDDEN_CLASS)
     ) {
-      doc.documentElement.classList.add("wfs-cursor-hidden");
+      doc.documentElement.classList.add(CURSOR_HIDDEN_CLASS);
     }
   };
 
@@ -6415,6 +6937,17 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
   };
 
   const onPointerActivity = (): void => {
+    // The early-out is on a hot path and is the reason it is written out rather than
+    // left to `resetCursorTimer`'s own guards. `pointermove` fires on the order of a
+    // hundred times a second while the mouse is moving, and with the mode off there
+    // is no cursor to hide. This used to run the whole reset every time — a
+    // `classList.remove` on <html> and a `clearTimeout` — on every watch page for the
+    // life of the session, whether or not the mode was ever switched on.
+    //
+    // The listener stays registered rather than being mounted and unmounted with the
+    // mode: one comparison per event is cheaper than getting an add/remove lifecycle
+    // wrong, and `stop()` already removes this one.
+    if (!controller.isActive) return;
     resetCursorTimer();
   };
 
@@ -6457,6 +6990,11 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
     removeLetterboxCss(doc);
     showCursor();
     clearCursorTimer();
+    // A press can be in flight at the moment the mode ends — pressing transcript and
+    // Escape in the same breath is enough. The class is inert outside the mode, being
+    // nested under `.wfs-windowed`, but its timer is not, and a reservation carried
+    // into the next entry would reserve a column for a press nobody made.
+    clearTranscriptPending();
     if (enteredAtMs === 0) return;
     const durationMs = Date.now() - enteredAtMs;
     enteredAtMs = 0;
@@ -6883,6 +7421,154 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
   doc.addEventListener("click", onPointerCapture, true);
   doc.addEventListener("dblclick", onPointerCapture, true);
   doc.addEventListener("keydown", onKeyCapture as EventListener, true);
+
+  /* -----------------------------------------------------------------------
+     Transcript timing.
+
+     Three numbers, all of them the site's pace rather than ours.
+     ----------------------------------------------------------------------- */
+
+  /**
+   * How long to wait before asking the site a second time.
+   *
+   * The site's own transcript toggle can be left out of sync by a previous close:
+   * its internal "panel is open" flag says open while no panel is expanded, so the
+   * first press only clears the flag and the second is the one that opens anything.
+   * One re-ask covers it. There is deliberately no third: past this, the press found
+   * something that is not a transcript toggle, and clicking it repeatedly is how a
+   * bounded retry turns into a fight with the page.
+   */
+  const TRANSCRIPT_RESYNC_DELAY_MS = 70;
+
+  /**
+   * When to select the Transcript tab in the panel the site just opened.
+   *
+   * Twice, not once. The panel mounts its header before its tab strip, so a single
+   * attempt either lands too early to find the tabs or too late to hide the wrong
+   * tab being selected first. The pair costs one wasted `querySelector` in the
+   * common case, which is the cheaper of the two mistakes.
+   */
+  const TRANSCRIPT_TAB_DELAYS_MS = [200, 600] as const;
+
+  /**
+   * How long to give the description expander to mount the transcript button.
+   *
+   * Only reached on the layouts where none of the direct candidates exist, so the
+   * description has to be opened first. One frame plus change; if the button is still
+   * absent the panel's attribute is set directly rather than waiting again.
+   */
+  const TRANSCRIPT_DESCRIPTION_EXPAND_DELAY_MS = 100;
+
+  /**
+   * How long a press may hold the reserved column before it is given back.
+   *
+   * Set by the slowest thing it has to cover, which is the later
+   * {@link TRANSCRIPT_TAB_DELAYS_MS} entry plus room for a slow mount. Too short and
+   * a slow page hands the column back just as the panel arrives, which is the staged
+   * open this whole mechanism exists to remove. Too long and a press on a video with
+   * no transcript at all — music, some shorts — leaves an empty column up. Erring
+   * long is the lesser fault: that column is only reachable by pressing a control on
+   * a video that has nothing to show.
+   */
+  const TRANSCRIPT_PENDING_TIMEOUT_MS = 1_500;
+
+  /** The expanded transcript/description panel, or null. */
+  const findExpandedTranscriptPanel = (): HTMLElement | null =>
+    doc.querySelector<HTMLElement>(
+      `ytd-engagement-panel-section-list-renderer[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]`,
+    );
+
+  /** Timer holding the reserved column's bound. Null when no press is in flight. */
+  let transcriptPendingTimer: number | null = null;
+
+  /**
+   * Give the reserved column back.
+   *
+   * Called when the panel actually opened, when it was closed again, and from the
+   * bound below. Safe to call when nothing is pending.
+   */
+  const clearTranscriptPending = (): void => {
+    if (transcriptPendingTimer !== null) {
+      timers().clearTimeout(transcriptPendingTimer);
+      transcriptPendingTimer = null;
+    }
+    doc.documentElement.classList.remove(TRANSCRIPT_PENDING_CLASS);
+  };
+
+  /**
+   * Reserve the transcript column before the site is asked for the panel.
+   *
+   * Must run SYNCHRONOUSLY on the press, ahead of the site's own click handler —
+   * that is the entire mechanism, and it is why the caller below listens in the
+   * capture phase. See {@link TRANSCRIPT_PENDING_CLASS} (§6) for what the column
+   * being reserved early buys, and for the patched-`scrollIntoView` dead end it
+   * replaced.
+   *
+   * Does nothing when the mode is off (there is no column to reserve) or when a
+   * panel is already expanded (nothing is in flight; the press is a close).
+   */
+  const markTranscriptPending = (): void => {
+    if (!controller.isActive) return;
+    if (findExpandedTranscriptPanel()) return;
+
+    doc.documentElement.classList.add(TRANSCRIPT_PENDING_CLASS);
+    if (transcriptPendingTimer !== null) timers().clearTimeout(transcriptPendingTimer);
+    transcriptPendingTimer = timers().setTimeout(() => {
+      transcriptPendingTimer = null;
+      doc.documentElement.classList.remove(TRANSCRIPT_PENDING_CLASS);
+      warn(
+        DIAGNOSTIC.transcriptOpenAbandoned,
+        "The transcript panel did not open; the reserved column was given back.",
+        { siteId: adapter.siteId, waitedMs: TRANSCRIPT_PENDING_TIMEOUT_MS },
+      );
+    }, TRANSCRIPT_PENDING_TIMEOUT_MS) as unknown as number;
+  };
+
+  /**
+   * Catch every route into the transcript, not just our own control.
+   *
+   * The reader can open it from the site's own description button or its chapter
+   * readout, and those deserve the same instant dock as our button — so the column
+   * is reserved here, in the CAPTURE phase, which is the last moment that is still
+   * before the site's own handler. `toggleTranscript` clicks one of these same
+   * elements, so its press arrives here too and there is exactly one place that
+   * reserves the column.
+   *
+   * The second ask lives here for the same reason. It used to exist twice, once here
+   * and once inside `toggleTranscript`, as two independent 70 ms re-clicks racing on
+   * the same element with only one of them guarded against re-entry.
+   */
+  let transcriptResyncing = false;
+  doc.addEventListener(
+    "click",
+    (e) => {
+      const target = (e.target as HTMLElement | null)?.closest?.(
+        ".ytp-chapter-title, .ytp-chapter-container, ytd-video-description-transcript-section-renderer button, button[aria-label*='transcript' i]",
+      );
+      if (!target) return;
+
+      // Read the state BEFORE the site's handler runs, which is what the capture phase
+      // is for. It decides whether this press is an open or a close, and the resync
+      // below cannot work that out afterwards.
+      const wasExpanded = findExpandedTranscriptPanel() !== null;
+
+      markTranscriptPending();
+
+      if (transcriptResyncing) return;
+      // Only an OPEN earns a second ask. Closing the panel from the site's own control
+      // used to re-open it: "no panel is expanded" is just as true after a successful
+      // close as after a press that did not take, and the resync could not tell the two
+      // apart. It re-clicked the reader's close and undid it.
+      if (wasExpanded) return;
+      timers().setTimeout(() => {
+        if (findExpandedTranscriptPanel()) return;
+        transcriptResyncing = true;
+        (target as HTMLElement).click();
+        transcriptResyncing = false;
+      }, TRANSCRIPT_RESYNC_DELAY_MS);
+    },
+    true,
+  );
 
   /**
    * Ask the browser to leave fullscreen on behalf of one of our own buttons.
@@ -7394,29 +8080,19 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
   };
 
   /**
-   * Ask the worker to open a page. The content script cannot open either
-   * destination itself: `chrome.tabs` is not available here, and navigating to the
-   * settings page — an extension URL — is blocked for a page unless that page is
-   * listed as web-accessible, which would put the settings one link away from every
-   * site on the internet.
+   * Show the paywall.
+   *
+   * The prompt is self-contained: checkout is an ordinary link, and a reader who
+   * already owns a key activates it in the prompt itself. Neither needs the worker,
+   * which is why the content script no longer sends it anything. The alternative —
+   * opening the settings page on its licence field — needed a worker round trip,
+   * because a content script cannot navigate to an extension URL unless that page is
+   * web-accessible, and making the settings web-accessible would put them one link
+   * away from every site on the internet.
    */
-  const openPage = (page: "pro" | "licence"): void => {
-    try {
-      const message: WorkerMessage = { type: "OPEN_PAGE", page };
-      void chrome.runtime.sendMessage(message);
-    } catch {
-      // The worker is unreachable, which on this path means the extension is being
-      // reloaded. Nothing to report into: the reader pressed a button in a page
-      // that is about to be re-injected.
-    }
-  };
-
   const offerPro = (reason: "capture" | "other"): void => {
     dismissProPrompt?.();
-    dismissProPrompt = showProPrompt(doc, {
-      reason,
-      openOptions: () => openPage("licence"),
-    });
+    dismissProPrompt = showProPrompt(doc, { reason });
   };
 
   /**
@@ -7576,6 +8252,10 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
     );
 
     if (openPanels.length > 0) {
+      // A close, so nothing is in flight. Dropping the reservation here as well as
+      // in the dock-change hook matters for the panel the site closes without ever
+      // changing the attribute we watch.
+      clearTranscriptPending();
       for (const openPanel of openPanels) {
         const closeBtn = openPanel.querySelector<HTMLButtonElement | HTMLElement>(
           'yt-icon-button#visibility-button button, #visibility-button button, button[aria-label*="Close" i], #close-button button, #visibility-button, ytd-engagement-panel-title-header-renderer button',
@@ -7587,6 +8267,12 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
       }
       return;
     }
+
+    // Before the site is asked, never after. Most of the candidates below also trip
+    // the capture-phase listener that reserves the column, but three of them —
+    // the macro-markers entry point, "Key moments" and "In this video" — do not, and
+    // a reader on one of those videos would otherwise get the staged open back.
+    markTranscriptPending();
 
     const candidates = [
       'ytd-video-description-transcript-section-renderer button',
@@ -7611,13 +8297,19 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
       }
     }
 
+    // No second ask here. The capture-phase listener above owns it, for every route
+    // into the transcript rather than only this one, and it guards its own re-entry.
+
     if (!clicked) {
       const expandDescriptionBtn = doc.querySelector<HTMLButtonElement | HTMLElement>(
         '#description #expand, ytd-watch-metadata #description, tp-yt-paper-button#expand, ytd-text-inline-expander #expand, ytd-expandable-metadata-renderer',
       );
       expandDescriptionBtn?.click();
 
-      setTimeout(() => {
+      // One frame's worth of grace for the expander to mount the transcript button
+      // it hides. Not a poll: if the button is still not there, the panel's own
+      // attribute is set directly, which is the last resort and always terminates.
+      timers().setTimeout(() => {
         const transcriptBtn = doc.querySelector<HTMLButtonElement | HTMLElement>(
           'ytd-video-description-transcript-section-renderer button, button[aria-label*="Show transcript" i], button[aria-label*="Transcript" i]',
         );
@@ -7629,13 +8321,11 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
             panel.setAttribute(YT.transcriptVisibilityAttr, YT.transcriptExpandedValue);
           }
         }
-      }, 100);
+      }, TRANSCRIPT_DESCRIPTION_EXPAND_DELAY_MS);
     }
 
     const switchTab = () => {
-      const panel = doc.querySelector<HTMLElement>(
-        `ytd-engagement-panel-section-list-renderer[${YT.transcriptVisibilityAttr}="${YT.transcriptExpandedValue}"]`,
-      );
+      const panel = findExpandedTranscriptPanel();
       if (panel) {
         const allTabs = Array.from(
           panel.querySelectorAll<HTMLElement>(
@@ -7659,8 +8349,7 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
       updateTranscriptCopyButton();
     };
 
-    setTimeout(switchTab, 200);
-    setTimeout(switchTab, 600);
+    for (const delay of TRANSCRIPT_TAB_DELAYS_MS) timers().setTimeout(switchTab, delay);
   };
 
   /** Tracked button elements for lock badge updates. */
@@ -7772,8 +8461,8 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
    * Follow the entitlement record.
    *
    * Mounting and unmounting the grips from here is what makes a key entered in the
-   * options tab take effect on a page that is already open, and — more importantly
-   * — makes a *revoked* key take the grips away without a reload. Auto-apply is
+   * popup take effect on a page that is already open, and — more importantly —
+   * makes a *revoked* key take the grips away without a reload. Auto-apply is
    * re-run because a per-channel rule may have just become active.
    */
   const applyProState = (next: ProState): void => {
@@ -7782,7 +8471,7 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
     else unmountGrips();
     updateProLockBadges();
     updateLetterboxAndGlow();
-    // A key accepted in the options tab gets its own window to find the channel:
+    // A newly accepted key gets its own window to find the channel:
     // until this moment `channelRuleUndecided` answered "no rule to wait for", so
     // no attempts have been spent and there may be nothing scheduled to spend them.
     resetChannelRuleWatch();
@@ -7840,6 +8529,28 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
   const disposeSiteDockChange = adapter.onSiteDockChange?.(doc, () => {
     controller.refreshGeometry();
     updateTranscriptCopyButton();
+    // The panel is open, so the column a press reserved is now occupied and the
+    // reservation has done its job. This is the normal way it ends; the bound in
+    // `markTranscriptPending` only covers a press that never produces a panel at all.
+    //
+    // Conditional on a panel actually being expanded, NOT on this hook simply firing.
+    // The hook is shared with live chat, so an unconditional release meant toggling
+    // chat during the frames after a transcript press cancelled that press's
+    // reservation and handed it back the staged open.
+    //
+    // Safe to run here because this is a microtask after the attribute mutation: the
+    // expanded panel already carries its own fixed box, so #panels giving its box up
+    // moves nothing on screen.
+    if (findExpandedTranscriptPanel()) clearTranscriptPending();
+    //
+    // There used to be four `scrollTo(0, 0)` calls here — immediate, next frame,
+    // +60 ms and +200 ms — fighting the scroll the site performed when it mounted the
+    // transcript panel in flow. They are gone, and they are what the reader was
+    // seeing as "it scrolls the video first": on a page scrolled down in `scrollable`
+    // mode the volley yanked the view to the top a fifth of a second after the press.
+    // Reserving the column up front means the panel never enters flow, so there is
+    // no scroll to undo. Do not add them back without first checking whether
+    // `TRANSCRIPT_PENDING_CLASS` stopped working.
   });
 
   void getSitePrefs(adapter.siteId).then(({ prefs: stored }) => {
@@ -7910,6 +8621,7 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
       showCursor();
       glowSampler.dispose();
       removeLetterboxCss(doc);
+      clearTranscriptPending();
       disposePrefWatch();
       disposeProWatch();
       disposeVideoChange();
@@ -8193,23 +8905,7 @@ async function handleToggleCommand(command: string): Promise<void> {
  */
 const WELCOME_PAGE_PATH = "welcome/index.html";
 
-/**
- * The settings page, as the worker addresses it. Must match `options_ui.page` in
- * the manifest — the worker opens this path directly rather than asking the
- * runtime for the options page, because the runtime's own opener cannot carry the
- * panel selector below.
- */
-const OPTIONS_PAGE_PATH = "options/index.html";
 
-/**
- * What selects the Pro panel when the settings page loads.
- *
- * A URL fragment rather than a stored "open here next time" flag: a flag is state
- * that outlives the intent that set it, so a reader who once pressed `I have a key`
- * would find the settings opening on the Pro panel for ever. The fragment says it
- * once, in the address that requested it.
- */
-const PRO_PANEL_HASH = "#pro";
 
 /**
  * Pure. Whether an `onInstalled` event should open the welcome page.
@@ -8266,43 +8962,6 @@ async function handleInstalled(details: chrome.runtime.InstalledDetails): Promis
  * and restarted at any time, so it holds no state — everything durable lives in
  * `chrome.storage`.
  */
-/**
- * Open one of the two pages the in-page Pro prompt can ask for.
- *
- * The page decides *which*, from a two-member union; the worker owns the
- * addresses. A message carrying a URL would make this an open redirector for
- * anything that could reach the worker, and "anything that could reach the worker"
- * is a larger set than it looks once a future release adds another sender.
- */
-async function handleWorkerMessage(message: WorkerMessage): Promise<void> {
-  if (message?.type !== "OPEN_PAGE") return;
-  try {
-    if (message.page === "licence") {
-      // A tab at an explicit address rather than `chrome.runtime.openOptionsPage()`,
-      // which cannot carry the panel selector: it opens whatever the manifest names
-      // and nothing else. That trade is deliberate. `openOptionsPage` would focus a
-      // settings tab the reader already had open, which sounds better until you
-      // notice it would focus it on whichever panel they left it on — and the whole
-      // reason this message exists is that they pressed `I have a key` and need the
-      // key field. A second settings tab, open on the right panel, is the lesser
-      // annoyance.
-      await chrome.tabs.create({
-        url: chrome.runtime.getURL(`${OPTIONS_PAGE_PATH}${PRO_PANEL_HASH}`),
-        active: true,
-      });
-      return;
-    }
-    await chrome.tabs.create({ url: PRO_PURCHASE_URL, active: true });
-  } catch (err) {
-    // The reader pressed a button and nothing happened, and there is nowhere in the
-    // page to say so from here. One diagnostic line; the prompt is still open with
-    // its other action available.
-    warn(DIAGNOSTIC.proPageOpenFailed, "Could not open a page for the prompt.", {
-      page: message.page,
-      error: describeError(err),
-    });
-  }
-}
 
 /**
  * Revalidate the stored licence if it is due.
@@ -8350,12 +9009,8 @@ export function startServiceWorker(): void {
     void handleInstalled(details);
   });
 
-  chrome.runtime?.onMessage?.addListener((message: unknown) => {
-    void handleWorkerMessage(message as WorkerMessage);
-    // No reply, so nothing is kept alive waiting for one: the sender is a content
-    // script that asked for a tab and does not need to be told it got one.
-    return false;
-  });
+  // There is deliberately no `onMessage` listener. Nothing sends this worker a
+  // message; see the note in §1 where the request type used to be.
 
   // Deliberately not awaited and deliberately not gated on anything: the check
   // decides for itself whether it is due, and a worker start is the only clock an
@@ -8364,7 +9019,7 @@ export function startServiceWorker(): void {
 }
 
 // ===========================================================================
-// §11  Settings UI (shared by options page and popup)
+// §11  Settings UI (the popup's preferences tree)
 // ===========================================================================
 
 /** Where the browser lets the user rebind the keyboard shortcut. */
@@ -8420,7 +9075,13 @@ export const REVIEW_URL =
  * developer's own machine.
  */
 export const PRO_PURCHASE_URL =
-  "https://test.checkout.dodopayments.com/buy/pdt_0Nf1XWPRqpjTH4YVdZiMN?quantity=1";
+  "https://test.checkout.dodopayments.com/buy/pdt_0Nf1XWPRqpjTH4YVdZiMN?quantity=1&redirect_url=https%3A%2F%2Frohittiger.vercel.app%2Fproduct%2Fwindowedfullscreen%2Fsuccess";
+
+/**
+ * Product pricing and feature showcase page on the website.
+ */
+export const PRO_LEARN_MORE_URL =
+  "https://rohittiger.vercel.app/product/windowedfullscreen#pricing";
 
 /**
  * How long after install the rating prompt stays quiet.
@@ -8489,10 +9150,11 @@ export const JARGON_LIST: readonly string[] = [
 /**
  * Every user-facing help string, defined exactly once.
  *
- * One constant rather than strings sitting in the two HTML shells, because the
- * popup and the options page render the same words and drifted apart the moment
- * they each owned a copy. The shells provide empty containers only; §11 fills
- * them.
+ * One constant rather than strings sitting in the HTML shells. It was written that
+ * way when there were two settings surfaces and they drifted apart the moment each
+ * owned a copy of the words; with one surface left the rule still holds, because the
+ * popup, the in-page Pro prompt and the welcome page all print from here. The shells
+ * provide empty containers only; §11 fills them.
  *
  * The copy is written to a fixed budget, which `tests/help-copy.test.ts` walks
  * exhaustively: every string non-empty and trimmed, no term from
@@ -8561,9 +9223,9 @@ export const HELP_COPY = {
    * The post-install page: thanks, one loud ask, and how to use the thing.
    *
    * Three regions and no fourth. Every settings control that used to sit under
-   * this greeting has gone back to the options page, where someone who wants to
-   * change a setting will go looking for it. A first run is not the moment to
-   * present preferences for a feature the reader has not seen work yet.
+   * this greeting has gone back to the popup, where someone who wants to change a
+   * setting will go looking for it. A first run is not the moment to present
+   * preferences for a feature the reader has not seen work yet.
    *
    * `pinHow` is the one instruction, and it is one line. Anyone who has installed
    * an extension has pinned one; the three-step list this replaced took longer to
@@ -8685,23 +9347,25 @@ export const HELP_COPY = {
   pro: {
     /** The name, used as a heading in the settings and in the prompt when not entitled. */
     name: "Get Pro",
-    /** The price, stated once. One purchase, no renewal, no account. */
-    price: "$10 once",
+    /** The badge indicator. */
+    price: "Pro",
 
     /** The prompt's heading when the capture control is what was pressed. */
-    captureTitle: "Saving frames is part of Pro",
+    captureTitle: "Saving screenshots is part of Pro",
     /** The prompt's heading for any other paid control. */
-    genericTitle: "This one is part of Pro",
+    genericTitle: "Supercharge with Pro Features",
     /**
      * The body, and the only place the tier is described. Kept to what is bought
      * rather than a feature matrix: the reader is standing in front of a video
      * they were watching, not shopping.
      */
-    body: "Save frames, resize docks, transcript dock, ambient glow, custom colours, and channel profiles.",
+    body: "Unlock all tools with a one-time lifetime license. No recurring fees.",
     /** The primary action. Names the price so the button holds no surprise. */
-    buy: "Get Pro — $10 once",
-    /** For a reader who already bought it on another machine. */
-    haveKey: "I have a key",
+    buy: "Unlock Pro — $10 Lifetime",
+    /** Secondary link to compare features on the website. */
+    learnMore: "Compare all features on website",
+    /** Trust line for purchase confidence. */
+    trustLine: "7-day money-back guarantee · Instant delivery",
     /** Closes the prompt and changes nothing. */
     dismiss: "Not now",
 
@@ -8715,43 +9379,43 @@ export const HELP_COPY = {
      * settings and clicked through to a tab called Pro, so they are shopping, and
      * the honest thing is to lay the nine items out and name the price.
      */
-    pitchLead: "Unlock the full viewing experience. One payment, yours forever.",
+    pitchLead: "Get the best viewing tools. Take screenshots, resize panels, and add ambient glow.",
     features: [
       {
-        name: "Save the frame",
-        detail: "Screenshot any moment, straight to downloads or clipboard.",
+        name: "Instant screenshots",
+        detail: "Save high-quality video frames straight to downloads or clipboard.",
       },
       {
-        name: "Resize columns",
-        detail: "Drag comments, chat, and transcript to your perfect width.",
+        name: "Resizable panels",
+        detail: "Drag comments, live chat, and transcripts to your ideal width.",
       },
       {
-        name: "Auto per channel",
-        detail: "Auto-enter windowed mode on your favourite channels.",
+        name: "Favorite channels",
+        detail: "Automatically open windowed mode on the channels you watch most.",
       },
       {
-        name: "Channel profiles",
-        detail: "Remember mode, panel state, and dock widths per channel.",
+        name: "Channel memory",
+        detail: "Remember your favorite viewing mode and panel widths for each channel.",
       },
       {
-        name: "Transcript dock",
-        detail: "Dock the searchable transcript column beside the video.",
+        name: "Transcript panel",
+        detail: "Keep the searchable transcript docked right beside your video.",
       },
       {
-        name: "Ambient glow",
-        detail: "Softly illuminates letterbox bars with matching ambient colors.",
+        name: "Ambient lighting",
+        detail: "Softly illuminates letterbox bars with colors matching your video.",
       },
       {
-        name: "Custom bar colour",
-        detail: "Choose any background colour for the letterbox bars.",
+        name: "Custom bar colors",
+        detail: "Pick your favorite background colors and theme gradients.",
       },
       {
-        name: "Filename templates",
-        detail: "Customise how saved frame screenshots are named.",
+        name: "Custom file names",
+        detail: "Choose how your saved video screenshot files are named.",
       },
       {
-        name: "Burn timestamp",
-        detail: "Add video playback timestamp directly onto captured frames.",
+        name: "Timestamp on frame",
+        detail: "Stamp the exact video playback time onto your screenshots.",
       },
     ],
     /** Heads the same list once the reader owns it. */
@@ -8766,20 +9430,20 @@ export const HELP_COPY = {
      * and finds it; someone without one is not made to scroll past it.
      */
     haveKeyHeading: "Already bought Pro?",
-    activateOnce: "Enter your key once on this device.",
+    activateOnce: "Find your license key in your purchase confirmation email.",
     /** The same disclosure on the other side of the purchase. */
     removeHeading: "Moving to another computer?",
 
     /** Above the key field. */
-    keyLabel: "Licence key",
-    keyPlaceholder: "Paste your key",
-    activate: "Activate",
-    remove: "Remove key",
+    keyLabel: "License key",
+    keyPlaceholder: "Paste your license key",
+    activate: "Activate Pro",
+    remove: "Remove key from this computer",
     /** Shown while a check is in flight, so the button is never silently busy. */
     checking: "Checking your key…",
     /** The three settled outcomes. */
-    active: "Pro is active on this device.",
-    inactive: "Pro is not active on this device.",
+    active: "Pro is active on this computer.",
+    inactive: "Pro is not active on this computer.",
     /**
      * A refusal the reader fixes by re-reading what they pasted.
      *
@@ -8792,27 +9456,27 @@ export const HELP_COPY = {
      * differently. One sentence covering both left everyone re-pasting a key that
      * was never going to be accepted, burning another activation each time.
      */
-    invalid: "That key was not accepted. Check that you pasted it exactly as it was issued.",
+    invalid: "That key was not accepted. Please check that you pasted it correctly.",
     /**
      * The activation limit, which is not a problem with the key. Says what to do,
      * because the reader can fix this one themselves and would otherwise ask for a
      * refund of something they already own.
      */
     limit:
-      "That key is already active on the maximum number of devices. Remove it on one of them, then activate here.",
+      "This key is already used on the maximum number of computers. Remove it on one first.",
     /**
      * A key the provider has switched off — refunded, charged back, or revoked by
      * hand. Named separately because "check what you pasted" sends someone to look
      * for a typo that is not there, and because this is the one refusal where the
      * honest next step is to get in touch rather than to try again.
      */
-    revoked: "That key is no longer active. If you believe that is wrong, reply to your receipt.",
+    revoked: "This key is no longer active. If you think this is a mistake, please contact support.",
     /**
      * The fail-open case, said plainly. The reader keeps every feature, so this is
      * information rather than a warning, and it must not read as one.
      */
-    unreachable: "Could not reach the licence check. Nothing has changed; it will try again later.",
-    malformed: "That does not look like a licence key.",
+    unreachable: "Could not connect to check your key. Everything stays active and will try again later.",
+    malformed: "Please enter a valid license key.",
     /** Removed here, and the device freed up at the provider too. */
     removed: "The key was removed, and this device freed up for another.",
     /**
@@ -8822,19 +9486,17 @@ export const HELP_COPY = {
      */
     removedLocally: "The key was removed here, but this device may still count. Try again online.",
     /** What the check sends, stated where the key is entered. */
-    privacyNote: "Only the key you type is sent, to the payment provider that issued it.",
+    privacyNote: "Your key is only checked to unlock Pro. No personal data or browsing is tracked.",
 
     /**
-     * The popup's one line about Pro, and the way out of it.
+     * The teaser row's one line about Pro, and the way through to it.
      *
-     * The popup carries neither the pitch nor the key field. It is 320 px wide and
-     * it opens over a video the reader is part-way through, which makes it the worst
-     * place on the extension to read three feature lines or paste a 36-character
-     * string. So it says one sentence and offers the door: the panel on the settings
-     * page is where both of those jobs belong, and the reader gets there in one
-     * press instead of hunting the toolbar's context menu for Options.
+     * The preferences tree says one sentence rather than carrying the pitch, so a
+     * reader reaching for a checkbox never scrolls past a price. The door leads to
+     * the popup's Pro view, which gets the whole width for the feature list and the
+     * key field — a swap rather than a new tab, so nobody loses their place.
      */
-    summaryPitch: "Unlock frame capture, resizable columns, and auto-apply.",
+    summaryPitch: "Get Pro · Activate license key",
     summaryOpen: "See what's in Pro",
     /** Same door, for a reader who already owns it and may want to move the key. */
     summaryManage: "Manage your key",
@@ -9064,8 +9726,9 @@ export function promptPrecedence(
  * `aria-expanded`: the browser already gives a `<details>` an expand control that
  * is reachable by keyboard and exposes its own expanded state, where a
  * hand-rolled disclosure has to keep the attribute, the focus order, and the
- * visibility in step by hand. Nothing about the open state is stored, so the
- * popup opens collapsed every time (R14.6) and the options page opens expanded.
+ * visibility in step by hand. Nothing about the open state is stored, so the popup
+ * opens collapsed every time (R14.6) — a line at rest, in a surface whose height is
+ * a budget.
  *
  * `combo` is `null` for both "no combination is assigned" and "the browser would
  * not say", because those two need the same sentence; the shortcuts link stays
@@ -9653,7 +10316,7 @@ export function renderRatingPrompt(
  *   region — this differs from the First_Run_Section (which removes on failure)
  *   because here the user has not dismissed it and may still act
  *
- * Never rendered on the options page. No notification API (R9.10).
+ * Rendered in the popup and nowhere else. No notification API (R9.10).
  */
 export function renderPinPrompt(
   doc: Document,
@@ -9727,11 +10390,6 @@ export function renderPinPrompt(
   })();
 }
 
-/**
- * The per-site boolean preferences, in the order they appear. Every entry is one
- * checkbox in both the options page and the popup; adding a preference here is
- * all it takes to surface it in both.
- */
 /**
  * The preference fields that are a single boolean, which is what a checkbox can
  * represent.
@@ -9826,328 +10484,30 @@ const LETTERBOX_THEMES = [
 ] as const;
 
 /**
- * The Pro panel: what the tier is, whether it is on, and — folded away — the one
- * field that turns it on.
+ * The Pro teaser row: one sentence, and the door to the pitch.
  *
- * THE ARRANGEMENT IS THE POINT, so it is written down here rather than left to be
- * inferred from the paint order. This section used to open with a status line
- * reading "Pro is not active on this device", followed immediately by a licence
- * field. Both halves were wrong for a reader who had not bought anything, which is
- * every reader the first time they see it: it announced a negative, and then it
- * asked for a credential, and nowhere did it say what was for sale. The tier's own
- * description sat in one sentence under all of it.
+ * The preferences tree gets a teaser rather than the pitch itself, so a reader
+ * reaching for a checkbox never scrolls past a price. `openProPanel` swaps the popup
+ * over to {@link renderProView}, which owns the whole 320 px and carries the feature
+ * list, the checkout link and the licence field.
  *
- * So the order is now: the price, what the three features are, and the way to buy.
- * Entering a key is a once-per-device job that a reader either came here to do or
- * will never do at all, so it sits inside a collapsed disclosure — findable by
- * anyone looking for it, and not in the way of anyone who is not.
- *
- * The status line moves with the field, into the disclosure, for a reader who is
- * not yet entitled. It is the answer to the `Activate` button, and an answer
- * belongs beside the question. The disclosure is forced open whenever that answer
- * matters — mid-check, and after any refusal — so no message is ever delivered
- * into a collapsed box. Once entitled, the status is the headline instead, because
- * then it is the panel's whole subject.
- *
- * Repaints itself whole from a {@link watchProState} subscription, so the section
- * is correct in the options tab the moment a key is entered in the popup, and vice
- * versa. It owns its host completely for exactly that reason — the same rule that
- * gave the rating prompt a host of its own: any node a storage subscriber repaints
- * wholesale belongs to that subscriber alone.
- *
- * @returns a disposer for the subscription. The options page never calls it (the
- *   page outlives the section) but the popup can be closed mid-check, and a
- *   listener on a dead document is a leak whether or not anything notices.
- */
-export function renderProSection(
-  doc: Document,
-  host: Element,
-  ctx: {
-    showError: (message: string) => void;
-    showSaved: (message: string) => void;
-    openInTab: (url: string, description: string) => Promise<void>;
-  },
-): () => void {
-  const copy = HELP_COPY.pro;
-
-  /** Emoji badges for the nine features, matching HELP_COPY.pro.features order. */
-  const FEATURE_ICONS = [
-    "\uD83D\uDDBC\uFE0F",
-    "\u2194\uFE0F",
-    "\uD83C\uDFAF",
-    "\u2699\uFE0F",
-    "\uD83D\uDCDD",
-    "\u2728",
-    "\uD83C\uDFA8",
-    "\uD83D\uDCC4",
-    "\u23F1\uFE0F",
-  ] as const;
-
-  /** The last record painted, so `Remove` writes from what the reader can see. */
-  let current: ProState = { ...DEFAULT_PRO_STATE };
-
-  /** True while a check is in flight, so a second press cannot start a second. */
-  let checking = false;
-
-  const paint = (): void => {
-    host.replaceChildren();
-
-    const entitled = isPro(current);
-
-    // --- The Pro showcase card with gradient accent border ------------------
-    const card = doc.createElement("div");
-    card.setAttribute("data-wfs-pro-card", "");
-    if (entitled) card.classList.add("is-active");
-
-    // --- Header with badge, title, and pill --------------------------------
-    const header = doc.createElement("div");
-    header.setAttribute("data-wfs-pro-header", "");
-
-    const badge = doc.createElement("span");
-    badge.setAttribute("data-wfs-pro-badge", "");
-    badge.textContent = entitled ? "\u2728" : "\u26A1";
-    header.appendChild(badge);
-
-    const title = doc.createElement("span");
-    title.setAttribute("data-wfs-pro-title", "");
-    title.textContent = entitled ? copy.active : copy.name;
-    header.appendChild(title);
-
-    if (!entitled) {
-      const pricePill = doc.createElement("span");
-      pricePill.setAttribute("data-wfs-pro-pill", "");
-      pricePill.textContent = copy.price;
-      header.appendChild(pricePill);
-    }
-
-    card.appendChild(header);
-
-    // --- Pitch line (not entitled only) ------------------------------------
-    if (!entitled) {
-      const pitch = doc.createElement("p");
-      pitch.setAttribute("data-wfs-pro-pitch", "");
-      pitch.textContent = copy.pitchLead;
-      card.appendChild(pitch);
-    }
-
-    // --- Feature cards: always shown, language changes with entitlement -----
-    const features = doc.createElement("div");
-    features.setAttribute("data-wfs-pro-features-grid", "");
-    for (let i = 0; i < copy.features.length; i++) {
-      const feature = copy.features[i]!;
-      const item = doc.createElement("div");
-      item.setAttribute("data-wfs-pro-feature-card", "");
-
-      const icon = doc.createElement("span");
-      icon.setAttribute("data-wfs-pro-feature-icon", "");
-      icon.textContent = FEATURE_ICONS[i]!;
-      item.appendChild(icon);
-
-      const name = doc.createElement("span");
-      name.setAttribute("data-wfs-pro-feature-name", "");
-      name.textContent = feature.name;
-      item.appendChild(name);
-
-      const detail = doc.createElement("span");
-      detail.setAttribute("data-wfs-pro-feature-detail", "");
-      detail.textContent = feature.detail;
-      item.appendChild(detail);
-
-      features.appendChild(item);
-    }
-    card.appendChild(features);
-
-    if (entitled) {
-      // --- Entitled: what you unlocked heading + manage/remove --------------
-      const haveHeading = doc.createElement("h3");
-      haveHeading.setAttribute("data-wfs-pro-have", "");
-      haveHeading.textContent = copy.haveHeading;
-      card.appendChild(haveHeading);
-
-      const removeBox = doc.createElement("details");
-      removeBox.setAttribute("data-wfs-pro-remove-details", "");
-
-      const removeSummary = doc.createElement("summary");
-      removeSummary.textContent = copy.removeHeading;
-      removeBox.appendChild(removeSummary);
-
-      const remove = doc.createElement("button");
-      remove.type = "button";
-      remove.setAttribute("data-wfs-pro-remove", "");
-      remove.textContent = copy.remove;
-      remove.addEventListener("click", () => {
-        void (async () => {
-          const handedBack = await deactivateLicence(current.key, current.instanceId);
-          const result = await setProState({ ...DEFAULT_PRO_STATE });
-          if (!result.ok) {
-            ctx.showError(`Could not remove the key: ${result.error}.`);
-            return;
-          }
-          ctx.showSaved(handedBack ? copy.removed : copy.removedLocally);
-        })();
-      });
-      removeBox.appendChild(remove);
-      card.appendChild(removeBox);
-    } else {
-      // --- Not entitled: buy CTA + activation form -------------------------
-      const actions = doc.createElement("div");
-      actions.setAttribute("data-wfs-pro-actions", "");
-
-      const buy = doc.createElement("a");
-      buy.href = PRO_PURCHASE_URL;
-      buy.rel = "noopener noreferrer";
-      buy.setAttribute("data-wfs-pro-buy-cta", "");
-      buy.textContent = copy.buy;
-      buy.addEventListener("click", (event) => {
-        event.preventDefault();
-        void ctx.openInTab(PRO_PURCHASE_URL, "purchase page");
-      });
-      actions.appendChild(buy);
-
-      card.appendChild(actions);
-
-      // --- Activation form, always visible on options (not collapsed) --------
-      const form = doc.createElement("div");
-      form.setAttribute("data-wfs-pro-form", "");
-
-      const formHeading = doc.createElement("h3");
-      formHeading.setAttribute("data-wfs-pro-form-heading", "");
-      formHeading.textContent = copy.haveKeyHeading;
-      form.appendChild(formHeading);
-
-      // Status feedback
-      const status = doc.createElement("p");
-      status.setAttribute("data-wfs-pro-inline-status", "");
-      status.setAttribute("role", "status");
-      status.setAttribute("aria-live", "polite");
-      status.textContent = checking
-        ? copy.checking
-        : current.status === "invalid"
-          ? copy.invalid
-          : current.status === "unreachable"
-            ? copy.unreachable
-            : "";
-      if (status.textContent) form.appendChild(status);
-
-      const field = doc.createElement("label");
-      field.setAttribute("data-wfs-pro-field", "");
-      const fieldText = doc.createElement("span");
-      fieldText.textContent = copy.keyLabel;
-      field.appendChild(fieldText);
-
-      const input = doc.createElement("input");
-      input.type = "text";
-      input.setAttribute("data-wfs-pro-key", "");
-      input.placeholder = copy.keyPlaceholder;
-      input.maxLength = MAX_LICENCE_KEY_LENGTH;
-      input.autocomplete = "off";
-      input.spellcheck = false;
-      field.appendChild(input);
-      form.appendChild(field);
-
-      const activate = doc.createElement("button");
-      activate.type = "button";
-      activate.setAttribute("data-wfs-pro-activate", "");
-      activate.textContent = copy.activate;
-
-      const submit = (): void => {
-        if (checking) return;
-        const key = normalizeLicenceKey(input.value);
-        if (!licenceKeyLooksWellFormed(key)) {
-          ctx.showError(copy.malformed);
-          return;
-        }
-        checking = true;
-        paint();
-
-        void (async () => {
-          const now = Date.now();
-          const { validation: result, instanceId } = await activateLicence(key);
-          const next = applyValidation(
-            { ...DEFAULT_PRO_STATE, key, instanceId },
-            result,
-            now,
-          );
-          checking = false;
-          const written = await setProState(next);
-          if (!written.ok) {
-            ctx.showError(`Could not save the key: ${written.error}.`);
-            current = { ...DEFAULT_PRO_STATE };
-            paint();
-            return;
-          }
-          if (result.outcome === "active") {
-            ctx.showSaved(copy.active);
-          } else {
-            warn(DIAGNOSTIC.proValidationFailed, "Activation was refused.", {
-              outcome: result.outcome,
-              reason: result.reason,
-              host: DODO_API_BASE,
-            });
-            ctx.showError(refusalMessage(result, copy));
-          }
-        })();
-      };
-
-      activate.addEventListener("click", submit);
-      input.addEventListener("keydown", (event) => {
-        if ((event as KeyboardEvent).key === "Enter") submit();
-      });
-      form.appendChild(activate);
-
-      const note = doc.createElement("p");
-      note.setAttribute("data-wfs-pro-privacy", "");
-      note.textContent = copy.privacyNote;
-      form.appendChild(note);
-
-      card.appendChild(form);
-    }
-
-    host.appendChild(card);
-  };
-
-  paint();
-
-  void getProState().then(({ state, loadFailed }) => {
-    current = state;
-    paint();
-    if (loadFailed) ctx.showError("Could not read your licence on this device.");
-  });
-
-  return watchProState((state) => {
-    current = state;
-    checking = false;
-    paint();
-  });
-}
-
-/**
- * The popup's Pro row: one sentence and one way out of it.
- *
- * The popup gets neither the pitch nor the key field, and that is a deliberate
- * split rather than an omission. It is 320 px wide, it opens over a video the
- * reader is part-way through, and it closes the instant focus leaves — three
- * reasons it is the worst surface in the extension both for reading a feature list
- * and for pasting a 36-character string. Both of those jobs live on the settings
- * page's Pro panel, and this row is the door to it.
- *
- * The row is also the popup's only route to the settings page. Without it a reader
- * holding a fresh licence key has to know that the toolbar button's context menu
- * has an Options item, which is a thing extension authors know and readers do not.
+ * A view swap rather than a new tab, and that is a correction rather than a
+ * preference. Up to 2.0.0 this row opened the options page on its Pro panel, on the
+ * reasoning that 320 px over a half-watched video is the worst surface in the
+ * extension both for reading a feature list and for pasting a 36-character key. The
+ * reasoning was right about the width and wrong about the fix: closing the reader's
+ * popup and opening a settings tab to answer "what is Pro?" costs more than a
+ * cramped column does. So the pitch moved into the popup, the options page went, and
+ * the width problem is solved by giving the pitch the whole popup instead of a
+ * section of it.
  *
  * Subscribes to entitlement and repaints whole, so it owns its host — the same rule
- * as {@link renderProSection}.
+ * that gave the rating prompt a host of its own: any node a storage subscriber
+ * repaints wholesale belongs to that subscriber alone.
  *
- * Since 1.5.0 the popup renders a teaser card. Pressing it navigates to a full Pro
- * showcase view within the popup (no external tab). The reader stays in the popup,
- * sees the features, can buy or activate, and press Back to return.
- *
- * The `ctx.showProView` callback tells the popup to swap its content for the
- * showcase. The popup's own code handles the transition; this function only builds
- * the teaser and the showcase.
- *
- * @returns a disposer for the subscription. The popup is closed far more often
- *   mid-flight than the options page, so this one is worth calling.
+ * @returns a disposer for the subscription. Worth calling: the popup is closed
+ *   mid-flight constantly, and a listener on a dead document is a leak whether or
+ *   not anything notices.
  */
 export function renderProSummary(
   doc: Document,
@@ -10215,7 +10575,6 @@ export function renderProView(
   ctx: { onBack: () => void },
 ): () => void {
   const copy = HELP_COPY.pro;
-  const FEATURE_ICONS = ["\uD83D\uDDBC\uFE0F", "\u2194\uFE0F", "\uD83C\uDFAF"] as const;
 
   let current: ProState = { ...DEFAULT_PRO_STATE };
   let checking = false;
@@ -10263,54 +10622,199 @@ export function renderProView(
     if (!entitled) {
       const pitch = doc.createElement("p");
       pitch.setAttribute("data-wfs-pro-pitch", "");
-      pitch.textContent = copy.pitchLead;
+      pitch.textContent = copy.body;
       card.appendChild(pitch);
+
+      // Features grid
+      const grid = doc.createElement("div");
+      grid.setAttribute("data-wfs-pro-features-grid", "");
+
+      const featureItems: Array<{ icon: string; name: string; detail: string }> = [
+        { icon: "\uD83D\uDCF8", name: "Instant Screenshots", detail: "Save clean frames & timestamps" },
+        { icon: "\u2194\uFE0F", name: "Resizable Panels", detail: "Custom widths for comments & chat" },
+        { icon: "\uD83D\uDCA1", name: "Ambient Glow", detail: "Soft light synced to video colors" },
+        { icon: "\uD83D\uDCDD", name: "Transcript Dock", detail: "Pinned searchable transcript" },
+        { icon: "\u2B50", name: "Channel Memory", detail: "Auto-apply preferred layout" },
+        { icon: "\uD83C\uDFA8", name: "Custom Themes", detail: "Custom bar colors & gradients" },
+      ];
+
+      for (const item of featureItems) {
+        const fCard = doc.createElement("div");
+        fCard.setAttribute("data-wfs-pro-feature-card", "");
+
+        const iconSpan = doc.createElement("span");
+        iconSpan.setAttribute("data-wfs-pro-feature-icon", "");
+        iconSpan.textContent = item.icon;
+
+        const textWrap = doc.createElement("div");
+        textWrap.setAttribute("data-wfs-pro-feature-text", "");
+
+        const nameSpan = doc.createElement("span");
+        nameSpan.setAttribute("data-wfs-pro-feature-name", "");
+        nameSpan.textContent = item.name;
+
+        const detailSpan = doc.createElement("span");
+        detailSpan.setAttribute("data-wfs-pro-feature-detail", "");
+        detailSpan.textContent = item.detail;
+
+        textWrap.appendChild(nameSpan);
+        textWrap.appendChild(detailSpan);
+
+        fCard.appendChild(iconSpan);
+        fCard.appendChild(textWrap);
+        grid.appendChild(fCard);
+      }
+      card.appendChild(grid);
+
+      // Trust line
+      const trust = doc.createElement("div");
+      trust.setAttribute("data-wfs-pro-trust", "");
+      const trustItems = ["\uD83D\uDEE1\uFE0F 7-Day Guarantee", "\u26A1 Instant Delivery", "\uD83D\uDD12 Secure Checkout"];
+      trustItems.forEach((text, idx) => {
+        if (idx > 0) {
+          const dot = doc.createElement("span");
+          dot.textContent = "\u2022";
+          dot.style.opacity = "0.5";
+          trust.appendChild(dot);
+        }
+        const itemSpan = doc.createElement("span");
+        itemSpan.textContent = text;
+        trust.appendChild(itemSpan);
+      });
+      card.appendChild(trust);
     }
-
-    // Feature cards — horizontal layout: icon left, text (name + detail) right.
-    const features = doc.createElement("div");
-    features.setAttribute("data-wfs-pro-features-grid", "");
-    for (let i = 0; i < copy.features.length; i++) {
-      const feature = copy.features[i]!;
-      const item = doc.createElement("div");
-      item.setAttribute("data-wfs-pro-feature-card", "");
-
-      const icon = doc.createElement("span");
-      icon.setAttribute("data-wfs-pro-feature-icon", "");
-      icon.textContent = FEATURE_ICONS[i]!;
-      item.appendChild(icon);
-
-      const textCol = doc.createElement("div");
-      textCol.setAttribute("data-wfs-pro-feature-text", "");
-
-      const name = doc.createElement("span");
-      name.setAttribute("data-wfs-pro-feature-name", "");
-      name.textContent = feature.name;
-      textCol.appendChild(name);
-
-      const detail = doc.createElement("span");
-      detail.setAttribute("data-wfs-pro-feature-detail", "");
-      detail.textContent = feature.detail;
-      textCol.appendChild(detail);
-
-      item.appendChild(textCol);
-      features.appendChild(item);
-    }
-    card.appendChild(features);
 
     if (entitled) {
-      // Entitled: manage/remove via options page
-      const manage = doc.createElement("button");
-      manage.type = "button";
-      manage.setAttribute("data-wfs-pro-manage", "");
-      manage.textContent = copy.summaryManage;
-      manage.addEventListener("click", () => {
-        void chrome.tabs.create({
-          url: chrome.runtime.getURL(`${OPTIONS_PAGE_PATH}${PRO_PANEL_HASH}`),
-          active: true,
-        });
+      // Entitled: manage/remove directly inside the popup!
+      const haveHeading = doc.createElement("h3");
+      haveHeading.setAttribute("data-wfs-pro-have", "");
+      haveHeading.textContent = copy.haveHeading;
+      card.appendChild(haveHeading);
+
+      const note = doc.createElement("p");
+      note.setAttribute("data-wfs-pro-pitch", "");
+      note.textContent = "All Pro features are active and unlocked on this device.";
+      card.appendChild(note);
+
+      // Key details card
+      const keyBox = doc.createElement("div");
+      keyBox.setAttribute("data-wfs-pro-key-box", "");
+      keyBox.style.display = "flex";
+      keyBox.style.flexDirection = "column";
+      keyBox.style.gap = "6px";
+      keyBox.style.marginTop = "8px";
+      keyBox.style.padding = "8px 10px";
+      keyBox.style.background = "var(--wfs-bg)";
+      keyBox.style.borderRadius = "8px";
+      keyBox.style.border = "1px solid var(--wfs-border)";
+
+      const keyLabel = doc.createElement("span");
+      keyLabel.style.fontSize = "11px";
+      keyLabel.style.fontWeight = "600";
+      keyLabel.style.color = "var(--wfs-muted)";
+      keyLabel.textContent = "Active License Key";
+      keyBox.appendChild(keyLabel);
+
+      const keyRow = doc.createElement("div");
+      keyRow.style.display = "flex";
+      keyRow.style.alignItems = "center";
+      keyRow.style.gap = "8px";
+      keyRow.style.justifyContent = "space-between";
+
+      const keyCode = doc.createElement("code");
+      keyCode.style.fontFamily = 'ui-monospace, "SF Mono", Menlo, Consolas, monospace';
+      keyCode.style.fontSize = "11.5px";
+      keyCode.style.color = "var(--wfs-text)";
+      keyCode.style.overflow = "hidden";
+      keyCode.style.textOverflow = "ellipsis";
+      keyCode.style.whiteSpace = "nowrap";
+      keyCode.textContent = current.key || "Active";
+      keyRow.appendChild(keyCode);
+
+      const copyBtn = doc.createElement("button");
+      copyBtn.type = "button";
+      copyBtn.setAttribute("data-wfs-pro-copy-btn", "");
+      copyBtn.style.padding = "3px 8px";
+      copyBtn.style.fontSize = "10.5px";
+      copyBtn.style.fontWeight = "600";
+      copyBtn.style.background = "var(--wfs-surface)";
+      copyBtn.style.color = "var(--wfs-text)";
+      copyBtn.style.border = "1px solid var(--wfs-border)";
+      copyBtn.style.borderRadius = "5px";
+      copyBtn.style.cursor = "pointer";
+      copyBtn.textContent = "Copy";
+      copyBtn.addEventListener("click", () => {
+        if (current.key) {
+          void navigator.clipboard.writeText(current.key);
+          copyBtn.textContent = "Copied!";
+          setTimeout(() => { copyBtn.textContent = "Copy"; }, 2000);
+        }
       });
-      card.appendChild(manage);
+      keyRow.appendChild(copyBtn);
+      keyBox.appendChild(keyRow);
+      card.appendChild(keyBox);
+
+      // Remove key / Move to another computer
+      const removeDetails = doc.createElement("details");
+      removeDetails.setAttribute("data-wfs-pro-remove-details", "");
+      removeDetails.style.marginTop = "10px";
+
+      const removeSummary = doc.createElement("summary");
+      removeSummary.style.fontSize = "11.5px";
+      removeSummary.style.color = "var(--wfs-secondary)";
+      removeSummary.style.cursor = "pointer";
+      removeSummary.textContent = copy.removeHeading;
+      removeDetails.appendChild(removeSummary);
+
+      const removeActionWrap = doc.createElement("div");
+      removeActionWrap.style.marginTop = "8px";
+      removeActionWrap.style.display = "flex";
+      removeActionWrap.style.flexDirection = "column";
+      removeActionWrap.style.gap = "6px";
+
+      const removeStatus = doc.createElement("p");
+      removeStatus.style.fontSize = "11px";
+      removeStatus.style.margin = "0";
+      removeStatus.style.color = "var(--wfs-danger)";
+
+      const removeBtn = doc.createElement("button");
+      removeBtn.type = "button";
+      removeBtn.setAttribute("data-wfs-pro-remove", "");
+      removeBtn.style.padding = "6px 12px";
+      removeBtn.style.fontSize = "11.5px";
+      removeBtn.style.fontWeight = "600";
+      removeBtn.style.color = "#ff5252";
+      removeBtn.style.background = "rgba(255, 82, 82, 0.1)";
+      removeBtn.style.border = "1px solid rgba(255, 82, 82, 0.25)";
+      removeBtn.style.borderRadius = "6px";
+      removeBtn.style.cursor = "pointer";
+      removeBtn.textContent = copy.remove;
+
+      removeBtn.addEventListener("click", () => {
+        removeBtn.disabled = true;
+        removeBtn.textContent = "Removing key…";
+        void (async () => {
+          try {
+            await deactivateLicence(current.key, current.instanceId);
+            const result = await setProState({ ...DEFAULT_PRO_STATE });
+            if (!result.ok) {
+              removeStatus.textContent = `Could not remove the key: ${result.error}.`;
+              removeBtn.disabled = false;
+              removeBtn.textContent = copy.remove;
+              return;
+            }
+          } catch {
+            removeStatus.textContent = "Error removing key. Please try again.";
+            removeBtn.disabled = false;
+            removeBtn.textContent = copy.remove;
+          }
+        })();
+      });
+
+      removeActionWrap.appendChild(removeBtn);
+      removeActionWrap.appendChild(removeStatus);
+      removeDetails.appendChild(removeActionWrap);
+      card.appendChild(removeDetails);
     } else {
       // Not entitled: Buy CTA always visible
       const actions = doc.createElement("div");
@@ -10320,12 +10824,24 @@ export function renderProView(
       buy.href = PRO_PURCHASE_URL;
       buy.rel = "noopener noreferrer";
       buy.setAttribute("data-wfs-pro-buy-cta", "");
-      buy.textContent = copy.buy;
+      buy.textContent = `\u26A1 ${copy.buy} \u2192`;
       buy.addEventListener("click", (event) => {
         event.preventDefault();
         void chrome.tabs.create({ url: PRO_PURCHASE_URL, active: true });
       });
       actions.appendChild(buy);
+
+      const learnMore = doc.createElement("a");
+      learnMore.href = PRO_LEARN_MORE_URL;
+      learnMore.rel = "noopener noreferrer";
+      learnMore.setAttribute("data-wfs-pro-learn-more", "");
+      learnMore.textContent = `\uD83C\uDF10 ${copy.learnMore} \u2192`;
+      learnMore.addEventListener("click", (event) => {
+        event.preventDefault();
+        void chrome.tabs.create({ url: PRO_LEARN_MORE_URL, active: true });
+      });
+      actions.appendChild(learnMore);
+
       card.appendChild(actions);
 
       // "Already have a key?" — always visible below the CTA, no toggle needed.
@@ -10336,6 +10852,11 @@ export function renderProView(
       formLabel.setAttribute("data-wfs-pro-form-label", "");
       formLabel.textContent = copy.haveKeyHeading;
       form.appendChild(formLabel);
+
+      const formHint = doc.createElement("p");
+      formHint.setAttribute("data-wfs-pro-form-hint", "");
+      formHint.textContent = copy.activateOnce;
+      form.appendChild(formHint);
 
       if (checking || current.status === "invalid" || current.status === "unreachable") {
         const status = doc.createElement("p");
@@ -10562,11 +11083,14 @@ export function renderChannelRules(
 /**
  * Put a channel identifier into the rules field without submitting it.
  *
- * The popup knows which channel the open tab is showing and the options page does
- * not, so this is how the one surface that has the answer hands it to the shared
- * tree. Deliberately does not add the rule: the reader opened the popup to watch a
- * video, and a settings surface that writes a preference because a page was open
- * is a surface nobody can trust.
+ * `startPopup` is what knows which channel the open tab is showing; the settings tree
+ * does not, and should not have to ask. So the answer is pushed in from outside
+ * rather than fetched from within, which also keeps §11 free of any dependency on
+ * there being an open tab at all.
+ *
+ * Deliberately does not add the rule: the reader opened the popup to watch a video,
+ * and a settings surface that writes a preference because a page was open is a
+ * surface nobody can trust.
  *
  * A no-op when the field is absent (the reader is not entitled, so there is no
  * list) or already has something in it (they were typing).
@@ -10579,32 +11103,28 @@ export function prefillChannelRule(root: ParentNode, channel: ChannelRef | null)
 }
 
 /**
- * Render the settings controls into `root`: the help section, one auto-apply
- * checkbox per supported site, the donation link, the Pro surface, and a
- * privacy-policy footer link.
+ * Render the settings controls into `root`: the help section, the per-site
+ * preference cards, the channel rules, a Pro teaser row, and a privacy-policy
+ * footer link.
  *
- * ON THE OPTIONS PAGE THIS IS TWO PANELS, and the split is the arrangement's whole
- * substance. Everything used to be one column: tips, then a sales pitch with a
- * licence field in it, then the tip jar, then the preferences the reader actually
- * came for. A reader changing a setting had to scroll past a paywall, and a reader
- * who had bought Pro found the pitch again every time. So the preferences are one
- * panel and Pro is the other, and the reader picks.
+ * THE POPUP IS THE ONLY SETTINGS SURFACE. There is no options page. Up to 2.0.0
+ * there were two, and this function built either one from a `surface` flag: the
+ * options page got a heading, a Settings/Pro tab strip and the full Pro panel, and
+ * the popup got a single Pro row that opened that page. The options page was
+ * removed because it earned nothing — `manifest.json` now points `options_ui` at
+ * `popup/index.html`, so both entries in the browser's own menu land here — and
+ * keeping it had a standing cost: one settings tree rendered into two hand-written
+ * stylesheets, where a CSS fix landed in both files or it had not landed.
  *
- * `surface` decides which shape is built, and it does read as more than a heading
- * flag. There used to be a `surface` option here that nothing read, and it was
- * removed for exactly that reason; this one selects the layout:
- *
- * - `options` — a heading, a two-tab strip, and the full Pro panel behind the
- *   second tab (see {@link renderProSection}).
- * - `popup` — no heading (the popup has its own title), no tab strip, and a single
- *   Pro row that opens the panel on the settings page instead of reproducing it in
- *   320 px (see {@link renderProSummary}).
+ * Pro is a second VIEW rather than a second panel. `startPopup` swaps this tree out
+ * for `renderProView` and back, so the reader gets the whole 320 px for the pitch or
+ * for the preferences and never scrolls past a paywall to reach a checkbox. That was
+ * the point of the tab strip, and a view swap achieves it in one surface.
  *
  * `[data-wfs-status]`, `[data-wfs-error]`, the prompt host and the footer host stay
- * direct children of `root`, outside both panels and in that order. Two reasons,
- * and both are load-bearing: the messages belong to whichever panel is showing —
- * activation reports into the same region a checkbox does — and `startPopup` finds
- * all four by marker on the tree it was handed.
+ * direct children of `root`, in that order. Load-bearing: `startPopup` finds all
+ * four by marker on the tree it was handed, and activation reports into the same
+ * region a checkbox does.
  *
  * Each checkbox loads its effective value (stored, else the documented default).
  * On a failed write the control reverts to the last persisted value and an error
@@ -10616,19 +11136,12 @@ export function renderSettings(
   doc: Document,
   root: Element,
   options: {
-    surface: "options" | "popup";
     /**
-     * Which panel the options page opens on. `pro` is how the in-page prompt's
-     * `I have a key` lands on the key field rather than on the checkboxes; the
-     * worker puts {@link PRO_PANEL_HASH} in the address to ask for it. Ignored on
-     * the popup, which has no panels.
+     * Swap the popup over to the full Pro showcase view. Required: the Pro teaser
+     * row has nowhere else to go now that there is no options page to open, and an
+     * optional callback here would be a row that silently does nothing.
      */
-    initialPanel?: "settings" | "pro";
-    /**
-     * Popup only. Navigates the popup to the full Pro showcase view without
-     * opening a new tab. Provided by `startPopup`'s view-switching logic.
-     */
-    showProView?: () => void;
+    showProView: () => void;
   },
 ): () => void {
   root.replaceChildren();
@@ -10638,14 +11151,6 @@ export function renderSettings(
 
   /** Everything the Pro surfaces subscribed to, torn down together. */
   const disposers: Array<() => void> = [];
-
-  const isOptions = options.surface === "options";
-
-  if (isOptions) {
-    const heading = doc.createElement("h1");
-    heading.textContent = "Windowed Fullscreen — Options";
-    root.appendChild(heading);
-  }
 
   const status = doc.createElement("div");
   status.setAttribute("data-wfs-status", "");
@@ -10713,107 +11218,8 @@ export function renderSettings(
     }
   };
 
-  // --- The two panels, and the strip that switches them ---------------------
-  //
-  // Built with `role="tablist"` and two `role="tab"` buttons rather than with
-  // native radios or links, for the same reason the rating stars are hand-rolled:
-  // the pattern needs arrow keys to move between the tabs while Tab leaves the
-  // strip entirely, and no native control does that. Roving tabindex, so the strip
-  // is one stop in the tab order however many panels it grows.
-  //
-  // Panels are hidden with the `hidden` attribute, not by unmounting. A hidden
-  // panel keeps its subscriptions, its loaded preference values and its half-typed
-  // licence key, so switching tabs never discards the reader's work — and the
-  // renderers underneath repaint from storage, which would fight a mount/unmount
-  // scheme for ownership of when they exist.
-  const panels = new Map<"settings" | "pro", HTMLElement>();
-  const tabs = new Map<"settings" | "pro", HTMLElement>();
-
-  /** Where the preference sections go: the first panel, or `root` in the popup. */
-  let settingsHost: Element = root;
-
-  const select = (which: "settings" | "pro"): void => {
-    for (const [name, panel] of panels) {
-      const on = name === which;
-      if (on) panel.removeAttribute("hidden");
-      else panel.setAttribute("hidden", "");
-      const tab = tabs.get(name);
-      if (!tab) continue;
-      tab.setAttribute("aria-selected", on ? "true" : "false");
-      // -1 rather than removing the attribute: an unselected tab must stay
-      // reachable by arrow key and skipped by Tab, and only an explicit -1 says so.
-      tab.setAttribute("tabindex", on ? "0" : "-1");
-    }
-  };
-
-  if (isOptions) {
-    const strip = doc.createElement("nav");
-    strip.setAttribute("data-wfs-tabs", "");
-    strip.setAttribute("role", "tablist");
-    // Named, because a tab strip with two unlabelled tabs announces as a bare list
-    // of buttons. "Settings sections", not "navigation": it switches what is shown
-    // on this page rather than going anywhere.
-    strip.setAttribute("aria-label", "Settings sections");
-
-    const order: Array<"settings" | "pro"> = ["settings", "pro"];
-
-    for (const name of order) {
-      const panel = doc.createElement("div");
-      panel.id = `wfs-panel-${name}`;
-      panel.setAttribute("data-wfs-panel", name);
-      panel.setAttribute("role", "tabpanel");
-      panel.setAttribute("aria-labelledby", `wfs-tab-${name}`);
-      // Focusable, so a keyboard reader who has just chosen a tab can move into its
-      // contents with one Tab press rather than arriving at the browser's chrome.
-      panel.setAttribute("tabindex", "0");
-      panels.set(name, panel);
-
-      const tab = doc.createElement("button");
-      tab.type = "button";
-      tab.id = `wfs-tab-${name}`;
-      tab.setAttribute("data-wfs-tab", name);
-      tab.setAttribute("role", "tab");
-      tab.setAttribute("aria-controls", panel.id);
-      tab.textContent = name === "pro" ? HELP_COPY.tabs.pro : HELP_COPY.tabs.settings;
-      tab.addEventListener("click", () => select(name));
-      tab.addEventListener("keydown", (event) => {
-        const key = (event as KeyboardEvent).key;
-        const index = order.indexOf(name);
-        let next = -1;
-        if (key === "ArrowRight") next = (index + 1) % order.length;
-        else if (key === "ArrowLeft") next = (index - 1 + order.length) % order.length;
-        else if (key === "Home") next = 0;
-        else if (key === "End") next = order.length - 1;
-        if (next < 0) return;
-        event.preventDefault();
-        const target = order[next];
-        if (target === undefined) return;
-        select(target);
-        tabs.get(target)?.focus();
-      });
-      tabs.set(name, tab);
-      strip.appendChild(tab);
-    }
-
-    root.appendChild(strip);
-    for (const name of order) {
-      const panel = panels.get(name);
-      if (panel) root.appendChild(panel);
-    }
-
-    settingsHost = panels.get("settings") ?? root;
-    select(options.initialPanel === "pro" ? "pro" : "settings");
-
-    // Update the Pro tab label when entitlement changes: "Get Pro" → "Pro".
-    const proTab = tabs.get("pro");
-    if (proTab) {
-      const updateProTabLabel = (entitled: boolean): void => {
-        proTab.textContent = entitled ? HELP_COPY.tabs.proEntitled : HELP_COPY.tabs.pro;
-      };
-      void getProState().then(({ state }) => updateProTabLabel(isPro(state)));
-      disposers.push(watchProState((state) => updateProTabLabel(isPro(state))));
-    }
-  }
+  /** Where the preference sections go: root in all surfaces. */
+  const settingsHost: Element = root;
 
   /** A `<section>` with an uppercase-styled `<h2>`, the shared shape here. */
   const addSection = (marker: string, title: string): HTMLElement => {
@@ -10827,17 +11233,6 @@ export function renderSettings(
   };
 
   // --- Help, which now owns the keyboard shortcut ---------------------------
-  // The standalone "Keyboard shortcut" section this replaces stated the rebind
-  // rule in its own words. Two statements of one fact drift, and R14.1 gives
-  // `HELP_COPY` the only copy of it, so the link moved in here beside the
-  // sentence that refers to it.
-  //
-  // Filled once the combination is known rather than painted with
-  // `HELP_COPY.shortcut.none` and corrected a moment later: a flash of "no
-  // shortcut set" on a browser that does have one is worse than the rows arriving
-  // a turn late. A plain `<div>` host, because `renderHelpSection` emits its own
-  // two `<section>` elements and a section wrapping sections would draw a divider
-  // around the pair as though they were one thing.
   const helpHost = doc.createElement("div");
   helpHost.setAttribute("data-wfs-help-section", "");
   settingsHost.appendChild(helpHost);
@@ -10857,26 +11252,6 @@ export function renderSettings(
     .catch(() => {
       showError("Help section failed to render.");
     });
-
-  // --- Pro, in the second panel -------------------------------------------
-  // A `<section>` host with no heading of its own: `renderProSection` owns its
-  // subtree completely, heading included, because it repaints the lot on every
-  // entitlement change.
-  //
-  // It is mounted here, in source order, but it lands in the Pro panel — so this
-  // block's position in the file says nothing about where the reader sees it, and
-  // moving it would not reorder anything.
-  const proPanel = panels.get("pro");
-  if (proPanel) {
-    const proHost = doc.createElement("section");
-    proHost.setAttribute("data-wfs-pro-section", "");
-    proPanel.appendChild(proHost);
-    try {
-      disposers.push(renderProSection(doc, proHost, { showError, showSaved, openInTab }));
-    } catch {
-      showError("Pro section failed to render.");
-    }
-  }
 
   // --- Per-site toggles ---------------------------------------------------
 
@@ -11388,34 +11763,22 @@ export function renderSettings(
     } catch {
       showError("Channel list failed to render.");
     }
+
   }
 
-  // --- Pro, in the popup: one row and a door ------------------------------
-  // Only where there is no Pro panel to put the real thing in. The teaser card
-  // navigates to the full Pro showcase view within the popup when `showProView`
-  // is provided; otherwise falls back to opening the options page in a tab.
-  if (!isOptions) {
-    const summaryHost = doc.createElement("section");
-    summaryHost.setAttribute("data-wfs-pro-summary-section", "");
-    settingsHost.appendChild(summaryHost);
-    try {
-      disposers.push(
-        renderProSummary(doc, summaryHost, {
-          openProPanel: () => {
-            if (options.showProView) {
-              options.showProView();
-            } else {
-              void openInTab(
-                chrome.runtime.getURL(`${OPTIONS_PAGE_PATH}${PRO_PANEL_HASH}`),
-                "settings page",
-              );
-            }
-          },
-        }),
-      );
-    } catch {
-      showError("Pro row failed to render.");
-    }
+  // --- Pro: one row, and a door to the showcase ---------------------------
+  // A teaser rather than the pitch itself, because this tree is the preferences and
+  // a reader reaching for a checkbox should not have to scroll past a price. The row
+  // swaps the popup over to `renderProView`, which gets the full width to sell in.
+  const summaryHost = doc.createElement("section");
+  summaryHost.setAttribute("data-wfs-pro-summary-section", "");
+  settingsHost.appendChild(summaryHost);
+  try {
+    disposers.push(
+      renderProSummary(doc, summaryHost, { openProPanel: options.showProView }),
+    );
+  } catch {
+    showError("Pro row failed to render.");
   }
 
   root.appendChild(status);
@@ -11452,29 +11815,6 @@ export function renderSettings(
   return () => {
     for (const dispose of disposers) dispose();
   };
-}
-
-/**
- * Options-page entry point.
- *
- * Settings only. The first-run greeting that used to render above these controls
- * is its own page now (§13), so nothing here is conditional on how the reader
- * arrived — except which of the two panels is showing, which the address decides.
- *
- * The disposer is dropped on purpose: this page lives until the tab is closed, and
- * a page teardown takes its subscriptions with it. The popup is the surface that
- * needs it.
- */
-export function startOptionsPage(): void {
-  const root = document.getElementById("app");
-  if (!root) return;
-  // A fragment the worker or the popup put in the address, and nothing else reads
-  // it. Compared whole rather than parsed: there is one accepted value.
-  const wantsPro = window.location.hash === PRO_PANEL_HASH;
-  renderSettings(document, root, {
-    surface: "options",
-    initialPanel: wantsPro ? "pro" : "settings",
-  });
 }
 
 // ===========================================================================
@@ -11535,9 +11875,12 @@ function renderPopup(
 ): void {
   root.replaceChildren();
 
-  // Header row: brand info on the left, "Get Pro" button on the right.
-  const headerRow = doc.createElement("div");
-  headerRow.className = "wfs-popup__header";
+  // Header container: brand info, Pro badge/actions, and inline activation box
+  const headerContainer = doc.createElement("div");
+  headerContainer.className = "wfs-popup__header";
+
+  const topRow = doc.createElement("div");
+  topRow.className = "wfs-popup__header-top";
 
   const brandGroup = doc.createElement("div");
   brandGroup.className = "wfs-popup__brand";
@@ -11565,18 +11908,25 @@ function renderPopup(
     : `<span class="wfs-idle-dot"></span> Standby`;
   brandGroup.appendChild(statusSub);
 
-  headerRow.appendChild(brandGroup);
+  topRow.appendChild(brandGroup);
+
+  const badgeSlot = doc.createElement("div");
+  badgeSlot.className = "wfs-popup__header-badge-slot";
+  badgeSlot.setAttribute("data-wfs-pro-header-badge-slot", "");
+  topRow.appendChild(badgeSlot);
+
+  headerContainer.appendChild(topRow);
 
   const headerActions = doc.createElement("div");
   headerActions.className = "wfs-popup__header-actions";
 
-  // The Pro button slot
-  const proSlot = doc.createElement("span");
+  // The Pro button / activation slot
+  const proSlot = doc.createElement("div");
   proSlot.setAttribute("data-wfs-pro-header-slot", "");
   headerActions.appendChild(proSlot);
 
-  headerRow.appendChild(headerActions);
-  root.appendChild(headerRow);
+  headerContainer.appendChild(headerActions);
+  root.appendChild(headerContainer);
 
   const list = doc.createElement("dl");
   list.className = "wfs-popup__status";
@@ -11652,7 +12002,7 @@ export function startPopup(): void {
   let proDisposer: (() => void) | null = null;
 
   /** Switch the popup to the Pro showcase view. */
-  const showProView = (): void => {
+  const showProView = (focusKeyInput = false): void => {
     if (!proViewHost) return;
     // Hide main content
     root.setAttribute("hidden", "");
@@ -11663,6 +12013,16 @@ export function startPopup(): void {
     proDisposer = renderProView(document, proViewHost, {
       onBack: showMainView,
     });
+
+    if (focusKeyInput) {
+      setTimeout(() => {
+        const input = proViewHost.querySelector("input[data-wfs-pro-key]") as HTMLInputElement | null;
+        if (input) {
+          input.focus();
+          input.scrollIntoView({ behavior: "smooth", block: "center" });
+        }
+      }, 50);
+    }
   };
 
   /** Switch back to the main popup view. */
@@ -11694,40 +12054,65 @@ export function startPopup(): void {
       },
     );
 
-    // Fill the "Get Pro" header slot that renderPopup leaves empty.
+    // Fill the Pro header slots
+    const badgeSlot = root.querySelector("[data-wfs-pro-header-badge-slot]");
     const slot = root.querySelector("[data-wfs-pro-header-slot]");
-    if (slot) {
-      slot.replaceChildren();
-      const proBtn = document.createElement("button");
-      proBtn.type = "button";
-      proBtn.setAttribute("data-wfs-pro-header-btn", "");
+    if (slot && badgeSlot) {
+      const renderHeaderButtons = (entitled: boolean) => {
+        badgeSlot.replaceChildren();
+        slot.replaceChildren();
+        if (entitled) {
+          const proBadge = document.createElement("button");
+          proBadge.type = "button";
+          proBadge.setAttribute("data-wfs-pro-header-btn", "");
+          proBadge.classList.add("is-pro");
+          proBadge.textContent = "✨ Pro Active";
+          proBadge.title = "Pro is active on this device";
+          proBadge.addEventListener("click", () => showProView(false));
+          badgeSlot.appendChild(proBadge);
+        } else {
+          const card = document.createElement("div");
+          card.className = "wfs-popup__header-pro-card";
+
+          const buyBtn = document.createElement("button");
+          buyBtn.type = "button";
+          buyBtn.setAttribute("data-wfs-pro-header-buy", "");
+          buyBtn.textContent = "⚡ Get Pro";
+          buyBtn.title = "View Pro features & pricing";
+          buyBtn.addEventListener("click", () => showProView(false));
+
+          const actBtn = document.createElement("button");
+          actBtn.type = "button";
+          actBtn.setAttribute("data-wfs-pro-header-activate", "");
+          actBtn.textContent = "Already bought? Activate";
+          actBtn.title = "Enter and activate your license key";
+          actBtn.addEventListener("click", () => showProView(true));
+
+          card.appendChild(buyBtn);
+          card.appendChild(actBtn);
+          slot.appendChild(card);
+        }
+      };
+
       void getProState().then(({ state }) => {
-        const entitled = isPro(state);
-        proBtn.classList.toggle("is-pro", entitled);
-        proBtn.textContent = entitled ? "Pro" : "\u26A1 Get Pro";
+        renderHeaderButtons(isPro(state));
       });
       watchProState((state) => {
-        const entitled = isPro(state);
-        proBtn.classList.toggle("is-pro", entitled);
-        proBtn.textContent = entitled ? "Pro" : "\u26A1 Get Pro";
+        renderHeaderButtons(isPro(state));
       });
-      proBtn.addEventListener("click", () => showProView());
-      slot.appendChild(proBtn);
     }
   };
 
   paint();
 
   // The settings controls load their own values, so render them once up front.
-  // `popup`, so the tree arrives without a tab strip and with the Pro teaser card
-  // in place of the full panel — see `renderSettings`.
   //
   // The disposer is deliberately not held. A popup document is destroyed outright
   // when the popup closes, which takes its storage listeners with it; there is no
   // event that fires first and nothing to hang a call on. It is returned so a
   // future surface that does outlive its tree can unsubscribe.
   const settings = mainSections.settings;
-  if (settings) renderSettings(document, settings, { surface: "popup", showProView });
+  if (settings) renderSettings(document, settings, { showProView });
 
   // --- Prompt decision (R9.19, R16.1, R16.2, R16.4, R16.5–R16.8, R16.12) ---
   // Async step after the initial paint: read the Pin_State, compute both
@@ -12704,8 +13089,12 @@ export async function setProState(
 
 /**
  * Call `onChange` whenever the entitlement record is written from another surface,
- * so a live page unlocks the moment a key is accepted in the options tab instead
- * of on the next reload. Returns a disposer, matching `watchSitePrefs`.
+ * so a live page unlocks the moment a key is accepted in the popup instead of on the
+ * next reload. Returns a disposer, matching `watchSitePrefs`.
+ *
+ * A key can now also be accepted in the page itself, from the Pro prompt (§13). That
+ * write goes through `setProState` like any other, so every watcher — the grips, the
+ * lock badges, the popup's Pro view — follows it without knowing where it came from.
  */
 export function watchProState(onChange: (state: ProState) => void): () => void {
   if (typeof chrome === "undefined" || !chrome.storage?.onChanged) return () => {};
@@ -12782,16 +13171,23 @@ export function showToast(doc: Document, text: string): () => void {
  * assignment is refused outright.
  *
  * `Get Pro` is a real anchor, so middle-click and "open in new tab" work and the
- * browser handles the navigation. `I have a key` cannot be: the settings page is
- * an extension URL, and navigating a tab to one from a page is blocked unless the
- * page is listed as web-accessible — which would make the settings reachable from
- * any site on the internet. It asks the worker instead.
+ * browser handles the navigation.
+ *
+ * `Already bought Pro?` takes the key HERE, in the prompt, rather than sending the
+ * reader to the settings page. That was the earlier design and it was worse in two
+ * ways: the settings page is an extension URL, so a content script cannot navigate
+ * to one and the prompt had to ask the service worker to open a tab on its behalf;
+ * and it answered someone who had already paid by closing the video they were
+ * watching and putting a whole settings page in front of them. Activating in place
+ * costs this function a licence field and an `activateLicence` call, and it means
+ * the reader is back on their video with the feature unlocked without ever leaving
+ * the page. The worker's `onMessage` listener went with it — see §1.
  *
  * @returns a disposer, so a teardown closes the prompt with the session.
  */
 export function showProPrompt(
   doc: Document,
-  options: { reason: "capture" | "other"; openOptions: () => void },
+  options: { reason: "capture" | "other" },
 ): () => void {
   for (const stale of Array.from(doc.querySelectorAll(`.${PRO_PROMPT_CLASS}`))) stale.remove();
 
@@ -12807,34 +13203,8 @@ export function showProPrompt(
   card.setAttribute("role", "dialog");
   card.setAttribute("aria-modal", "true");
 
-  const title = doc.createElement("p");
-  title.className = "wfs-pro-prompt__title";
-  title.textContent = options.reason === "capture" ? copy.captureTitle : copy.genericTitle;
-  const titleId = "wfs-pro-prompt-title";
-  title.id = titleId;
-  card.setAttribute("aria-labelledby", titleId);
-  card.appendChild(title);
-
-  const body = doc.createElement("p");
-  body.className = "wfs-pro-prompt__body";
-  body.textContent = copy.body;
-  card.appendChild(body);
-
-  const actions = doc.createElement("div");
-  actions.className = "wfs-pro-prompt__actions";
-
   /**
    * Where the Escape listener goes, and it has to be the WINDOW, not the document.
-   *
-   * The controller registers its own Escape handler on the document in the capture
-   * phase, and it gives back one layer of the mode. Two capture listeners on the
-   * same node run in registration order, and the controller's is registered on
-   * entry — long before this prompt exists — so a document-level listener here
-   * would run second and `stopPropagation` would arrive too late: one press would
-   * close the prompt AND drop the panel underneath it.
-   *
-   * The window is the first node in the capture path, ahead of the document, so a
-   * capturing listener here runs first whatever order they were registered in.
    */
   const keyHost: EventTarget = doc.defaultView ?? doc;
 
@@ -12853,45 +13223,264 @@ export function showProPrompt(
   }
   keyHost.addEventListener("keydown", onKey, true);
 
+  // Close button (X)
+  const closeBtn = doc.createElement("button");
+  closeBtn.type = "button";
+  closeBtn.className = "wfs-pro-prompt__close";
+  closeBtn.setAttribute("aria-label", "Close");
+  closeBtn.textContent = "\u2715";
+  closeBtn.addEventListener("click", () => close());
+  card.appendChild(closeBtn);
+
+  // Badge
+  const badge = doc.createElement("div");
+  badge.className = "wfs-pro-prompt__badge";
+  badge.textContent = "\u2728 PRO UPGRADE \u00B7 LIFETIME";
+  card.appendChild(badge);
+
+  // Title
+  const title = doc.createElement("h2");
+  title.className = "wfs-pro-prompt__title";
+  title.textContent = options.reason === "capture" ? copy.captureTitle : copy.genericTitle;
+  const titleId = "wfs-pro-prompt-title";
+  title.id = titleId;
+  card.setAttribute("aria-labelledby", titleId);
+  card.appendChild(title);
+
+  // Body / Subtitle
+  const body = doc.createElement("p");
+  body.className = "wfs-pro-prompt__body";
+  body.textContent = copy.body;
+  card.appendChild(body);
+
+  // 2-Column Features Grid
+  const grid = doc.createElement("div");
+  grid.className = "wfs-pro-prompt__grid";
+
+  const featureItems: Array<{ icon: string; title: string; desc: string }> = [
+    { icon: "\uD83D\uDCF8", title: "Instant Screenshots", desc: "Save clean frames & timestamps" },
+    { icon: "\u2194\uFE0F", title: "Resizable Panels", desc: "Custom widths for comments & chat" },
+    { icon: "\uD83D\uDCA1", title: "Ambient Glow", desc: "Soft light synced to video colors" },
+    { icon: "\uD83D\uDCDD", title: "Transcript Dock", desc: "Pinned searchable transcript" },
+    { icon: "\u2B50", title: "Channel Memory", desc: "Auto-apply preferred layout" },
+    { icon: "\uD83C\uDFA8", title: "Custom Themes", desc: "Custom bar colors & gradients" },
+  ];
+
+  for (const item of featureItems) {
+    const gridItem = doc.createElement("div");
+    gridItem.className = "wfs-pro-prompt__grid-item";
+
+    const iconSpan = doc.createElement("span");
+    iconSpan.className = "icon";
+    iconSpan.textContent = item.icon;
+
+    const textDiv = doc.createElement("div");
+    const strong = doc.createElement("strong");
+    strong.textContent = item.title;
+    const descSpan = doc.createElement("span");
+    descSpan.style.display = "block";
+    descSpan.style.color = "#94a3b8";
+    descSpan.style.fontSize = "10.5px";
+    descSpan.textContent = item.desc;
+
+    textDiv.appendChild(strong);
+    textDiv.appendChild(descSpan);
+
+    gridItem.appendChild(iconSpan);
+    gridItem.appendChild(textDiv);
+    grid.appendChild(gridItem);
+  }
+  card.appendChild(grid);
+
+  // Trust Guarantee Bar
+  const trust = doc.createElement("div");
+  trust.className = "wfs-pro-prompt__trust";
+  const trustItems = ["\uD83D\uDEE1\uFE0F 7-Day Guarantee", "\u26A1 Instant Delivery", "\uD83D\uDD12 Secure Checkout"];
+  trustItems.forEach((text, idx) => {
+    if (idx > 0) {
+      const dot = doc.createElement("span");
+      dot.textContent = "\u2022";
+      dot.style.opacity = "0.5";
+      trust.appendChild(dot);
+    }
+    const itemSpan = doc.createElement("span");
+    itemSpan.textContent = text;
+    trust.appendChild(itemSpan);
+  });
+  card.appendChild(trust);
+
+  // Actions Container
+  const actions = doc.createElement("div");
+  actions.className = "wfs-pro-prompt__actions";
+
+  // Primary Buy CTA (Direct Checkout)
   const buy = doc.createElement("a");
   buy.className = "wfs-pro-prompt__action is-primary";
   buy.href = PRO_PURCHASE_URL;
   buy.target = "_blank";
   buy.rel = "noopener noreferrer";
-  buy.textContent = copy.buy;
+  buy.textContent = `\u26A1 ${copy.buy} \u2192`;
   buy.addEventListener("click", () => close());
   actions.appendChild(buy);
 
+  // Secondary Learn More link pointing to website
+  const learnMore = doc.createElement("a");
+  learnMore.className = "wfs-pro-prompt__link-more";
+  learnMore.href = PRO_LEARN_MORE_URL;
+  learnMore.target = "_blank";
+  learnMore.rel = "noopener noreferrer";
+  learnMore.textContent = `\uD83C\uDF10 ${copy.learnMore} \u2192`;
+  learnMore.addEventListener("click", () => close());
+  actions.appendChild(learnMore);
+
+  // Footer row for key activation disclosure and dismiss
+  const footRow = doc.createElement("div");
+  footRow.className = "wfs-pro-prompt__foot-row";
+
   const haveKey = doc.createElement("button");
   haveKey.type = "button";
-  haveKey.className = "wfs-pro-prompt__action";
-  haveKey.textContent = copy.haveKey;
+  haveKey.className = "wfs-pro-prompt__foot-btn";
+  haveKey.textContent = copy.haveKeyHeading;
   haveKey.addEventListener("click", () => {
-    options.openOptions();
-    close();
+    actions.replaceChildren();
+
+    const form = doc.createElement("div");
+    form.style.display = "flex";
+    form.style.flexDirection = "column";
+    form.style.gap = "8px";
+    form.style.width = "100%";
+    form.style.marginTop = "4px";
+
+    const formHeader = doc.createElement("p");
+    formHeader.style.margin = "0 0 4px";
+    formHeader.style.fontSize = "12px";
+    formHeader.style.fontWeight = "600";
+    formHeader.style.color = "#ffffff";
+    formHeader.textContent = copy.haveKeyHeading;
+    form.appendChild(formHeader);
+
+    const input = doc.createElement("input");
+    input.type = "text";
+    input.placeholder = copy.keyPlaceholder;
+    input.maxLength = MAX_LICENCE_KEY_LENGTH;
+    input.autocomplete = "off";
+    input.spellcheck = false;
+    input.style.width = "100%";
+    input.style.boxSizing = "border-box";
+    input.style.minHeight = "36px";
+    input.style.padding = "6px 10px";
+    input.style.borderRadius = "8px";
+    input.style.border = "1px solid rgba(255, 255, 255, 0.2)";
+    input.style.background = "#12111c";
+    input.style.color = "#ffffff";
+    input.style.fontSize = "13px";
+    input.style.fontFamily = 'ui-monospace, "SF Mono", Menlo, Consolas, monospace';
+
+    const btnRow = doc.createElement("div");
+    btnRow.style.display = "flex";
+    btnRow.style.gap = "8px";
+    btnRow.style.justifyContent = "flex-end";
+
+    const activateBtn = doc.createElement("button");
+    activateBtn.type = "button";
+    activateBtn.className = "wfs-pro-prompt__action is-primary";
+    activateBtn.style.padding = "8px 16px";
+    activateBtn.style.fontSize = "13px";
+    activateBtn.textContent = copy.activate;
+
+    const cancelBtn = doc.createElement("button");
+    cancelBtn.type = "button";
+    cancelBtn.className = "wfs-pro-prompt__action";
+    cancelBtn.style.padding = "8px 14px";
+    cancelBtn.style.fontSize = "13px";
+    cancelBtn.textContent = "Cancel";
+    cancelBtn.addEventListener("click", () => close());
+
+    const statusMsg = doc.createElement("p");
+    statusMsg.style.fontSize = "12px";
+    statusMsg.style.margin = "0";
+    statusMsg.style.color = "#ff5252";
+
+    const doActivate = (): void => {
+      const key = normalizeLicenceKey(input.value);
+      if (!licenceKeyLooksWellFormed(key)) {
+        statusMsg.textContent = copy.malformed;
+        return;
+      }
+      activateBtn.disabled = true;
+      activateBtn.textContent = copy.checking;
+      statusMsg.textContent = "";
+
+      void (async () => {
+        const now = Date.now();
+        const { validation: result, instanceId } = await activateLicence(key);
+        const next = applyValidation(
+          { ...DEFAULT_PRO_STATE, key, instanceId },
+          result,
+          now,
+        );
+        const written = await setProState(next);
+        if (!written.ok) {
+          statusMsg.textContent = `Could not save key: ${written.error}`;
+          activateBtn.disabled = false;
+          activateBtn.textContent = copy.activate;
+          return;
+        }
+        if (result.outcome === "active") {
+          title.textContent = "\u2728 Pro Unlocked!";
+          body.textContent = "All Pro features are now active on this video.";
+          if (grid.parentElement) grid.remove();
+          if (trust.parentElement) trust.remove();
+          actions.replaceChildren();
+          const doneBtn = doc.createElement("button");
+          doneBtn.type = "button";
+          doneBtn.className = "wfs-pro-prompt__action is-primary";
+          doneBtn.textContent = "Continue Watching";
+          doneBtn.addEventListener("click", () => close());
+          actions.appendChild(doneBtn);
+        } else {
+          activateBtn.disabled = false;
+          activateBtn.textContent = copy.activate;
+          statusMsg.textContent = refusalMessage(result, copy);
+        }
+      })();
+    };
+
+    activateBtn.addEventListener("click", doActivate);
+    input.addEventListener("keydown", (e) => {
+      if ((e as KeyboardEvent).key === "Enter") {
+        e.preventDefault();
+        doActivate();
+      }
+    });
+
+    btnRow.appendChild(cancelBtn);
+    btnRow.appendChild(activateBtn);
+    form.appendChild(input);
+    form.appendChild(statusMsg);
+    form.appendChild(btnRow);
+    actions.appendChild(form);
+    input.focus();
   });
-  actions.appendChild(haveKey);
 
   const dismiss = doc.createElement("button");
   dismiss.type = "button";
-  dismiss.className = "wfs-pro-prompt__action";
+  dismiss.className = "wfs-pro-prompt__foot-btn";
   dismiss.textContent = copy.dismiss;
   dismiss.addEventListener("click", () => close());
-  actions.appendChild(dismiss);
+
+  footRow.appendChild(haveKey);
+  footRow.appendChild(dismiss);
+  actions.appendChild(footRow);
 
   card.appendChild(actions);
   backdrop.appendChild(card);
 
-  // A click on the backdrop dismisses, the same as `Not now`. Guarded on the
-  // target being the backdrop itself, or a click that started inside the card and
-  // ended on the edge of it would close the prompt mid-press.
   backdrop.addEventListener("click", (event) => {
     if (event.target === backdrop) close();
   });
 
   doc.body.appendChild(backdrop);
-  // Focus lands on the primary action rather than the card, so a keyboard reader
-  // arrives on the thing the prompt is for and one `Tab` reaches the way out.
   buy.focus();
 
   return close;

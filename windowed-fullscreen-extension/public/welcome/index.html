@@ -8,11 +8,11 @@
       /*
        * The post-install page. Thanks, one ask, four hints.
        *
-       * A stylesheet of its own rather than the options page's, even though the
-       * palette is shared. The two pages want opposite type scales: settings are a
-       * dense list of controls read at 13-14 px, and this is a greeting read once
-       * at arm's length. Sharing one sheet meant every rule here had to be an
-       * override of a rule meant for a form row.
+       * A stylesheet of its own rather than the settings one, even though the palette
+       * is shared. The two want opposite type scales: settings are a dense list of
+       * controls read at 13-14 px, and this is a greeting read once at arm's length.
+       * Sharing one sheet meant every rule here had to be an override of a rule meant
+       * for a form row.
        *
        * All strings come from HELP_COPY in the source (§13). This shell carries an
        * empty container and the styling only, so no wording can drift into an HTML
@@ -21,7 +21,7 @@
       :root {
         color-scheme: dark light;
 
-        /* Same dark theater palette as the options page and popup. */
+        /* Same dark theater palette as the popup. */
         --wfs-bg: #1a1a1e;
         --wfs-surface: #242428;
         --wfs-elevated: #2c2c31;

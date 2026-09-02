@@ -1004,16 +1004,16 @@ async function main() {
   // ---------------------------------------------------------------------------
   // STAR CONTROLS ACCESSIBILITY — R6.2, R6.7, R6.11
   //
-  // These checks inject the rating footer into the live page (it's normally only
-  // in the popup/options), run it under a forced reduced-motion media query
-  // emulation via CDP, then measure transition-duration, outline-width on
-  // :focus-visible, and hit-area dimensions. The footer is already bundled in the
-  // content script's Settings_UI code, so we call it from the injected bundle.
+  // These checks inject the rating footer into the live page (it normally renders
+  // only in the popup), run it under a forced reduced-motion media query emulation
+  // via CDP, then measure transition-duration, outline-width on :focus-visible, and
+  // hit-area dimensions. The footer is already bundled in the content script's
+  // Settings_UI code, so we call it from the injected bundle.
   //
-  // Since the popup and options page are separate surfaces that require Chrome's
-  // extension API context to render fully, we test the star control CSS properties
-  // by emulating reduced-motion in the page and injecting a standalone star group
-  // that reuses the same classes the real footer uses.
+  // The popup needs Chrome's extension API context to render at all, which this
+  // script does not have, so the star control CSS is tested by emulating
+  // reduced-motion in the page and injecting a standalone star group that reuses the
+  // same classes the real footer uses.
   // ---------------------------------------------------------------------------
   {
     // Emulate prefers-reduced-motion: reduce via CDP.

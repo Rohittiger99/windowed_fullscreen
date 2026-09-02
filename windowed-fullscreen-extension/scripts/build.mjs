@@ -27,11 +27,28 @@ const watch = process.argv.includes("--watch");
 // expose the full source, so they are dev-only and never reach the store zip.
 const sourcemap = watch;
 
+// Minify release builds, never watch builds.
+//
+// This is a runtime cost, not just a download one, and it is the reason it is on.
+// The content script is injected into EVERY youtube.com page, and Chrome has to
+// parse the whole bundle before any of it runs. Unminified, that was 244 kB of a
+// heavily commented single source file — the comments are load-bearing for whoever
+// edits this, and pure dead weight for the browser that has to read past them on
+// every page load and every in-app navigation that re-injects.
+//
+// Off under --watch so DevTools keeps readable identifiers while developing; the
+// same split `sourcemap` above already uses.
+//
+// `keepNames` is deliberate and is worth the handful of bytes it costs: it preserves
+// `Function.prototype.name` and class names, so nothing that reads a name at runtime
+// — a diagnostic, an error message, a `constructor.name` — can be silently changed
+// by a renaming pass. Cheaper than proving no such reader exists in 13,000 lines.
+const minify = !watch;
+
 /** One bundle per surface: the exported entry function and where it lands. */
 const surfaces = [
   { start: "startContentScript", outfile: "content/index.js", format: "iife" },
   { start: "startServiceWorker", outfile: "background/service-worker.js", format: "esm" },
-  { start: "startOptionsPage", outfile: "options/main.js", format: "esm" },
   { start: "startPopup", outfile: "popup/main.js", format: "esm" },
   { start: "startWelcomePage", outfile: "welcome/main.js", format: "esm" },
 ];
@@ -53,6 +70,8 @@ function optionsFor({ start, outfile, format }) {
     target: ["chrome116"],
     platform: "browser",
     sourcemap,
+    minify,
+    keepNames: minify,
     logLevel: "info",
   };
 }

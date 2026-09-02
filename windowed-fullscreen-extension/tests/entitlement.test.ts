@@ -27,6 +27,7 @@ import {
   normalizeProState,
   PRO_KEY,
   PRO_PURCHASE_URL,
+  PRO_LEARN_MORE_URL,
   PRO_RETRY_INTERVAL_MS,
   PRO_REVALIDATE_INTERVAL_MS,
   proCheckDue,
@@ -741,15 +742,18 @@ test("the licence API and the checkout link are in the same mode", async () => {
   const apiTest = apiUrl?.startsWith("https://test.dodopayments.com/") ?? false;
   assert.ok(apiLive || apiTest, `the licence API host is neither mode: ${apiUrl}`);
 
-  // Checked with the live prefix rather than the test one, because a substring
-  // search for the API host does not catch `test.checkout.dodopayments.com`.
-  const checkoutLive = PRO_PURCHASE_URL.startsWith("https://live.checkout.dodopayments.com/");
+  const checkoutLive =
+    PRO_PURCHASE_URL.startsWith("https://live.checkout.dodopayments.com/") ||
+    PRO_PURCHASE_URL.startsWith("https://checkout.dodopayments.com/");
+  const checkoutTest = PRO_PURCHASE_URL.startsWith("https://test.checkout.dodopayments.com/");
 
-  assert.equal(
-    apiLive,
-    checkoutLive,
-    `the licence API is ${apiLive ? "live" : "test"} mode but the checkout link is ` +
-      `${checkoutLive ? "live" : "test"} mode: ${PRO_PURCHASE_URL}`,
+  assert.ok(
+    (apiLive && checkoutLive) || (apiTest && checkoutTest),
+    `API host (${apiUrl}) and checkout link (${PRO_PURCHASE_URL}) are not in the same mode`,
+  );
+  assert.ok(
+    PRO_LEARN_MORE_URL.includes("/product/windowedfullscreen#pricing"),
+    `learn more URL points to product pricing section: ${PRO_LEARN_MORE_URL}`,
   );
 });
 

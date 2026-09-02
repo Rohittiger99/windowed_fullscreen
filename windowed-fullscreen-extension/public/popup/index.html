@@ -90,17 +90,27 @@
       /* --- Header --- */
       .wfs-popup__header {
         display: flex;
+        flex-direction: column;
+        gap: 10px;
+        margin-bottom: 12px;
+        padding: 10px 12px;
+        background: var(--wfs-surface);
+        border: 1px solid var(--wfs-border);
+        border-radius: 12px;
+        box-shadow: var(--wfs-shadow);
+      }
+
+      .wfs-popup__header-top {
+        display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 12px;
-        margin-bottom: 12px;
-        padding-bottom: 2px;
+        gap: 10px;
       }
 
       .wfs-popup__brand {
         display: flex;
         flex-direction: column;
-        gap: 3px;
+        gap: 2px;
         min-width: 0;
       }
 
@@ -111,7 +121,7 @@
       }
 
       .wfs-popup__title {
-        font-size: 15px;
+        font-size: 14.5px;
         font-weight: 700;
         letter-spacing: -0.2px;
         color: var(--wfs-text);
@@ -144,12 +154,6 @@
         color: var(--wfs-on);
       }
 
-      .wfs-popup__header-actions {
-        display: flex;
-        align-items: center;
-        flex: none;
-      }
-
       .wfs-pulse-dot {
         width: 6px;
         height: 6px;
@@ -169,47 +173,118 @@
         flex: none;
       }
 
-      /* "Get Pro" button in the popup header for Free Users: vibrant, highlighted gradient */
-      [data-wfs-pro-header-btn] {
+      .wfs-popup__header-badge-slot {
+        display: flex;
+        align-items: center;
+        flex: none;
+      }
+
+      .wfs-popup__header-actions {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+      }
+
+      .wfs-popup__header-pro-card {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        width: 100%;
+        background: linear-gradient(180deg, rgba(147, 51, 234, 0.08) 0%, rgba(99, 102, 241, 0.04) 100%);
+        border: 1px solid rgba(168, 85, 247, 0.25);
+        border-radius: 10px;
+        padding: 9px 10px;
+      }
+
+      [data-wfs-pro-header-buy] {
+        flex: 1;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 7px 12px;
+        font: inherit;
+        font-size: 12.5px;
+        font-weight: 700;
+        letter-spacing: 0.01em;
+        color: #ffffff;
+        background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 50%, #a855f7 100%);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        border-radius: 8px;
+        cursor: pointer;
+        white-space: nowrap;
+        box-shadow: 0 2px 10px rgba(99, 102, 241, 0.4);
+        transition: transform 120ms ease, box-shadow 140ms ease, filter 140ms ease;
+      }
+
+      [data-wfs-pro-header-buy]:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 4px 14px rgba(99, 102, 241, 0.55);
+        filter: brightness(1.08);
+      }
+
+      [data-wfs-pro-header-buy]:active {
+        transform: scale(0.98);
+      }
+
+      [data-wfs-pro-header-activate] {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        padding: 6px 10px;
+        font: inherit;
+        font-size: 11px;
+        font-weight: 600;
+        color: #c7d2fe;
+        background: rgba(99, 102, 241, 0.12);
+        border: 1px solid rgba(129, 140, 248, 0.25);
+        border-radius: 8px;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+      }
+
+      [data-wfs-pro-header-activate]:hover {
+        background: rgba(99, 102, 241, 0.22);
+        color: #ffffff;
+        border-color: rgba(129, 140, 248, 0.4);
+      }
+
+      /* When user is Pro: subtle, active status */
+      [data-wfs-pro-header-btn].is-pro {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
         padding: 4px 10px;
         font: inherit;
         font-size: 11px;
         font-weight: 700;
-        letter-spacing: 0.02em;
-        color: #fff;
-        background: linear-gradient(135deg, #6366f1, #8b5cf6);
-        border: none;
-        border-radius: 14px;
+        color: #10b981;
+        background: rgba(16, 185, 129, 0.12);
+        border: 1px solid rgba(16, 185, 129, 0.35);
+        border-radius: 12px;
         cursor: pointer;
         white-space: nowrap;
-        box-shadow: 0 2px 8px rgba(99, 102, 241, 0.35);
-        transition: transform 100ms ease, box-shadow 140ms ease, background 140ms ease;
-      }
-
-      [data-wfs-pro-header-btn]:hover {
-        transform: translateY(-1px);
-        box-shadow: 0 4px 12px rgba(99, 102, 241, 0.45);
-        background: linear-gradient(135deg, #4f46e5, #7c3aed);
-      }
-
-      /* When user is Pro: subtle, greyish in colour */
-      [data-wfs-pro-header-btn].is-pro {
-        color: var(--wfs-secondary);
-        background: var(--wfs-alt);
-        border: 1px solid var(--wfs-border);
-        box-shadow: none;
-        font-weight: 600;
+        transition: background 140ms ease, transform 100ms ease;
       }
 
       [data-wfs-pro-header-btn].is-pro:hover {
-        background: var(--wfs-surface);
-        color: var(--wfs-text);
-        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+        background: rgba(16, 185, 129, 0.22);
+        transform: translateY(-1px);
       }
 
+      [data-wfs-pro-header-buy]:focus-visible,
+      [data-wfs-pro-header-activate]:focus-visible,
+      [data-wfs-pro-activate-btn]:focus-visible,
       [data-wfs-pro-header-btn]:focus-visible {
         outline: none;
         box-shadow: var(--wfs-ring);
+      }
+
+      @keyframes wfsFadeIn {
+        from { opacity: 0; transform: translateY(-4px); }
+        to { opacity: 1; transform: translateY(0); }
       }
 
       /* --- Status card ------------------------------------------------------ */
@@ -448,11 +523,12 @@
       }
 
       /* --- Shared regions: stars, prompts, footer, help ---------------------- */
-      /* These class names are surface-agnostic on purpose: §11 renders the same
-         markup on the options page, which carries its own copy of this block.
-         Every region is a single wrapping column, which is what keeps the
-         popup's 320 px width free of horizontal scrolling and keeps each region
-         inside its 120 px height budget. */
+      /* The class names stay surface-agnostic even though there is one surface left:
+         §11 builds this markup, and a stylesheet that renamed them to something
+         popup-specific would be asserting that no other surface can ever render it.
+         Every region is a single wrapping column, which is what keeps the popup's
+         320 px width free of horizontal scrolling and keeps each region inside its
+         120 px height budget. */
       .wfs-prompt,
       .wfs-help {
         display: flex;
@@ -591,9 +667,8 @@
 
       /* --- Tips: a collapsed disclosure ------------------------------------- */
       /* Its own section with the shared divider, so it never reads as a sub-item
-         of the shortcut row below it. Collapsed, so it costs one line at rest —
-         which matters more here than on the options page, since every line spent
-         is a line of the popup's height budget. */
+         of the shortcut row below it. Collapsed, so it costs one line at rest:
+         every line spent here is a line of the popup's height budget. */
       .wfs-tips > summary {
         cursor: pointer;
         list-style: none;
@@ -641,12 +716,12 @@
 
       /* Rows of controls (dismiss, defer, links) wrap rather than overflow. */
       .wfs-actions,
-      /* The rating prompt's own actions row. It was absent from this file while
-         the options page carried it, so the row rendered as a plain block: the
-         two anchors are `inline-flex` and §11 builds them with no whitespace
-         between, which left no gap at all for the negative margins above to eat
-         into. Three controls do not fit across 320 px, so wrapping is what keeps
-         the last one on the surface rather than off its edge. */
+      /* The rating prompt's own actions row. It was once missing from this file
+         entirely, so the row rendered as a plain block: the two anchors are
+         `inline-flex` and §11 builds them with no whitespace between, which left no
+         gap at all for the negative margins above to eat into. Three controls do not
+         fit across 320 px, so wrapping is what keeps the last one on the surface
+         rather than off its edge. */
       .wfs-prompt__actions {
         display: flex;
         flex-wrap: wrap;
@@ -702,8 +777,8 @@
          underline, and only a selector carrying both the id and the class outranks
          it.
 
-         `margin: 0` is not optional either, and is the same fix the options page
-         carries. `#settings a` sets `margin: -4px -8px` so prose links can sit
+         `margin: 0` is not optional either. `#settings a` sets `margin: -4px -8px`
+         so prose links can sit
          flush in a paragraph; on adjacent controls in the actions row those insets
          cancelled the 8 px gap and then pulled each control 8 px under the one
          before it, so "Rate it" shipped half-hidden behind "Something is wrong". */
@@ -753,7 +828,7 @@
         color: var(--wfs-secondary);
       }
 
-      /* Collapsed help region in the popup; the options page renders it open. */
+      /* The help region is collapsed at rest, for the popup's height budget. */
       .wfs-help summary {
         cursor: pointer;
         font-size: 12px;
@@ -846,24 +921,19 @@
       }
 
       /*
-       * Pro: one row, and the per-channel rules.
+       * Pro: the teaser row, the showcase view, and the per-channel rules.
        *
-       * The MIRROR of the block in `options/index.html`, and deliberately a much
-       * shorter one. §11 renders one tree into two hand-written stylesheets and
-       * nothing checks that they agree — the unit tests see structure, not layout —
-       * so a change here has to be made there too. The selectors are not
-       * copy-pasteable between the files: this one scopes by `#settings` and the
-       * options page by `#app`, which is exactly the asymmetry that once shipped a
-       * rating prompt whose primary control sat half-hidden behind its sibling on
-       * one surface and not the other.
+       * THIS IS THE ONLY SETTINGS STYLESHEET. It used to be one of two: §11 rendered
+       * the same tree into `options/index.html` and this file, neither checked that
+       * they agreed, and the unit tests see structure rather than layout — so a CSS
+       * fix landed in both or it had not landed. The selectors were not even
+       * copy-pasteable between them, because that file scoped by `#app` and this one
+       * by `#settings`. That asymmetry shipped a rating prompt whose primary control
+       * sat half-hidden behind its sibling on one surface and not the other.
        *
-       * WHAT THIS FILE NO LONGER NEEDS: the price, the feature list, the licence
-       * field, the Activate and Remove buttons, and the privacy note. The popup
-       * renders `renderProSummary` — one sentence and one button — because at 320 px
-       * over a video the reader is part-way through, a feature list is unreadable
-       * and a 36-character key is unpasteable. All of that lives on the settings
-       * page's Pro panel now, and this row is the door to it. Styling for a control
-       * this surface does not render is dead weight that reads as a promise.
+       * The options page was removed in 2.0.0 and the hazard went with it. There is
+       * nothing to mirror. If a second settings surface is ever added, share this
+       * stylesheet rather than copying it.
        *
        * The id prefix is load-bearing wherever a link, a label, or a paragraph is
        * involved: `#settings a`, `#settings label` and `#settings p` carry an id, so
@@ -1061,33 +1131,6 @@
       #settings .wfs-switch input:checked + .wfs-slider::before {
         transform: translateX(16px);
         background: #ffffff;
-      }
-
-      /* Backup & Restore Buttons */
-      #settings [data-wfs-backup-row] {
-        display: flex;
-        gap: 8px;
-        margin-top: 4px;
-      }
-
-      #settings [data-wfs-backup-row] button {
-        flex: 1;
-        padding: 8px 10px;
-        font-size: 11.5px;
-        font-weight: 600;
-        border-radius: 6px;
-        border: 1px solid var(--wfs-border);
-        background: var(--wfs-surface);
-        color: var(--wfs-text);
-        cursor: pointer;
-        text-align: center;
-        transition: all 140ms ease;
-      }
-
-      #settings [data-wfs-backup-row] button:hover {
-        border-color: var(--wfs-accent);
-        background: var(--wfs-accent-dim);
-        color: var(--wfs-accent-text);
       }
 
       #settings .wfs-card-btn {
@@ -1727,6 +1770,33 @@
         background: linear-gradient(135deg, #4f46e5, #7c3aed);
       }
 
+      #pro-view [data-wfs-pro-learn-more] {
+        display: block;
+        text-align: center;
+        font-size: 11.5px;
+        color: #818cf8;
+        text-decoration: none;
+        margin-top: 7px;
+        cursor: pointer;
+        transition: color 120ms ease;
+      }
+
+      #pro-view [data-wfs-pro-learn-more]:hover {
+        color: #a5b4fc;
+        text-decoration: underline;
+      }
+
+      #pro-view [data-wfs-pro-trust] {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        font-size: 10px;
+        color: var(--wfs-secondary);
+        margin: 8px 0 10px;
+        text-align: center;
+      }
+
       /* Manage button */
       #pro-view [data-wfs-pro-manage] {
         min-height: 28px;
@@ -1754,10 +1824,17 @@
       }
 
       #pro-view [data-wfs-pro-form-label] {
-        margin: 0 0 6px;
-        font-size: 11px;
+        margin: 0 0 2px;
+        font-size: 11.5px;
         font-weight: 600;
-        color: var(--wfs-muted);
+        color: var(--wfs-text);
+      }
+
+      #pro-view [data-wfs-pro-form-hint] {
+        margin: 0 0 8px;
+        font-size: 10.5px;
+        color: var(--wfs-secondary);
+        line-height: 1.35;
       }
 
       #pro-view [data-wfs-pro-inline-status] {
