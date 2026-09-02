@@ -29,8 +29,6 @@ import {
   DOCK_IDS,
   getSitePrefs,
   modeFor,
-  newChannelRule,
-  normalizeChannelRules,
   normalizeDockWidth,
   normalizeDockWidths,
   normalizeSitePrefs,
@@ -139,7 +137,7 @@ test("a patch merges rather than replacing, because the settings UI writes one f
 // --- No migration step ----------------------------------------------------
 
 test("reading an old record does not rewrite it", async () => {
-  // A record from before `dockWidths`, `channels` and the Pro fields existed.
+  // A record from before `dockWidths` and the Pro fields existed.
   const legacy = { autoApply: true, scrollable: true, panelWidth: 400 };
   const { data, writes } = fakeStorage({ "site:youtube": legacy });
 
@@ -187,13 +185,6 @@ test("dockWidths wins over the old sibling fields when both are present", () => 
   assert.equal(widths.transcript, 420);
 });
 
-test("a bare channel string upgrades to a full rule", () => {
-  const rules = normalizeChannelRules(["UC_legacy_id"]);
-
-  assert.equal(rules.length, 1);
-  assert.deepEqual(rules[0], newChannelRule("UC_legacy_id"));
-});
-
 // --- Per-field coercion ---------------------------------------------------
 
 test("autoApply is the presence test: without it there are no preferences here", () => {
@@ -225,7 +216,20 @@ test("a field an older version never wrote reads as its default, not as corrupti
   assert.equal(prefs.captureFilenameTemplate, DEFAULT_SITE_PREFS.captureFilenameTemplate);
   assert.equal(prefs.captureBurnTimestamp, DEFAULT_SITE_PREFS.captureBurnTimestamp);
   assert.deepEqual(prefs.dockWidths, DEFAULT_DOCK_WIDTHS);
-  assert.deepEqual(prefs.channels, []);
+});
+
+test("a field no longer on the record is ignored rather than carried through", () => {
+  // 2.0.x stored a `channels` list for the per-channel rules. Those are gone, and
+  // this pins the reason no migration step was needed: `normalizeSitePrefs` names
+  // every field it wants, so an unrecognised one is never copied out.
+  const prefs = normalizeSitePrefs({
+    autoApply: true,
+    channels: [{ id: "@one", scrollable: true, panel: true }],
+  });
+
+  assert.ok(prefs, "an old record is still usable");
+  assert.equal(prefs.autoApply, true);
+  assert.ok(!("channels" in prefs), "a removed field survived into the normalized prefs");
 });
 
 test("one damaged field does not take the rest of the record with it", () => {
@@ -233,7 +237,6 @@ test("one damaged field does not take the rest of the record with it", () => {
     autoApply: true,
     scrollable: "yes",
     letterboxColor: 17,
-    channels: "not-an-array",
     dockWidths: "not-an-object",
     cursorAutoHide: null,
   });
@@ -242,7 +245,6 @@ test("one damaged field does not take the rest of the record with it", () => {
   assert.equal(prefs.autoApply, true);
   assert.equal(prefs.scrollable, DEFAULT_SITE_PREFS.scrollable);
   assert.equal(prefs.letterboxColor, DEFAULT_SITE_PREFS.letterboxColor);
-  assert.deepEqual(prefs.channels, []);
   assert.deepEqual(prefs.dockWidths, DEFAULT_DOCK_WIDTHS);
   assert.equal(prefs.cursorAutoHide, DEFAULT_SITE_PREFS.cursorAutoHide);
 });

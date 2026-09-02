@@ -20,7 +20,7 @@ It covers a limited number of devices, and **Remove key** hands that device's sl
 the key can be used elsewhere. The key is re-checked roughly once a fortnight and **the
 check fails open** — if it cannot complete, nothing changes and you keep every feature.
 
-**Nothing that was free has moved behind the paywall.** All eight paid features below are
+**Nothing that was free has moved behind the paywall.** All seven paid features below are
 new work.
 
 1. **Dock resizing** — drag the comment panel, live chat and transcript columns
@@ -28,25 +28,23 @@ new work.
    arrow keys, `Shift` for a bigger step. Widths are remembered per site.
 2. **Transcript dock** — the interactive transcript as its own docked column, beside the
    video rather than in the rail the mode hides.
-3. **Channel profiles** — per-channel rules carrying the mode, whether the panel is docked,
-   and the dock widths. Matched on the channel's handle, so a rename does not quietly break
-   one. Capped at 50 rules per site.
-4. **Frame capture** — save the current frame at the video's own resolution, with no
+3. **Frame capture** — save the current frame at the video's own resolution, with no
    interface in the picture. A per-site setting copies it to the clipboard instead of
    downloading it.
-5. **Custom filename templates** — `{title}`, `{date}`, `{time}`, `{timestamp}`, `{site}`.
-6. **Burned timestamp** — stamp the playback time into the corner of a captured frame.
-7. **Ambient glow** — letterbox bars lit in real time from the video's own edge colours,
+4. **Custom filename templates** — `{title}`, `{channel}`, `{date}`, `{time}`,
+   `{timestamp}`, `{site}`.
+5. **Burned timestamp** — stamp the playback time into the corner of a captured frame.
+6. **Ambient glow** — letterbox bars lit in real time from the video's own edge colours,
    sampled on the GPU.
-8. **Custom letterbox palettes** — 5 solid cinema swatches, 6 gradient mix themes, and a
+7. **Custom letterbox palettes** — 5 solid cinema swatches, 6 gradient mix themes, and a
    colour picker with hex input.
 
 Selecting a custom colour or theme turns ambient glow off, and enabling glow clears the
 custom colour. The two would otherwise fight over one property.
 
 The capture button is shown whether or not you have a licence: pressing it without one
-opens a prompt naming the price rather than doing nothing. The drag grips and the rules
-list are simply absent without one.
+opens a prompt naming the price rather than doing nothing. The drag grips are simply absent
+without one.
 
 ### Added — free
 
@@ -90,9 +88,8 @@ list are simply absent without one.
   no longer means leaving the video.
 - **Five controls beside YouTube's fullscreen button**, up from two: capture, copy link,
   transcript, windowed mode, comment panel.
-- **The settings are grouped into four cards** — *Viewing Modes & Playback*,
-  *Letterbox Themes*, *Media & Frame Capture*, and *Auto-Fullscreen Channels* — instead of
-  one flat column.
+- **The settings are grouped into three cards** — *Viewing Modes & Playback*,
+  *Letterbox Themes* and *Media & Frame Capture* — instead of one flat column.
 - **A refused key says which kind of refusal it was.** Three messages where there had been
   one: check what you pasted, this key is on the maximum number of devices, or this key is
   no longer active. The single message had a real cost — a key refused for the activation
@@ -115,12 +112,6 @@ list are simply absent without one.
 
 ### Fixed
 
-- **Per-channel auto-apply now actually fires.** A rule was checked at four moments —
-  preferences loading, the licence record arriving, the player-bar button appearing, and the
-  video changing — and all four happen before YouTube has put the channel name on the page.
-  The channel read as unknown, so no rule matched, and nothing looked a second time. It now
-  waits up to eight seconds for the page to name its channel, and gives up in the console
-  rather than watching forever.
 - **The padlock beside a Pro setting now disappears once Pro is active.** The checkbox
   unlocked and became usable, but the padlock next to it stayed, so a setting you had paid
   for still looked locked.

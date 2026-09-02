@@ -112,7 +112,7 @@ reader out of the mode for no reason. `tests/adapters.test.ts` asserts this.
 
 ## Bounded loops only
 
-Detection, re-render, class re-assertion, geometry repair, channel-rule matching, resume
+Detection, re-render, class re-assertion, geometry repair, resume
 and the transcript open each have an attempt cap or a timeout, and emit a `DIAGNOSTIC` when
 they give up. The transcript open is the one bounded by a *timeout* rather than an attempt
 count — it reserves the dock column on the press and gives it back after

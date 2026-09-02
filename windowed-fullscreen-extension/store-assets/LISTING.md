@@ -74,7 +74,7 @@ If a reviewer asks why so little is requested for this much behaviour, that is t
 
 **Single purpose.** Provide a windowed-fullscreen viewing mode for YouTube videos — the player fills the browser window without entering true fullscreen, so the taskbar remains visible — including how the page content around the player is arranged while that mode is active.
 
-**`storage`.** Stores the per-supported-site settings — "auto-apply", "Scrollable mode", the three dock widths, the list of chosen channels, the letterbox colour, the ambient glow switch, the idle-cursor switch, and the frame-capture options — plus the user's licence key and the provider's activation id for this device, if they have bought Pro, in `chrome.storage.local`. It also holds the local-only bookkeeping behind the rating row: a star count, prompt show counts, a usage counter and the install timestamp. No personal data beyond the key the user typed themselves, and nothing is transmitted except that key and the activation id, to the licence check described below. `chrome.storage.sync` is deliberately unused, so settings never leave the device.
+**`storage`.** Stores the per-supported-site settings — "auto-apply", "Scrollable mode", the three dock widths, the letterbox colour, the ambient glow switch, the idle-cursor switch, and the frame-capture options — plus the user's licence key and the provider's activation id for this device, if they have bought Pro, in `chrome.storage.local`. It also holds the local-only bookkeeping behind the rating row: a star count, prompt show counts, a usage counter and the install timestamp. No personal data beyond the key the user typed themselves, and nothing is transmitted except that key and the activation id, to the licence check described below. `chrome.storage.sync` is deliberately unused, so settings never leave the device.
 
 **Host permission (`*://*.youtube.com/*`).** Needed to (a) inject five controls next to YouTube's native fullscreen control — windowed mode, the comment panel, copy link at the current timestamp, the transcript dock, and frame capture, (b) apply the CSS that expands the player and positions the dock columns beside it, (c) read the already-playing video into a canvas so a frame can be saved locally and so the ambient glow can sample its edge colours, and (d) read the active tab's URL so the toolbar popup can report whether the page is supported.
 
@@ -259,8 +259,7 @@ Pro is $10 once (lifetime) — no subscription, no account, no login:
 • Burn the exact playback time onto a saved frame
 • Light the letterbox bars from the video's own colours, in real time
 • Or set your own bar colour, or pick from six gradient themes
-• Switch the mode, the layout, and the column widths automatically for chosen
-  channels
+• Stamp the playback time onto a saved frame
 
 One purchase covers several devices, and Remove key frees a device up again.
 Backed by a 7-day money-back guarantee.

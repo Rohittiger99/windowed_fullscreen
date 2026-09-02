@@ -160,19 +160,25 @@ to reason about than a per-call flag.
 Anchor navigation to `chrome://` URLs is blocked, which is why the shortcuts link goes
 through this rather than being an `<a href>`.
 
-## Channel rules
+## There is no per-channel rules card
 
-`prefillChannelRule` puts the open tab's channel into the rules field **without submitting
-it**. `startPopup` is what knows which channel the tab is showing; the settings tree does
-not, and should not have to ask, which also keeps §11 free of any dependency on there being
-an open tab at all.
+2.0.0 carried an *Auto-Fullscreen Channels* card here: a Pro list of channel handles the
+mode switched itself on for, each remembering its own mode, panel state and dock widths. It
+has been removed outright, along with the `channels` field, `renderChannelRules`,
+`prefillChannelRule`, and the `channel` that used to ride along on the `GET_STATUS` reply so
+the popup could pre-fill the field from the open tab.
 
-Deliberately does not add the rule: the reader opened the popup to watch a video, and a
-settings surface that writes a preference because a page was open is a surface nobody can
-trust.
+**The reason is in the page, not in the UI.** A rule could only be matched once the
+below-video owner row had mounted, which is several seconds after the player, and on an
+in-app navigation that row holds the *previous* video's channel for a few hundred
+milliseconds after the video has already changed. Making it work at all needed an
+eight-second retry window, a settle window on top of it to distrust a stale read, a give-up
+diagnostic and a per-video reset of all three — and the honest outcome was still that the
+mode could arrive up to two seconds into the video. The whole write-up of that race is in
+`youtube-layout.md`.
 
-**A rule is keyed on the channel's handle, never its display name.** A channel can rename
-itself, and a rule that followed the name would stop applying with nothing said about it.
-`readChannel` returns both: `id` is what a rule matches, `label` is only ever printed. Rules
-are capped at `MAX_CHANNEL_RULES` (50) per site, because this is the one stored field a
-reader can grow without bound.
+If per-channel behaviour is ever wanted again, drive it from something the page states
+before it renders — the URL, or a channel id in the document head — not from the owner row.
+
+The per-site cards are three now, not four: *Viewing Modes & Playback*, *Letterbox Themes*
+and *Media & Frame Capture*.

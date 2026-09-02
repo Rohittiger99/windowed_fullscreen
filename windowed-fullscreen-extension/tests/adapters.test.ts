@@ -91,7 +91,6 @@ test("the mode a preference selects", () => {
   assert.equal(DEFAULT_SITE_PREFS.dockWidths.panel, 0);
   assert.equal(DEFAULT_SITE_PREFS.dockWidths.chat, 0);
   assert.equal(DEFAULT_SITE_PREFS.dockWidths.transcript, 0);
-  assert.deepEqual(DEFAULT_SITE_PREFS.channels, []);
   assert.equal(DEFAULT_SITE_PREFS.captureToClipboard, false);
   assert.equal(DEFAULT_SITE_PREFS.letterboxColor, "");
   assert.equal(DEFAULT_SITE_PREFS.ambientGlow, false);

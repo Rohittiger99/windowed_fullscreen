@@ -181,14 +181,19 @@ disagree about where the video's right edge is.
 
 ## Preferences
 
-Per-site, in `chrome.storage.local` under `site:<siteId>`. Ten fields on `SitePrefs`.
+Per-site, in `chrome.storage.local` under `site:<siteId>`. Nine fields on `SitePrefs`.
 
 **There is no migration step, and there must never be one.** `normalizeDockWidths`
 falls back to the old sibling `panelWidth`/`chatWidth` fields when `dockWidths` is
-absent, and `normalizeChannelRules` upgrades a bare string to `newChannelRule(id)`. The
-upgrade happens on every read. Nothing runs once and is remembered as having run, so
-nothing can fail halfway. `tests/prefs.test.ts` and `tests/pro-features.test.ts` both
-pin this, including that reading an old record does not rewrite it.
+absent. The upgrade happens on every read. Nothing runs once and is remembered as having
+run, so nothing can fail halfway. `tests/prefs.test.ts` pins this, including that reading
+an old record does not rewrite it.
+
+**Removing a field needs no migration either**, for the same reason. `normalizeSitePrefs`
+is a whitelist constructor: it names each field it wants, so a field that is no longer
+named is never copied out of the stored record, and `setSitePrefs` merges over the
+normalized prefs — so the record is rewritten without it the first time the reader touches
+any preference for that site. A 2.0.x record's `channels` array is inert this way.
 
 There is deliberately **no settings export/import**. It was built for 2.0.0 and taken
 out before release; the reasoning is in the comment where it used to live, in §5.

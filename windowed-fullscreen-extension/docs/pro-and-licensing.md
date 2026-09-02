@@ -19,22 +19,31 @@ something that already shipped free, the answer is no.
 
 ## What is paid
 
-Eight features, all new in 2.0.0:
+Seven features, all new in 2.0.0:
 
 1. **Dock resizing** — drag any of the three docks wider or narrower.
 2. **Transcript dock** — the interactive transcript as its own docked column.
-3. **Channel profiles** — per-channel rules carrying mode, panel state and dock widths.
-4. **Frame capture** — save the current frame at the video's own resolution.
-5. **Custom filename templates** — `{title}`, `{date}`, `{time}`, `{timestamp}`, `{site}`.
-6. **Burned timestamp** — stamp the playback time onto a captured frame.
-7. **Ambient glow** — letterbox bars lit from the video's own edge colours.
-8. **Custom letterbox palettes** — five solid swatches, six gradient themes, plus a
+3. **Frame capture** — save the current frame at the video's own resolution.
+4. **Custom filename templates** — `{title}`, `{channel}`, `{date}`, `{time}`,
+   `{timestamp}`, `{site}`.
+5. **Burned timestamp** — stamp the playback time onto a captured frame.
+6. **Ambient glow** — letterbox bars lit from the video's own edge colours.
+7. **Custom letterbox palettes** — five solid swatches, six gradient themes, plus a
    colour picker with hex input.
 
-**The in-product list shows nine rows, and that is deliberate.**
-`HELP_COPY.pro.features` splits channel automation into "Favorite channels" and "Channel
-memory", because to a buyer those read as two things they get. It is one feature and one
-gate. Do not "reconcile" the counts by merging the rows or by adding a ninth gate.
+`HELP_COPY.pro.features` lists seven rows and this list has seven entries. **Keep them
+equal.** They were deliberately unequal for one release — nine rows against eight features,
+because channel automation was split into "Favorite channels" and "Channel memory" for the
+buyer — and the split outlived the feature, so a document explaining why nine was correct
+sat above a list that had stopped saying nine. If a row is ever split for marketing again,
+say so here in the same commit.
+
+**There is no per-channel rules feature, and it is not coming back in that shape.** 2.0.0
+had one: a list of channel handles carrying mode, panel state and dock widths. It was
+removed because it could only ever be decided from the below-video owner row, which mounts
+seconds late and holds the previous video's channel across an in-app navigation. The full
+write-up is in `youtube-layout.md`. Nothing about that removal touches invariant 8 — it was
+paid from the day it existed and no free behaviour was withdrawn.
 
 ## What is deliberately NOT paid
 
@@ -67,8 +76,8 @@ stale boolean. Every gate follows `watchProState`.
 
 **The capture button is shown to free users** and opens a prompt naming the price. It is
 the only paid feature a set-and-forget reader meets without going looking, so it is the
-whole funnel. Every other paid surface — the drag grips, the rules list — is absent
-without a licence, because it is reachable only by someone already exploring.
+whole funnel. The drag grips are absent without a licence, because they are reachable only
+by someone already exploring.
 
 **A Pro badge has to be removable, not just paintable.** The padlock beside a Pro-gated
 setting was appended once while the row was built, so it survived the entitlement

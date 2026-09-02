@@ -23,7 +23,7 @@ Published: 1.3.0. In preparation: **2.0.0**.
   slides it back.
 - `Escape` dismisses one layer at a time: browser fullscreen → side panel → mode.
 - Leaving fullscreen retraces the way in.
-- Optional per-site auto-apply, and per-channel rules for Pro.
+- Optional per-site auto-apply.
 - Letterbox bar colours, gradient themes and ambient glow.
 - Survives YouTube's in-app navigations without a reload.
 - Shortcuts: `Alt+Shift+F` toggles the mode, `Alt+Shift+D` docks the comments, and the
@@ -32,7 +32,9 @@ Published: 1.3.0. In preparation: **2.0.0**.
 ## Pro tier
 
 **$10 once.** No subscription, no account, no login. A licence key is the only credential.
-Eight paid features, all of them new work introduced with the tier.
+Every paid feature is new work introduced with the tier. The count and the list live in
+`windowed-fullscreen-extension/docs/pro-and-licensing.md` — this file deliberately does not
+restate either, because a count stated in two places is a count that drifts.
 
 **Governing rule: nothing that was free has moved behind the paywall, and nothing ever
 will.** That is what makes the tier free of grandfathering code, and there must never be

@@ -91,7 +91,15 @@ archive root.
   the fixes did not answer is whether the 34 `:has()` blocks in the active-mode stylesheet
   cost anything while the mode is off; that sheet is injected on every watch page. Do not
   change it without a profile either way.
-- **The screenshots are pre-2.0.0** and need reshooting. See `store-assets/LISTING.md`.
+- **Auto-apply needs one pass by hand now that the per-channel rules are gone.** Its retry
+  loops existed only for those rules and went with them, so `maybeAutoApply` decides on the
+  first look from the stored switch alone. Check that turning *auto-apply* on for YouTube
+  still brings the mode up (a) on a cold load straight onto a watch page, and (b) on an
+  in-app navigation from the home page to a video. Neither path is reachable from the unit
+  suite — it is a closure inside `startContentScript`.
+- **The screenshots are pre-2.0.0** and need reshooting; the popup no longer has an
+  *Auto-Fullscreen Channels* card, so any shot showing one is wrong. See
+  `store-assets/LISTING.md`.
 - **The published privacy policy** needs checking against what this release sends.
 - **The live $10 product** does not exist at the provider yet.
 

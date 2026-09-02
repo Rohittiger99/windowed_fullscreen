@@ -95,10 +95,9 @@ the player's box. With both applied, YouTube measures a player it does not contr
 renders its smallest control bar. Fullscreen must be **pre-empted, not reacted to**.
 → `docs/modes-and-fullscreen.md`
 
-**5. Bounded loops only.** Detection, re-render, class re-assertion, geometry repair,
-channel-rule matching, resume and the transcript open each have an attempt cap or a timeout
-and emit a `DIAGNOSTIC` when they give up. Never add an unbounded retry, or an observer that
-can fight the page forever.
+**5. Bounded loops only.** Detection, re-render, class re-assertion, geometry repair, resume
+and the transcript open each have an attempt cap or a timeout and emit a `DIAGNOSTIC` when
+they give up. Never add an unbounded retry, or an observer that can fight the page forever.
 
 **5a. Never observe a site subtree with `subtree: true`.** The corollary, and it was learned
 the same way. `#movie_player`'s subtree mutates continuously during playback — caption cues,

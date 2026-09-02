@@ -921,7 +921,7 @@
       }
 
       /*
-       * Pro: the teaser row, the showcase view, and the per-channel rules.
+       * Pro: the teaser row and the showcase view.
        *
        * THIS IS THE ONLY SETTINGS STYLESHEET. It used to be one of two: §11 rendered
        * the same tree into `options/index.html` and this file, neither checked that
@@ -940,8 +940,11 @@
        * a class-only or attribute-only selector loses to them wherever it sits.
        */
 
-      /* `width: 100%` with `box-sizing` already global */
-      #settings input[type="text"]:not(.wfs-channel-input) {
+      /* `width: 100%` with `box-sizing` already global.
+         The `:not(.wfs-channel-input)` exclusion that used to be here is gone with
+         the per-channel rules list: that input was the one text field that had to
+         sit inline beside a button rather than fill the row. */
+      #settings input[type="text"] {
         width: 100%;
         min-height: 32px;
         padding: 6px 10px;
@@ -1391,128 +1394,6 @@
       #settings .wfs-tag-badge:hover {
         background: rgba(147, 51, 234, 0.2);
         transform: translateY(-1px);
-      }
-
-      /* --- Auto-Fullscreen Channels --- */
-      #settings .wfs-channel-list,
-      #settings [data-wfs-channel-list] {
-        list-style: none;
-        margin: 0 0 6px 0;
-        padding: 0 2px 0 0;
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-        max-height: 110px;
-        overflow-y: auto;
-        scrollbar-width: thin;
-      }
-
-      #settings .wfs-channel-item,
-      #settings [data-wfs-channel-item] {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 8px;
-        padding: 3px 8px;
-        background: var(--wfs-alt);
-        border: 1px solid var(--wfs-border);
-        border-radius: 6px;
-        min-height: 26px;
-        box-sizing: border-box;
-      }
-
-      #settings .wfs-channel-name,
-      #settings [data-wfs-channel-item] > span {
-        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-        font-size: 11px;
-        font-weight: 600;
-        color: #ffffff;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-        flex: 1;
-        min-width: 0;
-      }
-
-      #settings .wfs-channel-remove-btn,
-      #settings [data-wfs-channel-remove] {
-        flex: none;
-        margin: 0 !important;
-        padding: 2px 6px;
-        font-size: 10px;
-        font-weight: 700;
-        color: #ff6b9d;
-        background: rgba(255, 107, 157, 0.1);
-        border: 1px solid rgba(255, 107, 157, 0.25);
-        border-radius: 4px;
-        cursor: pointer;
-        line-height: 1.2;
-        transition: background 120ms ease;
-      }
-
-      #settings .wfs-channel-remove-btn:hover,
-      #settings [data-wfs-channel-remove]:hover {
-        background: rgba(255, 107, 157, 0.22);
-      }
-
-      #settings .wfs-channel-add-row,
-      #settings [data-wfs-channel-field] {
-        display: flex !important;
-        flex-direction: row !important;
-        align-items: center !important;
-        gap: 6px !important;
-        width: 100% !important;
-        margin: 0 !important;
-        padding: 0 !important;
-      }
-
-      #settings .wfs-channel-input,
-      #settings [data-wfs-channel-input] {
-        flex: 1 !important;
-        min-width: 0 !important;
-        width: auto !important;
-        min-height: 28px !important;
-        height: 28px !important;
-        padding: 4px 8px !important;
-        font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-        font-size: 11.5px !important;
-        color: #ffffff;
-        background: #0b0a14 !important;
-        border: 1px solid var(--wfs-border) !important;
-        border-radius: 6px !important;
-        margin: 0 !important;
-        box-sizing: border-box;
-      }
-
-      #settings .wfs-channel-input:focus,
-      #settings [data-wfs-channel-input]:focus {
-        outline: none;
-        border-color: var(--wfs-accent);
-        box-shadow: 0 0 0 2px rgba(147, 51, 234, 0.25);
-      }
-
-      #settings .wfs-channel-add-btn,
-      #settings [data-wfs-channel-add] {
-        flex: none !important;
-        min-height: 28px !important;
-        height: 28px !important;
-        margin: 0 !important;
-        padding: 0 12px !important;
-        font-size: 11px !important;
-        font-weight: 700 !important;
-        color: #ffffff !important;
-        background: linear-gradient(135deg, #7c3aed, #9333ea) !important;
-        border: 1px solid rgba(255, 255, 255, 0.12) !important;
-        border-radius: 6px !important;
-        cursor: pointer;
-        white-space: nowrap;
-        transition: transform 100ms ease;
-      }
-
-      #settings .wfs-channel-add-btn:hover,
-      #settings [data-wfs-channel-add]:hover {
-        transform: translateY(-1px);
-        background: linear-gradient(135deg, #8b5cf6, #a855f7) !important;
       }
 
       /* --- Pro teaser card (in settings) ------------------------------------- */

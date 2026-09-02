@@ -36,9 +36,8 @@ Everything in the free tier is permanently free. The comment panel, both modes, 
 | Shortcuts for windowed and comment buttons | Yes | — |
 | **Dragging any docked column as wide as you like** | No | Yes |
 | **Docking interactive video transcripts & 1-click timestamped copy** | No | Yes |
-| **Auto-apply profiles for chosen channels** | No | Yes |
 | **Saving the current frame at source video resolution** | No | Yes |
-| **Custom filename templates ({title}, {date}, etc.)** | No | Yes |
+| **Custom filename templates ({title}, {channel}, {date}, etc.)** | No | Yes |
 | **Burn timestamp overlay watermark** | No | Yes |
 | **Ambient glow letterbox illumination** | No | Yes |
 | **Custom letterbox palettes & gradient themes** | No | Yes |
@@ -49,8 +48,6 @@ One purchase, no renewal, no account, and no login: a licence key is the only cr
 **Dragging a dock** puts a grip on each dock's inboard edge. Drag it, or focus it and use the arrow keys (`Shift` for a bigger step). Comments, live chat, and transcripts all resize independently.
 
 **Saving a frame** writes an uncompressed PNG at the video's own resolution, named with your custom filename template or copied to clipboard.
-
-**Per-channel rules** switch the mode on for chosen channels and can configure layout/docks automatically.
 
 **Ambient glow & letterbox themes** softly illuminate letterbox bars with real-time video color sampling, or select from 5 cinema swatches and 6 gradient mix themes, or a colour picker with hex input.
 
@@ -180,7 +177,7 @@ Do **not** zip the build by hand with Windows tooling. `Compress-Archive` and .N
 
 ## Permissions
 
-- `storage` — the per-site settings (auto-apply, scrollable mode, the three dock widths, the channel rules, the letterbox colour and ambient glow, the cursor auto-hide switch, and the capture options), your licence key if you have one, and the local-only bookkeeping behind the rating row and the prompts: a star count, how many times each prompt has been shown, a usage counter, and the install timestamp. All written to `chrome.storage.local` only. `chrome.storage.sync` is deliberately unused, so settings never leave the device, and the star count is never transmitted anywhere — selecting a star opens the store's own review page and nothing else.
+- `storage` — the per-site settings (auto-apply, scrollable mode, the three dock widths, the letterbox colour and ambient glow, the cursor auto-hide switch, and the capture options), your licence key if you have one, and the local-only bookkeeping behind the rating row and the prompts: a star count, how many times each prompt has been shown, a usage counter, and the install timestamp. All written to `chrome.storage.local` only. `chrome.storage.sync` is deliberately unused, so settings never leave the device, and the star count is never transmitted anywhere — selecting a star opens the store's own review page and nothing else.
 - `*://*.youtube.com/*` — to inject the buttons, apply the CSS that expands the player and docks the side panel beside it, and read the active tab's URL so the popup can report whether the page is supported.
 
 No other permissions, no runtime dependencies, no remote code, and no analytics or telemetry.

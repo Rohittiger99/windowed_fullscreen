@@ -123,17 +123,39 @@ and say so in the comment. `tests/panel.test.ts` guards this one by mounting the
 
 **Anything read out of the below-video block is not there yet when you first ask.**
 `#below` mounts several seconds after the player, and the owner row that names the channel
-is inside it. `hasSideContent` carries this rule for the panel. Per-channel auto-apply was
-bitten by the same thing from the other direction: every trigger that runs
+is inside it. `hasSideContent` carries this rule for the panel. Anything else that has to
+read from `#below` needs the same treatment: ask again later, with a cap, never once and
+never forever.
+
+**On an in-app navigation the block does not go blank first — it keeps the PREVIOUS
+video's answer.** This is the second half of the same trap and it is worse than the empty
+row, because an empty read is obviously "not yet" while a stale read looks like an answer.
+`onVideoChange` fires off the `video-id` swap, and YouTube rebinds the below-video block a
+few hundred milliseconds after that, so a read taken from the handler names the video
+being left. Treat that as the pattern for anything read out of `#below` across a
+navigation: a value that matches the last video is not yet an answer, and the only honest
+way to tell a stale row from a genuinely unchanged one is to wait out a bounded window.
+
+**This trap is why per-channel auto-apply rules were removed rather than repaired**, and
+the history is worth keeping because it prices the trap. A Pro feature in 2.0.0 let the
+reader list channel handles the mode would switch itself on for. Every trigger that runs
 `maybeAutoApply` — preferences resolving, the entitlement record arriving, our button
 appearing, the video changing — fires before the channel is readable, so `readChannel`
-returned null, no rule matched, and the `autoApplied` latch meant nothing looked again.
-The rule never fired for anyone.
+returned null, no rule matched, and the `autoApplied` latch meant nothing looked again. The
+rule never fired for anyone. Adding an eight-second bounded retry fixed that and exposed
+the stale-row half, which broke it both ways: from an unlisted channel to a listed one the
+stale read looked like a decided "no rule here" and the mode never came up, and from a
+listed channel to an unlisted one the stale read matched and the mode came up on a channel
+the reader never listed. Closing that needed a second window on top of the first,
+distrusting any read equal to the outgoing channel — which cannot be a hard refusal,
+because two videos from one listed channel in a row legitimately produce a read equal to
+the outgoing one and never change.
 
-It now retries on a bounded schedule (`MAX_CHANNEL_RULE_ATTEMPTS`,
-`CHANNEL_RULE_RETRY_MS`) and gives up with `channel-rule-abandoned`. Anything else that
-has to read from `#below` needs the same treatment: ask again later, with a cap, never
-once and never forever.
+Two nested bounded windows, a give-up diagnostic, a per-video reset, and the best available
+behaviour was still "the mode may arrive two seconds into the video". The feature came out.
+**Do not reintroduce anything that has to decide from the owner row at page-load time.** If
+per-channel behaviour is wanted, take the channel from something stated before render — the
+URL, or an id in the document head.
 
 **A dock that must be REQUESTED cannot key off the site's own "it is open" attribute
 alone.** This is the difference between live chat and the transcript, and it is the whole

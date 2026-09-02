@@ -30,7 +30,7 @@ matching that glob is picked up with no registration step.
 | `help-copy.test.ts` | The copy budget, property-based over every `HELP_COPY` string |
 | `settings-dom.test.ts` | The structure the settings tree builds, against a stub document |
 | `entitlement.test.ts` | The 4xx-versus-everything-else split, and that the two provider constants are in the same mode |
-| `pro-features.test.ts` | Dock width clamping, channel rules, transcript extraction, capture filenames, timestamp formatting |
+| `pro-features.test.ts` | Dock width clamping, transcript extraction, capture filenames, timestamp formatting |
 
 `tests/support/dom.ts` holds the stub document. There is no browser anywhere in this layer.
 

@@ -1,5 +1,5 @@
-// The pure decisions behind the three Pro features: how wide a dock may be, which
-// channels the mode switches itself on for, and what a saved frame is called.
+// The pure decisions behind the Pro features: how wide a dock may be, what a saved
+// frame is called, and what a transcript reads back as.
 //
 // None of these needs a browser, which is the point of them being pure. What they
 // cannot see is layout — whether the panel's left edge actually lands on the
@@ -10,17 +10,10 @@ import assert from "node:assert/strict";
 
 import {
   captureFilename,
-  channelRuleMatches,
   clampDockWidth,
   DEFAULT_DOCK_WIDTHS,
-  DEFAULT_SITE_PREFS,
-  findChannelRule,
-  newChannelRule,
   DOCK_DRAG_RESERVE_PX,
-  MAX_CHANNEL_ID_LENGTH,
-  MAX_CHANNEL_RULES,
   MIN_DOCK_WIDTH_PX,
-  normalizeChannelRules,
   normalizeDockWidth,
   normalizeSitePrefs,
   copyLinkAtCurrentTime,
@@ -28,7 +21,6 @@ import {
   copyTranscriptWithTimestamps,
   formatPlaybackTimestamp,
   resolveAdapter,
-  type SitePrefs,
 } from "../src/windowed-fullscreen.ts";
 
 /** A wide window, where the dock's own bounds are what bind rather than the video. */
@@ -163,129 +155,14 @@ test("the drag floor is the width the stylesheet would have drawn", () => {
   assert.equal(defaultWidth(1600), 416, "26vw in between");
 });
 
-// --- Channel rules ---------------------------------------------------------
+// --- What the adapter has to be able to answer ----------------------------
 
-test("the rule list is coerced entry by entry, not condemned whole", () => {
-  assert.deepEqual(normalizeChannelRules(["@one", 7, "", "  @two  ", null, "@one"]), [
-    newChannelRule("@one"),
-    newChannelRule("@two"),
-  ]);
-});
-
-test("a rule written before 2.0.0 reads back asking for no layout of its own", () => {
-  // The list held bare identifiers through 1.4.0. A string has to upgrade to a rule
-  // that behaves exactly as it did, or updating the extension silently changes what
-  // every existing rule does.
-  assert.deepEqual(normalizeChannelRules(["@one"]), [newChannelRule("@one")]);
-  assert.deepEqual(newChannelRule("@one"), {
-    id: "@one",
-    scrollable: null,
-    panel: false,
-    dockWidths: DEFAULT_DOCK_WIDTHS,
-  });
-});
-
-test("a rule carries its own layout, and a damaged field falls back rather than voiding it", () => {
-  assert.deepEqual(
-    normalizeChannelRules([
-      { id: "@one", scrollable: true, panel: true, dockWidths: { panel: 520, chat: 0 } },
-      { id: "@two", scrollable: "yes", panel: "yes", dockWidths: 7 },
-    ]),
-    [
-      {
-        id: "@one",
-        scrollable: true,
-        panel: true,
-        dockWidths: { panel: 520, chat: 0, transcript: 0 },
-      },
-      // Not a boolean means "no preference of its own", which is null for the mode
-      // and false for the panel. The rule itself survives.
-      { id: "@two", scrollable: null, panel: false, dockWidths: DEFAULT_DOCK_WIDTHS },
-    ],
-  );
-});
-
-test("the rule list is capped, and a non-list reads as no rules", () => {
-  const tooMany = Array.from({ length: MAX_CHANNEL_RULES + 20 }, (_, i) => `@channel${i}`);
-  assert.equal(normalizeChannelRules(tooMany).length, MAX_CHANNEL_RULES);
-
-  for (const junk of [undefined, null, "@one", 42, {}]) {
-    assert.deepEqual(normalizeChannelRules(junk), [], String(junk));
-  }
-});
-
-test("an overlong identifier is dropped rather than truncated", () => {
-  // Truncating would store a rule that matches a different channel, or none, and
-  // look like it was saved.
-  const long = `@${"a".repeat(MAX_CHANNEL_ID_LENGTH)}`;
-  assert.deepEqual(normalizeChannelRules([long, "@fine"]), [newChannelRule("@fine")]);
-});
-
-test("a rule matches its channel and nothing else", () => {
-  const prefs: SitePrefs = {
-    ...DEFAULT_SITE_PREFS,
-    channels: [newChannelRule("@one"), newChannelRule("@two")],
-  };
-  assert.equal(channelRuleMatches(prefs, { id: "@one", label: "One" }), true);
-  assert.equal(channelRuleMatches(prefs, { id: "@three", label: "Three" }), false);
-  // A renamed channel still matches: the rule is keyed on the identifier, never on
-  // the display name, which is the whole reason `ChannelRef` carries both.
-  assert.equal(channelRuleMatches(prefs, { id: "@one", label: "Something Else Now" }), true);
-});
-
-test("no channel and no rules both mean no", () => {
-  const prefs: SitePrefs = { ...DEFAULT_SITE_PREFS, channels: [newChannelRule("@one")] };
-  assert.equal(channelRuleMatches(prefs, null), false);
-  assert.equal(channelRuleMatches(prefs, { id: "", label: "" }), false);
-  assert.equal(channelRuleMatches(DEFAULT_SITE_PREFS, { id: "@one", label: "One" }), false);
-});
-
-test("findChannelRule returns the matched rule with its layout profile", () => {
-  const ruleScrollable = {
-    id: "@scrollableChannel",
-    scrollable: true,
-    panel: true,
-    dockWidths: { panel: 450, chat: 0, transcript: 0 },
-  };
-  const ruleCover = {
-    id: "@coverChannel",
-    scrollable: false,
-    panel: false,
-    dockWidths: DEFAULT_DOCK_WIDTHS,
-  };
-  const ruleDefault = {
-    id: "@defaultChannel",
-    scrollable: null,
-    panel: true,
-    dockWidths: DEFAULT_DOCK_WIDTHS,
-  };
-  const prefs: SitePrefs = {
-    ...DEFAULT_SITE_PREFS,
-    channels: [ruleScrollable, ruleCover, ruleDefault],
-  };
-
-  assert.deepEqual(
-    findChannelRule(prefs, { id: "@scrollableChannel", label: "Scrollable" }),
-    ruleScrollable,
-  );
-  assert.deepEqual(
-    findChannelRule(prefs, { id: "@coverChannel", label: "Cover" }),
-    ruleCover,
-  );
-  assert.deepEqual(
-    findChannelRule(prefs, { id: "@defaultChannel", label: "Default" }),
-    ruleDefault,
-  );
-  assert.equal(findChannelRule(prefs, { id: "@other", label: "Other" }), null);
-  assert.equal(findChannelRule(prefs, null), null);
-});
-
-// --- The adapter's channel reading ----------------------------------------
-
-test("the adapter reads a channel identifier, never a display name or a URL", () => {
-  // Site knowledge, so this asks the adapter rather than restating a selector. The
-  // shape of what it returns is the contract the rules depend on: an id stable
-  // across a rename, and a label that is only ever printed.
+test("the adapter offers every reader the Pro features depend on", () => {
+  // Site knowledge, so this asks the adapter rather than restating a selector.
+  // `readChannel` is asserted for the captured frame's `{channel}` token, which is
+  // the only thing left that needs it now the per-channel rules are gone. Without
+  // this, dropping it would silently name every capture with an empty channel
+  // rather than failing.
   const adapter = resolveAdapter("https://www.youtube.com/watch?v=abc")!;
   assert.equal(typeof adapter.readChannel, "function", "the adapter cannot report a channel");
   assert.equal(typeof adapter.findVideo, "function", "the adapter cannot be captured from");
@@ -374,7 +251,6 @@ test("normalizeSitePrefs coerces 2.0.0 preferences safely", () => {
     autoApply: true,
     scrollable: true,
     dockWidths: { panel: 400, chat: 350, transcript: 320 },
-    channels: [{ id: "@channel", scrollable: false, panel: true, dockWidths: DEFAULT_DOCK_WIDTHS }],
     captureToClipboard: true,
     letterboxColor: "#123456",
     ambientGlow: true,

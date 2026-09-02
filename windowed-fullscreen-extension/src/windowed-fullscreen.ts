@@ -130,15 +130,16 @@ export interface SiteAdapter {
   findVideo?(doc: Document): HTMLVideoElement | null;
 
   /**
-   * Which channel, author, or uploader this page belongs to, for the per-channel
-   * auto-apply rules. Null when the page has not rendered it yet.
+   * Which channel, author, or uploader this page belongs to, for the captured
+   * frame's `{channel}` filename token. Null when the page has not rendered it yet.
    *
-   * The `id` must be something the site will still report identically next month —
-   * a handle or an account id, never a display name and never a URL. A rule keyed
-   * on anything renameable stops applying with nothing said about it.
+   * The `id` is a handle or an account id, never a display name and never a URL;
+   * `label` is the printable name and is what the filename actually uses. Both are
+   * reported because the id is the one the site will still spell the same way next
+   * month, and a caller that needs to compare rather than print needs that.
    *
-   * Optional: a site with no notion of a channel omits it, and the rules list is
-   * simply not offered for that site.
+   * Optional: a site with no notion of a channel omits it, and the token resolves
+   * to nothing for that site.
    */
   readChannel?(doc: Document): ChannelRef | null;
 
@@ -371,36 +372,26 @@ export type DockWidths = Readonly<Record<DockId, number>>;
 /** Every dock at its stylesheet default. */
 export const DEFAULT_DOCK_WIDTHS: DockWidths = { panel: 0, chat: 0, transcript: 0 };
 
-/**
- * One per-channel rule: the channel, and the layout the mode should come up in
- * for it. Pro.
- *
- * This began as a bare `string` — a list of channels to switch the mode on for.
- * The identifier is still the only required part, and a rule that carries nothing
- * else behaves exactly as the old list did, which is what let the stored shape
- * change without a migration step. Everything else is the layout that channel
- * wants, so a lecture channel can open scrollable with the comments docked while a
- * livestream channel opens covered with chat wide.
- */
-export interface ChannelRule {
-  /**
-   * The channel's identifier as the adapter reports it — a handle, never a URL and
-   * never a display name, so a rename does not quietly break the rule.
-   */
-  id: string;
-  /**
-   * Which mode to enter for this channel, or null to follow the site's own
-   * `scrollable` preference.
-   *
-   * Null rather than a copy of the site value, so changing the site preference
-   * still moves every rule that never asked for something different.
-   */
-  scrollable: boolean | null;
-  /** Dock the comment panel as the mode comes up for this channel. */
-  panel: boolean;
-  /** Widths for this channel, each 0 to fall back to the site's own width. */
-  dockWidths: DockWidths;
-}
+// There are deliberately no per-channel rules.
+//
+// 2.0.0 shipped a `channels` list on the record below: a Pro list of channel
+// handles the mode switched itself on for, each carrying its own mode, panel state
+// and dock widths. It is gone, and it should not come back in this shape.
+//
+// The reason is that it could never be decided at the moment it needed deciding.
+// The channel is named by the below-video owner row, which mounts several seconds
+// after the player and, on an in-app navigation, spends a few hundred milliseconds
+// still holding the PREVIOUS video's channel. So every trigger that could have run
+// auto-apply — preferences resolving, the entitlement arriving, our button
+// appearing, the video changing — landed either before the row existed or while it
+// was confidently wrong. Closing that needed an eight-second retry window, a
+// settle window on top of it to distrust a stale read, a give-up diagnostic, and a
+// per-video reset of all three; and even then the honest outcome was "the mode
+// arrives up to two seconds after you started watching".
+//
+// If per-channel behaviour is ever wanted again, it has to be driven by something
+// the page states before it renders — the URL, or a channel id the site puts in the
+// document head — not by a row that mounts on the site's own schedule.
 
 /** Per-site preferences. */
 export interface SitePrefs {
@@ -421,14 +412,6 @@ export interface SitePrefs {
    * preference field, a normalizer call, and a patch shape to keep in step.
    */
   dockWidths: DockWidths;
-  /**
-   * Channels the mode enters on automatically, whatever {@link autoApply} says,
-   * and the layout it comes up in for each. Pro.
-   *
-   * Capped at {@link MAX_CHANNEL_RULES} on write, because this is the one stored
-   * field a reader can grow without bound.
-   */
-  channels: readonly ChannelRule[];
   /**
    * Put a captured frame on the clipboard instead of downloading it. Only reached
    * by a Pro install, since capture itself is Pro.
@@ -462,7 +445,6 @@ export const DEFAULT_SITE_PREFS: SitePrefs = {
   autoApply: false,
   scrollable: false,
   dockWidths: DEFAULT_DOCK_WIDTHS,
-  channels: [],
   captureToClipboard: false,
   letterboxColor: "",
   ambientGlow: false,
@@ -479,10 +461,10 @@ export function modeFor(prefs: SitePrefs): WindowedMode {
 /**
  * Which channel the page is showing, as the adapter reports it.
  *
- * `id` is what gets stored and compared — a stable handle, never a URL. `label` is
- * for the settings UI to print, and is deliberately not what a rule matches on: a
- * channel can rename itself and a rule that followed the display name would
- * silently stop applying.
+ * `id` is the stable handle, never a URL. `label` is the display name, and is what
+ * the captured frame's `{channel}` token prints. Both are reported rather than just
+ * the label because a channel can rename itself, so anything that ever needs to
+ * compare two reads has to compare the id.
  */
 export interface ChannelRef {
   readonly id: string;
@@ -516,14 +498,11 @@ export type ExtMessage =
 /**
  * Reply to an {@link ExtMessage}.
  *
- * `channel` rides along on the success case rather than getting a message of its
- * own: the popup already asks for the status on every opening, and a second round
- * trip to learn the channel would double the window in which the popup is
- * waiting on a page that may not answer at all.
+ * `active` is the whole of the success case. It used to carry the page's channel
+ * alongside it, so the popup could pre-fill a per-channel rule without a second
+ * round trip; the rules are gone and so is the field.
  */
-export type ExtResponse =
-  | { ok: true; active: boolean; channel?: ChannelRef | null }
-  | { ok: false; error: string };
+export type ExtResponse = { ok: true; active: boolean } | { ok: false; error: string };
 
 /**
  * What the extension recorded about an exit from browser fullscreen that it
@@ -618,10 +597,6 @@ const DIAGNOSTIC = {
   /** The debounced geometry repair hit its attempt cap. Emitted once, on the
    * transition to the cap, not on every subsequent request. */
   geometryRepairAbandoned: "geometry-repair-abandoned",
-  /** A per-channel auto-apply rule gave up waiting for the page to name the
-   * channel. Only reached with rules stored and an entitlement to use them, so it
-   * always means a rule that could not be evaluated, never an absent feature. */
-  channelRuleAbandoned: "channel-rule-abandoned",
   /** `exitFullscreen()` threw or rejected after an exit intent was recorded. */
   exitFullscreenRefused: "exit-fullscreen-refused",
   /** Teardown found a snapshotted element the page had detached. One line per
@@ -687,12 +662,12 @@ const YT = {
    * The channel link in the owner row, whose href carries the channel's stable
    * identifier: `/@handle` on a modern page, `/channel/UC…` on an older one.
    *
-   * The href is read rather than the visible name: a channel can rename itself,
-   * and a stored rule that matched the display name would stop applying with
-   * nothing said about it.
+   * The href is read rather than the visible name, so `readChannel` can always
+   * answer with something even on a page that has rendered the link before the
+   * name — the handle stands in until the name arrives.
    */
   channelLink: "ytd-video-owner-renderer a[href], #owner a[href], #upload-info a[href]",
-  /** The channel's display name, for the settings list to print. */
+  /** The channel's display name, for a captured frame's `{channel}` token. */
   channelName: "ytd-channel-name #text, ytd-video-owner-renderer #channel-name #text",
   /**
    * Controls inside YouTube's own player bar whose result renders OUTSIDE the
@@ -2579,8 +2554,8 @@ const youtubeAdapter: SiteAdapter = {
     if (!handle) return null;
 
     const named = doc.querySelector(YT.channelName)?.textContent?.trim();
-    // The handle stands in for a name that has not rendered yet, so a rule added
-    // from the popup is never stored as a nameless entry.
+    // The handle stands in for a name that has not rendered yet, so a caller never
+    // has to treat a half-rendered owner row as a nameless channel.
     return { id: handle, label: named && named.length > 0 ? named : handle };
   },
 
@@ -2971,7 +2946,6 @@ export function normalizeSitePrefs(stored: unknown): SitePrefs | null {
     // meaning "use the stylesheet's own responsive width". The whole record goes in
     // because a pre-2.0.0 store kept the widths as two sibling fields.
     dockWidths: normalizeDockWidths(raw),
-    channels: normalizeChannelRules(raw.channels),
     captureToClipboard:
       typeof raw.captureToClipboard === "boolean"
         ? raw.captureToClipboard
@@ -3029,19 +3003,6 @@ export const MIN_DOCK_WIDTH_PX = 320;
 export const DOCK_DRAG_RESERVE_PX = 24;
 
 /**
- * The most per-channel rules one site may hold.
- *
- * 50. The list is the only stored field the reader can grow, and every entry is
- * read on every video load, so it is bounded rather than trimmed: silently
- * dropping the oldest rule would make a setting the reader deliberately added stop
- * working with nothing said about it. The settings UI reports the refusal instead.
- */
-export const MAX_CHANNEL_RULES = 50;
-
-/** The longest channel identifier accepted, so one rule cannot fill the record. */
-export const MAX_CHANNEL_ID_LENGTH = 120;
-
-/**
  * Coerce a stored dock width: a whole number at or above the minimum, or 0.
  *
  * There is no upper bound — whatever the reader dragged to is what they get. The
@@ -3080,78 +3041,13 @@ export function normalizeDockWidths(stored: Record<string, unknown>): DockWidths
   return widths;
 }
 
-/**
- * Coerce a stored channel-rule list: strings only, trimmed, de-duplicated, and
- * capped.
- *
- * Total, and never null: a damaged list reads as no rules, which is the same thing
- * a free install has and cannot mislead anyone into thinking a rule is in force.
- * Non-string entries are dropped individually rather than condemning the list,
- * for the same reason every other coercion here is per-field.
- */
-export function normalizeChannelRules(stored: unknown): readonly ChannelRule[] {
-  if (!Array.isArray(stored)) return [];
-  const out: ChannelRule[] = [];
-  for (const entry of stored) {
-    // A bare string is a pre-2.0.0 rule, when the list held identifiers and
-    // nothing else. It upgrades to a rule that asks for no layout of its own,
-    // which behaves exactly as it did before — that equivalence is what let the
-    // shape change without a migration step to write, run, and remember.
-    const raw: Record<string, unknown> =
-      typeof entry === "string" ? { id: entry } : ((entry ?? {}) as Record<string, unknown>);
-    if (typeof raw.id !== "string") continue;
-    const id = raw.id.trim();
-    if (id === "" || id.length > MAX_CHANNEL_ID_LENGTH) continue;
-    // First rule for a channel wins. A duplicate is not an error worth reporting:
-    // the settings UI refuses to add one, so a second can only come from a record
-    // written by hand or by a future version.
-    if (out.some((rule) => rule.id === id)) continue;
-    out.push({
-      id,
-      // Anything that is not a boolean means "no preference of its own", which is
-      // what an upgraded string rule and a damaged field both come back as.
-      scrollable: typeof raw.scrollable === "boolean" ? raw.scrollable : null,
-      panel: raw.panel === true,
-      dockWidths: normalizeDockWidths(raw),
-    });
-    if (out.length >= MAX_CHANNEL_RULES) break;
-  }
-  return out;
-}
-
-/**
- * A rule for this channel that asks for no layout of its own.
- *
- * What the settings UI adds when the reader names a channel, and what a pre-2.0.0
- * string rule upgrades to. Both have to mean the same thing, so both come through
- * here rather than each writing the defaults out.
- */
-export function newChannelRule(id: string): ChannelRule {
-  return { id, scrollable: null, panel: false, dockWidths: DEFAULT_DOCK_WIDTHS };
-}
-
-/**
- * The rule for this channel, or null when there is none.
- *
- * Pure, and deliberately does not read the Pro state: the gate belongs to the one
- * caller in §9, so this stays a question about the rules alone and stays testable
- * without an entitlement record.
- */
-export function findChannelRule(prefs: SitePrefs, channel: ChannelRef | null): ChannelRule | null {
-  if (!channel || channel.id === "") return null;
-  return prefs.channels.find((rule) => rule.id === channel.id) ?? null;
-}
-
-/**
- * Whether the page's channel has a rule asking for the mode.
- *
- * Kept alongside {@link findChannelRule} rather than replaced by it: this is the
- * question `autoApplyWanted` asks, and a boolean caller should not have to know
- * that a rule is an object now.
- */
-export function channelRuleMatches(prefs: SitePrefs, channel: ChannelRef | null): boolean {
-  return findChannelRule(prefs, channel) !== null;
-}
+// A record written by 2.0.x may still carry a `channels` array. Nothing reads it,
+// and nothing has to: `normalizeSitePrefs` above is a whitelist constructor rather
+// than a mutator, so it names each field it wants and an unrecognised one is never
+// copied out. `setSitePrefs` below then merges over the NORMALIZED prefs, so the
+// first time the reader touches any preference for that site the record is
+// rewritten without it. That is the whole of the removal — do not add a migration
+// step to clear it, for the same reason there has never been one here.
 
 /**
  * Persist part of a site's preferences, leaving the fields not named alone. On
@@ -3179,7 +3075,7 @@ export async function setSitePrefs(
 //
 // A JSON backup of the preference record was built for 2.0.0 and taken out again
 // before release. Two reasons, and the second is the one that settles it. There are
-// ten fields, every one of them a checkbox or a width that takes seconds to set by
+// nine fields, every one of them a checkbox or a width that takes seconds to set by
 // hand, so a backup saves nobody meaningful work. And an import is an untrusted
 // record arriving from a file picker: `normalizeSitePrefs` would be the only thing
 // between a hand-edited JSON file and stored state, which makes a coercion bug a
@@ -6473,30 +6369,20 @@ const FULLSCREEN_GRACE_MS = 900;
  */
 const PAGE_HANDOFF_GRACE_MS = 900;
 
-/**
- * How long a per-channel auto-apply rule waits for the page to say which channel
- * it is showing.
- *
- * 32 attempts at 250ms, so eight seconds.
- *
- * This exists because a per-channel rule was a race the page always won. The
- * channel is named by the owner row, which lives inside the below-video block —
- * and that block mounts SEVERAL SECONDS after the player, which is already written
- * down on `hasSideContent` in §1 because it caused a different bug there. Every
- * moment auto-apply is otherwise triggered lands before then: preferences
- * resolving, the entitlement record arriving, our button appearing (the player, not
- * the owner row), and the video changing. So `readChannel` returned null, the rule
- * did not match, and the `autoApplied` latch meant nothing ever looked again. The
- * per-site switch never had this problem because it needs no page content to
- * decide.
- *
- * Eight seconds because "several seconds" is the observation this has to survive,
- * and a rule that fires late is still the thing the reader asked for while a rule
- * that never fires is not. Bounded, like every other loop here: at the cap it emits
- * `channel-rule-abandoned` and stops rather than watching the page forever.
- */
-const CHANNEL_RULE_RETRY_MS = 250;
-const MAX_CHANNEL_RULE_ATTEMPTS = 32;
+// Auto-apply has no retry loop, and that is a property of what it now reads.
+//
+// It used to have two, both bounded, both eight and two seconds long, and both
+// existed solely to make per-channel rules work. The channel is named by the
+// below-video owner row: that row mounts several seconds after the player, and on
+// an in-app navigation it holds the PREVIOUS video's channel for a few hundred
+// milliseconds after `video-id` has already changed. So auto-apply had to poll for
+// a channel to appear, and then distrust the first few reads in case they were
+// stale. Both windows are gone with the rules.
+//
+// What is left — the per-site switch — needs no page content to decide, so it is
+// answered on the first look every time. If auto-apply is ever given a condition
+// that depends on rendered content again, that condition brings this whole race
+// back with it; see the note on the removed rules in §1 before doing it.
 
 /**
  * Where the page lands once browser fullscreen ends.
@@ -6818,8 +6704,10 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
    */
   let pro: ProState = { ...DEFAULT_PRO_STATE };
 
-  let activeChannelMode: WindowedMode | null = null;
-  const currentMode = (): WindowedMode => activeChannelMode ?? modeFor(prefs);
+  // The site's own preference is the whole answer. A per-channel rule used to be
+  // able to override it for one video, so this was an override slot falling back to
+  // the preference; with the rules gone there is nothing to override it.
+  const currentMode = (): WindowedMode => modeFor(prefs);
 
   const controller = new WindowedFullscreenController(doc, currentMode);
   const resolve = (): SiteDescriptor | null => resolveDescriptor(adapter, doc, currentMode());
@@ -6984,7 +6872,6 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
    * (R9.10, R11.9).
    */
   const noteSessionEnd = (): void => {
-    activeChannelMode = null;
     adoptStoredWidths(prefs);
     glowSampler.stop();
     removeLetterboxCss(doc);
@@ -7022,141 +6909,34 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
   controller.setModeEndListener(noteSessionEnd);
 
   /**
-   * Look up the matched channel rule for the current page if the reader is entitled.
-   */
-  const getAutoApplyRule = (): ChannelRule | null => {
-    if (!isPro(pro)) return null;
-    return findChannelRule(prefs, adapter.readChannel?.(doc) ?? null);
-  };
-
-  /**
-   * Whether auto-apply should fire on this page, from the per-site switch or a
-   * per-channel rule.
+   * Enter the mode once per video, if the site's own auto-apply switch is on.
    *
-   * The per-site switch has been free since 1.2.0 and stays free. Per-channel rules
-   * are Pro, and the gate is here rather than at the point the rules are stored: a
-   * reader whose entitlement lapses keeps their rules, so re-entering a key puts
-   * them straight back to work instead of asking them to type a channel list again.
-   */
-  const autoApplyWanted = (): boolean => {
-    if (autoApplyEnabled) return true;
-    return getAutoApplyRule() !== null;
-  };
-
-  /**
-   * Whether a per-channel rule could still turn out to apply here, but cannot be
-   * judged yet because the page has not named its channel.
+   * One condition and no retry loop, because `autoApplyEnabled` is answered from
+   * the stored preference rather than from anything the page has to render. There
+   * used to be a second condition — a matched per-channel rule — and it needed an
+   * eight-second poll plus a settle window on top, because the channel is only
+   * knowable once the below-video owner row has mounted and rebound. Both are gone
+   * with the rules; see the note in §1.
    *
-   * Deliberately narrow: true only with an entitlement, with rules stored, with the
-   * site offering a channel reader, and with that reader coming back empty. So a
-   * reader with no rules schedules no retries at all, and neither does a site that
-   * has no notion of a channel.
-   *
-   * The known limit: on an in-app navigation the owner row can still hold the
-   * PREVIOUS video's channel for a frame or two, and a read that returns the old
-   * channel counts as decided here. YouTube blanks the row during the swap far more
-   * often than it leaves it stale, so in practice this waits rather than answering
-   * from the last video — and the alternative, refusing a channel until it differs
-   * from the one before it, would refuse two videos from the same channel forever.
+   * Still idempotent and still driven from several sides, which is unchanged: which
+   * of the preference resolving and the player appearing happens first is not
+   * predictable, so both call this and the `autoApplied` latch settles it.
    */
-  const channelRuleUndecided = (): boolean => {
-    if (autoApplyEnabled || !isPro(pro) || prefs.channels.length === 0) return false;
-    if (!adapter.readChannel) return false;
-    return adapter.readChannel(doc) === null;
-  };
-
-  /**
-   * Attempts already spent waiting for the channel, the pending retry, and the
-   * one-shot flag that stops the give-up line repeating. All three are reset per
-   * video, so each video gets its own window.
-   */
-  let channelRuleAttempts = 0;
-  let channelRuleGaveUp = false;
-  let channelRuleTimer: number | null = null;
-
-  const clearChannelRuleWatch = (): void => {
-    if (channelRuleTimer === null) return;
-    timers().clearTimeout(channelRuleTimer);
-    channelRuleTimer = null;
-  };
-
-  /** Start the window over: a new video, or an entitlement that has just arrived. */
-  const resetChannelRuleWatch = (): void => {
-    clearChannelRuleWatch();
-    channelRuleAttempts = 0;
-    channelRuleGaveUp = false;
-  };
-
-  /**
-   * Look again shortly, because the only thing missing is the channel.
-   *
-   * A no-op unless a rule is genuinely waiting on the page, so this costs nothing
-   * for the reader who has no rules — which is every reader without a licence.
-   */
-  const scheduleChannelRuleRetry = (): void => {
-    if (channelRuleTimer !== null || channelRuleGaveUp) return;
-    if (!channelRuleUndecided()) return;
-    if (channelRuleAttempts >= MAX_CHANNEL_RULE_ATTEMPTS) {
-      // Give up loudly, once. The page has had five seconds to name its channel;
-      // waiting longer would put the mode on top of a reader already watching.
-      channelRuleGaveUp = true;
-      warn(
-        DIAGNOSTIC.channelRuleAbandoned,
-        "The page never named its channel, so per-channel auto-apply did not run.",
-        { siteId: adapter.siteId, attempts: channelRuleAttempts },
-      );
-      return;
-    }
-    channelRuleAttempts += 1;
-    channelRuleTimer = timers().setTimeout(() => {
-      channelRuleTimer = null;
-      maybeAutoApply();
-    }, CHANNEL_RULE_RETRY_MS) as unknown as number;
-  };
-
   const maybeAutoApply = (): void => {
     if (!prefResolved || autoApplied || controller.isActive) return;
-    if (!autoApplyWanted()) {
-      // Not "no", possibly "not yet": the owner row mounts on the site's own
-      // schedule, later than everything that triggers this. See
-      // CHANNEL_RULE_RETRY_MS for the race this closes.
-      scheduleChannelRuleRetry();
-      return;
-    }
-    const rule = getAutoApplyRule();
-    // Decided, so nothing is waiting on the page any more.
-    clearChannelRuleWatch();
+    if (!autoApplyEnabled) return;
     // The reader has just left fullscreen for the plain player. Both refusals
     // hold until one of the four events in the latch's comment above.
     if (autoApplySuppressed || Date.now() < normalPlayerUntilMs) return;
     // Never arrive on top of browser fullscreen; see the fullscreen handoff below.
     if (doc.fullscreenElement) return;
 
-    if (rule && rule.scrollable !== null) {
-      activeChannelMode = rule.scrollable ? "scrollable" : "cover";
-    } else {
-      activeChannelMode = null;
-    }
-
     const descriptor = resolve();
     // Not ready yet; the next button change re-triggers this.
     if (!descriptor) return;
 
-    if (rule) {
-      for (const dock of DOCK_IDS) {
-        if (rule.dockWidths[dock] > 0) {
-          liveWidths[dock] = rule.dockWidths[dock];
-        }
-      }
-      applyDockWidths();
-    }
-
     autoApplied = true;
-    if (enterMode(descriptor)) {
-      if (rule?.panel) {
-        controller.setPanelOpen(true);
-      }
-    }
+    enterMode(descriptor);
   };
 
   /**
@@ -8462,8 +8242,12 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
    *
    * Mounting and unmounting the grips from here is what makes a key entered in the
    * popup take effect on a page that is already open, and — more importantly —
-   * makes a *revoked* key take the grips away without a reload. Auto-apply is
-   * re-run because a per-channel rule may have just become active.
+   * makes a *revoked* key take the grips away without a reload.
+   *
+   * Auto-apply is deliberately NOT re-run here. It used to be, because a per-channel
+   * rule could become live the instant a key was accepted; the only auto-apply
+   * condition left is the per-site switch, which is free and unaffected by
+   * entitlement either way.
    */
   const applyProState = (next: ProState): void => {
     pro = next;
@@ -8471,11 +8255,6 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
     else unmountGrips();
     updateProLockBadges();
     updateLetterboxAndGlow();
-    // A newly accepted key gets its own window to find the channel:
-    // until this moment `channelRuleUndecided` answered "no rule to wait for", so
-    // no attempts have been spent and there may be nothing scheduled to spend them.
-    resetChannelRuleWatch();
-    maybeAutoApply();
   };
 
   const disposeProWatch = watchProState(applyProState);
@@ -8506,12 +8285,8 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
   const disposeVideoChange = adapter.onVideoChange(doc, () => {
     autoApplySuppressed = false;
     autoApplied = false;
-    activeChannelMode = null;
     adoptStoredWidths(prefs);
     updateLetterboxAndGlow();
-    // A new video is a new question, so the channel window starts again rather
-    // than inheriting the attempts the previous one spent.
-    resetChannelRuleWatch();
     maybeAutoApply();
   });
 
@@ -8602,15 +8377,7 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
           void copyTranscriptWithTimestamps(doc, say);
           return { ok: true, active: controller.isActive };
         case "GET_STATUS":
-          // The channel rides along so the popup can offer "always on this channel"
-          // without a second round trip. Null on a page that has not rendered the
-          // owner row yet, which the popup treats as "nothing to offer" rather than
-          // as an error.
-          return {
-            ok: true,
-            active: controller.isActive,
-            channel: adapter.readChannel?.(doc) ?? null,
-          };
+          return { ok: true, active: controller.isActive };
         default:
           return null;
       }
@@ -8643,7 +8410,6 @@ function startSession(adapter: SiteAdapter, doc: Document): Session {
       doc.removeEventListener("keydown", onKeyCapture as EventListener, true);
       clearGrace();
       clearResume();
-      clearChannelRuleWatch();
       resumeAfterFullscreen = false;
       resumePanelAfterFullscreen = false;
       // A navigation is not an exit we asked for; leave nothing a later
@@ -9388,14 +9154,6 @@ export const HELP_COPY = {
       {
         name: "Resizable panels",
         detail: "Drag comments, live chat, and transcripts to your ideal width.",
-      },
-      {
-        name: "Favorite channels",
-        detail: "Automatically open windowed mode on the channels you watch most.",
-      },
-      {
-        name: "Channel memory",
-        detail: "Remember your favorite viewing mode and panel widths for each channel.",
       },
       {
         name: "Transcript panel",
@@ -10634,8 +10392,8 @@ export function renderProView(
         { icon: "\u2194\uFE0F", name: "Resizable Panels", detail: "Custom widths for comments & chat" },
         { icon: "\uD83D\uDCA1", name: "Ambient Glow", detail: "Soft light synced to video colors" },
         { icon: "\uD83D\uDCDD", name: "Transcript Dock", detail: "Pinned searchable transcript" },
-        { icon: "\u2B50", name: "Channel Memory", detail: "Auto-apply preferred layout" },
         { icon: "\uD83C\uDFA8", name: "Custom Themes", detail: "Custom bar colors & gradients" },
+        { icon: "\uD83D\uDD52", name: "Timestamp on Frame", detail: "Stamp playback time on a capture" },
       ];
 
       for (const item of featureItems) {
@@ -10946,166 +10704,8 @@ export function renderProView(
 }
 
 /**
- * The per-channel auto-apply rules for one site.
- *
- * Rendered only for an entitled reader, and the section is empty otherwise — see
- * the note in §14 on which Pro surfaces are shown locked and which are absent. The
- * subscription is what makes the list appear the moment a key is accepted, without
- * asking the reader to reopen the settings they are already looking at.
- *
- * @returns a disposer for the entitlement subscription.
- */
-export function renderChannelRules(
-  doc: Document,
-  host: Element,
-  ctx: {
-    siteId: string;
-    siteLabel: string;
-    showError: (message: string) => void;
-    showSaved: (message: string) => void;
-  },
-): () => void {
-  let entitled = false;
-  let channels: readonly ChannelRule[] = [];
-
-  /** Write the list whole, then repaint from what was stored. */
-  const store = async (next: readonly ChannelRule[], saved: string): Promise<void> => {
-    const result = await setSitePrefs(ctx.siteId, { channels: next });
-    if (!result.ok) {
-      ctx.showError(`Could not save the channel list: ${result.error}.`);
-      return;
-    }
-    channels = next;
-    ctx.showSaved(saved);
-    paint();
-  };
-
-  function paint(): void {
-    host.replaceChildren();
-    if (!entitled) return;
-
-    if (channels.length > 0) {
-      const list = doc.createElement("ul");
-      list.className = "wfs-channel-list";
-      list.setAttribute("data-wfs-channel-list", "");
-      for (const rule of channels) {
-        const id = rule.id;
-        const item = doc.createElement("li");
-        item.className = "wfs-channel-item";
-        item.setAttribute("data-wfs-channel-item", "");
-
-        const name = doc.createElement("span");
-        name.className = "wfs-channel-name";
-        name.textContent = id;
-        item.appendChild(name);
-
-        const remove = doc.createElement("button");
-        remove.type = "button";
-        remove.className = "wfs-channel-remove-btn";
-        remove.setAttribute("data-wfs-channel-remove", "");
-        remove.setAttribute("aria-label", `Remove ${id}`);
-        remove.textContent = "Remove";
-        remove.addEventListener("click", () => {
-          void store(
-            channels.filter((entry) => entry.id !== id),
-            `Removed ${id}.`,
-          );
-        });
-        item.appendChild(remove);
-        list.appendChild(item);
-      }
-      host.appendChild(list);
-    }
-
-    const addRow = doc.createElement("div");
-    addRow.className = "wfs-channel-add-row";
-    addRow.setAttribute("data-wfs-channel-field", "");
-
-    const input = doc.createElement("input");
-    input.type = "text";
-    input.className = "wfs-channel-input";
-    input.setAttribute("data-wfs-channel-input", "");
-    input.placeholder = "@channel";
-    input.maxLength = MAX_CHANNEL_ID_LENGTH;
-    input.autocomplete = "off";
-    input.spellcheck = false;
-    addRow.appendChild(input);
-
-    const add = doc.createElement("button");
-    add.type = "button";
-    add.className = "wfs-channel-add-btn";
-    add.setAttribute("data-wfs-channel-add", "");
-    add.textContent = "Add";
-
-    const submit = (): void => {
-      const id = input.value.trim();
-      if (id === "") return;
-      if (channels.some((entry) => entry.id === id)) {
-        ctx.showSaved(`${id} is already on the list.`);
-        return;
-      }
-      if (channels.length >= MAX_CHANNEL_RULES) {
-        ctx.showError(`The list is full at ${MAX_CHANNEL_RULES} channels. Remove one first.`);
-        return;
-      }
-      input.value = "";
-      void store([...channels, newChannelRule(id)], `Added ${id}.`);
-    };
-
-    add.addEventListener("click", submit);
-    input.addEventListener("keydown", (event) => {
-      if ((event as KeyboardEvent).key === "Enter") submit();
-    });
-    addRow.appendChild(add);
-    host.appendChild(addRow);
-  }
-
-  const load = (): void => {
-    void getSitePrefs(ctx.siteId).then(({ prefs }) => {
-      channels = prefs.channels;
-      paint();
-    });
-  };
-
-  void getProState().then(({ state }) => {
-    entitled = isPro(state);
-    if (entitled) load();
-    else paint();
-  });
-
-  return watchProState((state) => {
-    entitled = isPro(state);
-    if (entitled) load();
-    else paint();
-  });
-}
-
-/**
- * Put a channel identifier into the rules field without submitting it.
- *
- * `startPopup` is what knows which channel the open tab is showing; the settings tree
- * does not, and should not have to ask. So the answer is pushed in from outside
- * rather than fetched from within, which also keeps §11 free of any dependency on
- * there being an open tab at all.
- *
- * Deliberately does not add the rule: the reader opened the popup to watch a video,
- * and a settings surface that writes a preference because a page was open is a
- * surface nobody can trust.
- *
- * A no-op when the field is absent (the reader is not entitled, so there is no
- * list) or already has something in it (they were typing).
- */
-export function prefillChannelRule(root: ParentNode, channel: ChannelRef | null): void {
-  if (!channel) return;
-  const input = root.querySelector("[data-wfs-channel-input]") as HTMLInputElement | null;
-  if (!input || input.value !== "") return;
-  input.value = channel.id;
-}
-
-/**
  * Render the settings controls into `root`: the help section, the per-site
- * preference cards, the channel rules, a Pro teaser row, and a privacy-policy
- * footer link.
+ * preference cards, a Pro teaser row, and a privacy-policy footer link.
  *
  * THE POPUP IS THE ONLY SETTINGS SURFACE. There is no options page. Up to 2.0.0
  * there were two, and this function built either one from a `surface` flag: the
@@ -11361,14 +10961,6 @@ export function renderSettings(
     const captureCard = createCard(
       "capture",
       "Media & Frame Capture",
-      "",
-      "Pro \u26A1",
-      "pro",
-    );
-
-    const channelsCard = createCard(
-      "channels",
-      "Auto-Fullscreen Channels",
       "",
       "Pro \u26A1",
       "pro",
@@ -11751,18 +11343,6 @@ export function renderSettings(
         }
       }),
     );
-
-    // --- Channel Rules in channelsCard ---
-    const channelHost = doc.createElement("div");
-    channelHost.setAttribute("data-wfs-channel-section", "");
-    channelsCard.appendChild(channelHost);
-    try {
-      disposers.push(
-        renderChannelRules(doc, channelHost, { siteId, siteLabel: label, showError, showSaved }),
-      );
-    } catch {
-      showError("Channel list failed to render.");
-    }
 
   }
 
@@ -12188,14 +11768,6 @@ export function startPopup(): void {
 
     response = await askContentScript(tabId, { type: "GET_STATUS" });
     paint();
-
-    // The popup is the only surface that knows which channel the open tab is
-    // showing, so it hands that to the shared settings tree. Filled in, never
-    // submitted: the reader opened the popup to watch something, and a settings
-    // surface that saves a preference because a page happened to be open is one
-    // nobody can trust. The field is absent without Pro, and `prefillChannelRule`
-    // treats that as nothing to do.
-    if (settings && response?.ok) prefillChannelRule(settings, response.channel ?? null);
   })();
 }
 
@@ -13119,10 +12691,10 @@ export function watchProState(onChange: (state: ProState) => void): () => void {
 //    and never opens the settings again will ever meet, because it sits in the
 //    control bar of every video they watch. A locked door that says what is behind
 //    it converts; a hidden one does not exist.
-//  - The drag grips and the per-channel rules are **not** rendered at all without
-//    entitlement. Both are reachable only by someone already looking around, so
-//    neither has a funnel to serve, and a grip that only shows a prompt when
-//    dragged would be an affordance that lies about what it does.
+//  - The drag grips are **not** rendered at all without entitlement. They are
+//    reachable only by someone already looking around, so there is no funnel to
+//    serve, and a grip that only shows a prompt when dragged would be an
+//    affordance that lies about what it does.
 //
 // Nothing here is scoped to the mode: the capture control sits in the player bar
 // whether windowed mode is on or off, so the prompt has to work either way.
@@ -13262,8 +12834,8 @@ export function showProPrompt(
     { icon: "\u2194\uFE0F", title: "Resizable Panels", desc: "Custom widths for comments & chat" },
     { icon: "\uD83D\uDCA1", title: "Ambient Glow", desc: "Soft light synced to video colors" },
     { icon: "\uD83D\uDCDD", title: "Transcript Dock", desc: "Pinned searchable transcript" },
-    { icon: "\u2B50", title: "Channel Memory", desc: "Auto-apply preferred layout" },
     { icon: "\uD83C\uDFA8", title: "Custom Themes", desc: "Custom bar colors & gradients" },
+    { icon: "\uD83D\uDD52", title: "Timestamp on Frame", desc: "Stamp playback time on a capture" },
   ];
 
   for (const item of featureItems) {
